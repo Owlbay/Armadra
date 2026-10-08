@@ -1,42 +1,23 @@
 import { useEffect, useState } from "react";
 
-import { useAccess } from "../../../app/use-access";
 import { refreshPageErrorReporting } from "../../../diagnostics/report";
-import {
-  THEME_PREFERENCES,
-  usePreferencesStore,
-  useT,
-  type ThemePreference,
-} from "../../../app/preferences-store";
-import { LOCALES, type Locale } from "../../../i18n";
+import { usePreferencesStore, useT } from "../../../app/preferences-store";
 import { useCanvasStore } from "../../../store/canvas-store";
 import { SettingsGroup } from "../SettingsGroup";
 import { SettingsRow } from "../SettingsRow";
 import { useRuntimeSettings } from "../use-runtime-settings";
 import { Input } from "@/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/ui/select";
 import { Switch } from "@/ui/switch";
 
 /** 右侧控件统一宽度，让一页里的 Select 右边缘对齐（§24.2 的 8pt 网格）。 */
 export const CONTROL_WIDTH = "w-[168px]";
 
 /**
- * 设置 → 通用（§24.1）：主题、语言、侧栏、用量、恢复上次工作空间、
- * 系统文件、开屏动画；最后一组是诊断（可选崩溃上报，外部服务 §11.2）。
+ * 设置 → 通用（§2.1）：侧栏、启动动画、恢复上次工作空间、系统文件、用量
+ * 徽标。主题与语言在「默认」页，崩溃上报在「本机服务」页。
  */
 export function GeneralPage() {
   const t = useT();
-  const { member } = useAccess();
-  const theme = usePreferencesStore((state) => state.theme);
-  const setTheme = usePreferencesStore((state) => state.setTheme);
-  const locale = usePreferencesStore((state) => state.locale);
-  const setLocale = usePreferencesStore((state) => state.setLocale);
   const showUsage = usePreferencesStore((state) => state.showUsage);
   const setShowUsage = usePreferencesStore((state) => state.setShowUsage);
   const restore = usePreferencesStore((state) => state.restoreLastWorkspace);
@@ -56,109 +37,58 @@ export function GeneralPage() {
   const setPanel = useCanvasStore((state) => state.setPanel);
 
   return (
-    <>
-      <SettingsGroup>
-        <SettingsRow label={t("settings.theme")}>
-          <Select
-            value={theme}
-            onValueChange={(value) => setTheme(value as ThemePreference)}
-          >
-            <SelectTrigger
-              aria-label={t("settings.theme")}
-              size="sm"
-              className={CONTROL_WIDTH}
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="z-[var(--z-dialog)]">
-              {THEME_PREFERENCES.map((option) => (
-                <SelectItem key={option} value={option}>
-                  {t(`settings.theme.${option}`)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </SettingsRow>
+    <SettingsGroup>
+      <SettingsRow label={t("settings.sidebar")}>
+        <Switch
+          checked={sidebarOpen}
+          aria-label={t("settings.sidebar")}
+          onCheckedChange={(next) =>
+            setPanel("sidebar", next ? "open" : "collapsed")
+          }
+        />
+      </SettingsRow>
 
-        <SettingsRow label={t("settings.locale")}>
-          <Select
-            value={locale}
-            onValueChange={(value) => setLocale(value as Locale)}
-          >
-            <SelectTrigger
-              aria-label={t("settings.locale")}
-              size="sm"
-              className={CONTROL_WIDTH}
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="z-[var(--z-dialog)]">
-              {LOCALES.map((option) => (
-                <SelectItem key={option} value={option}>
-                  {t(`settings.locale.${option}`)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </SettingsRow>
-      </SettingsGroup>
+      <SettingsRow
+        label={t("settings.splashAnimation")}
+        footnote={t("settings.splashAnimation.note")}
+      >
+        <Switch
+          checked={splash}
+          aria-label={t("settings.splashAnimation")}
+          onCheckedChange={setSplash}
+        />
+      </SettingsRow>
 
-      <SettingsGroup>
-        <SettingsRow label={t("settings.sidebar")}>
-          <Switch
-            checked={sidebarOpen}
-            aria-label={t("settings.sidebar")}
-            onCheckedChange={(next) =>
-              setPanel("sidebar", next ? "open" : "collapsed")
-            }
-          />
-        </SettingsRow>
+      <SettingsRow
+        label={t("settings.restoreWorkspace")}
+        footnote={t("settings.restoreWorkspace.note")}
+      >
+        <Switch
+          checked={restore}
+          aria-label={t("settings.restoreWorkspace")}
+          onCheckedChange={setRestore}
+        />
+      </SettingsRow>
 
-        <SettingsRow label={t("settings.showUsage")}>
-          <Switch
-            checked={showUsage}
-            aria-label={t("settings.showUsage")}
-            onCheckedChange={setShowUsage}
-          />
-        </SettingsRow>
+      <SettingsRow
+        label={t("settings.showSystemFiles")}
+        footnote={t("settings.showSystemFiles.note")}
+      >
+        <Switch
+          checked={systemFiles}
+          aria-label={t("settings.showSystemFiles")}
+          onCheckedChange={setSystemFiles}
+        />
+      </SettingsRow>
 
-        <SettingsRow
-          label={t("settings.restoreWorkspace")}
-          footnote={t("settings.restoreWorkspace.note")}
-        >
-          <Switch
-            checked={restore}
-            aria-label={t("settings.restoreWorkspace")}
-            onCheckedChange={setRestore}
-          />
-        </SettingsRow>
-
-        <SettingsRow
-          label={t("settings.showSystemFiles")}
-          footnote={t("settings.showSystemFiles.note")}
-        >
-          <Switch
-            checked={systemFiles}
-            aria-label={t("settings.showSystemFiles")}
-            onCheckedChange={setSystemFiles}
-          />
-        </SettingsRow>
-
-        <SettingsRow
-          label={t("settings.splashAnimation")}
-          footnote={t("settings.splashAnimation.note")}
-        >
-          <Switch
-            checked={splash}
-            aria-label={t("settings.splashAnimation")}
-            onCheckedChange={setSplash}
-          />
-        </SettingsRow>
-      </SettingsGroup>
-
-      {/* 设置文档只有 owner 读得到：成员这里不摆、也不去问（否则就是一次 403）。 */}
-      {member ? null : <DiagnosticsGroup />}
-    </>
+      <SettingsRow label={t("settings.showUsage")}>
+        <Switch
+          checked={showUsage}
+          aria-label={t("settings.showUsage")}
+          onCheckedChange={setShowUsage}
+        />
+      </SettingsRow>
+    </SettingsGroup>
   );
 }
 
@@ -184,9 +114,10 @@ export function isCrashReportDsn(text: string): boolean {
 
 /**
  * 诊断：崩溃上报默认关。打开后填 DSN 才真的开始发（`diagnostics.crashReportDsn`
- * 非空）；关掉即把 DSN 清空。
+ * 非空）；关掉即把 DSN 清空。主机设置，归「本机服务」页（§2.2）；设置文档
+ * 只有 owner 读得到，挂它的页对成员不画这一组。
  */
-function DiagnosticsGroup() {
+export function CrashReportGroup() {
   const t = useT();
   const { settings, save } = useRuntimeSettings();
   const saved = settings.data?.diagnostics?.crashReportDsn ?? "";

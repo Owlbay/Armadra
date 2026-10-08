@@ -711,8 +711,8 @@ try {
     // 粘贴链接：设置 → 远程服务 → 通过链接加入。
     await click(["设置", "Settings"], "设置");
     await click(
-      ["远程服务", "Remote services"],
-      "远程服务",
+      ["远程访问", "Remote access"],
+      "远程访问",
       "button, a, [role=tab], [role=link]",
     );
     await click(["通过链接加入", "Join by link"], "通过链接加入");

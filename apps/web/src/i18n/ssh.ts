@@ -8,7 +8,6 @@ import type { MessageModule } from "./index";
  */
 export const ssh: MessageModule = {
   "zh-CN": {
-    "ssh.nav": "SSH", // i18n-exempt
     "ssh.add": "添加",
     "ssh.delete": "删除",
     "ssh.test": "测试连接",
@@ -64,7 +63,6 @@ export const ssh: MessageModule = {
     "ssh.execution.poll": "轮询监听",
   },
   en: {
-    "ssh.nav": "SSH",
     "ssh.add": "Add",
     "ssh.delete": "Delete",
     "ssh.test": "Test",

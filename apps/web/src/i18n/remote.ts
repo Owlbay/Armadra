@@ -11,7 +11,6 @@ import type { MessageModule } from "./index";
  */
 export const remote: MessageModule = {
   "zh-CN": {
-    "remote.nav": "远程服务",
     "remote.services": "远程服务",
     "remote.sources": "已挂载的源",
     "remote.sources.reorder": "拖动以排序「{name}」",
@@ -130,7 +129,6 @@ export const remote: MessageModule = {
     "remote.hosted.relayDown": "中转服务不可用，正在重连",
   },
   en: {
-    "remote.nav": "Remote services",
     "remote.services": "Remote services",
     "remote.sources": "Mounted sources",
     "remote.sources.reorder": "Drag to reorder {name}",

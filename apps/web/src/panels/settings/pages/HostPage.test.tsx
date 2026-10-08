@@ -247,9 +247,9 @@ afterEach(() => {
 });
 
 describe("HostPage", () => {
-  it("is a connection settings entry and remains idle until explicitly checked", () => {
-    const section = SETTINGS_SECTIONS.find((entry) => entry.id === "host");
-    expect(section?.groupKey).toBe("settings.group.connection");
+  it("is the local service entry and remains idle until explicitly checked", () => {
+    const section = SETTINGS_SECTIONS.find((entry) => entry.id === "service");
+    expect(section?.groupKey).toBe("settings.group.host");
     render(<HostPage />);
     expect(screen.getByRole("status").textContent).toBe("尚未检查连接");
     expect(

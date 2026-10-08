@@ -9,7 +9,6 @@ import type { MessageModule } from "./index";
  */
 export const executionHosts: MessageModule = {
   "zh-CN": {
-    "executionHosts.nav": "执行主机",
     "executionHosts.local": "本机",
     "executionHosts.empty": "只有本机",
     "executionHosts.workerMissing": "未配置 Worker",
@@ -81,7 +80,6 @@ export const executionHosts: MessageModule = {
       "这项要在 Armadra 所在的机器上跑，当前工作区在另一台",
   },
   en: {
-    "executionHosts.nav": "Execution hosts",
     "executionHosts.local": "This machine",
     "executionHosts.empty": "This machine only",
     "executionHosts.workerMissing": "No Worker configured",

@@ -10,6 +10,11 @@ import {
 
 const fetchSettings = vi.fn();
 const patchSettings = vi.fn();
+const access = vi.hoisted(() => ({ member: false }));
+
+vi.mock("../../../app/use-access", () => ({
+  useAccess: () => ({ member: access.member }),
+}));
 
 vi.mock("../../../api/client", () => ({
   runtimeApi: {
@@ -141,6 +146,45 @@ describe("KeybindingsPage", { timeout: 15_000 }, () => {
     };
     expect(patch.keymap[elsewhere]).toBeUndefined();
     expect(screen.queryByText(zh("settings.shortcut.recording"))).toBeNull();
+  });
+
+  it("成员：只有本设备那一层，不读也不写主机设置", async () => {
+    access.member = true;
+    try {
+      view();
+      await screen.findByLabelText(zh("cmd.app.commandPalette"), {
+        selector: "button",
+      });
+      expect(
+        screen.queryByLabelText(zh("settings.shortcut.profile"), {
+          selector: "button",
+        }),
+      ).toBeNull();
+      expect(
+        screen.queryByLabelText(zh("settings.shortcut.layer"), {
+          selector: "button",
+        }),
+      ).toBeNull();
+      fireEvent.click(paletteChip());
+      fireEvent.keyDown(window, {
+        key: "j",
+        code: "KeyJ",
+        shiftKey: true,
+        ...mod(),
+      });
+      await waitFor(() =>
+        expect(
+          useDeviceKeymapStore.getState().keymap[here]["app.commandPalette"],
+        ).toBeTruthy(),
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: zh("settings.shortcut.resetAll") }),
+      );
+      expect(fetchSettings).not.toHaveBeenCalled();
+      expect(patchSettings).not.toHaveBeenCalled();
+    } finally {
+      access.member = false;
+    }
   });
 
   it("选「本设备」后录制只落在本机，不写 Runtime 设置", async () => {

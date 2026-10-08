@@ -13,6 +13,8 @@
 //   * `prefers-reduced-motion: reduce` 下 `canvas` 分区的动画必须静止
 //     （隔 700ms 的两张截图逐字节相同，且没有在跑的动画）；
 //   * `forced-colors: active` 下 `components` 分区的焦点仍有轮廓；
+//   * `components` 分区在每个桌面宽度上打开真的设置弹窗：宽 = 80vw（±1px，
+//     再夹进视口 −48），两套主题各截一张 `settings-dialog-<主题>-<宽>.png`；
 //   * 控制台 error 与未捕获异常一律算失败；
 //   * `apps/web/dist/` 存在时（CI 先构建再跑探针）确认里面没有展示页。
 //
@@ -20,6 +22,7 @@
 //   pnpm libs:build
 //   node tools/probes/design-showcase.mjs [输出目录] [--only=tokens,acp]
 //        [--theme=dark] [--width=390] [--diff=<上一次的输出目录>]
+//   大屏只在点名时跑：--width=1280,1920,2560（设置弹窗随视口变大，界面第二波 §1）
 //
 // 产物：<输出目录>/<分区>-<主题>-<宽>.png、两张额外图与 result.json，
 // 默认 target/design-showcase/。`--diff` 逐像素比较同名 PNG，差异超过 0.5%
@@ -43,6 +46,12 @@ const VIEWPORTS = [
   { width: 1024, height: 768 },
   { width: 390, height: 844 },
 ];
+/** 只在 `--width` 点名时才截的大屏（CI 的默认矩阵不变）。 */
+const EXTRA_VIEWPORTS = [
+  { width: 1280, height: 800 },
+  { width: 1920, height: 1080 },
+  { width: 2560, height: 1440 },
+];
 const THEMES = ["dark", "light"];
 const DIFF_THRESHOLD = 0.005;
 /** 整页截图的高度上限：一个分区长到这里已经说明它该拆了。 */
@@ -62,7 +71,7 @@ const output = resolve(outputArg ?? join(root, "target/design-showcase"));
 mkdirSync(output, { recursive: true });
 const themes = options.theme ? options.theme.split(",") : THEMES;
 const viewports = options.width
-  ? VIEWPORTS.filter((viewport) =>
+  ? [...VIEWPORTS, ...EXTRA_VIEWPORTS].filter((viewport) =>
       options.width.split(",").includes(String(viewport.width)),
     )
   : VIEWPORTS;
@@ -330,6 +339,59 @@ await h.run(async () => {
         );
       }
     }
+  }
+
+  /* ------------------------------ 设置弹窗 ------------------------------ */
+
+  // 桌面宽度上（≥1024）弹窗宽 = max(760, 80vw)，再夹进视口 −48（设计系统
+  // §2.7）；更窄时是底部 Sheet，只截图。展示页没有 core：设置页取数失败的
+  // 网络报错是预期的，不计入控制台。
+  if (only.includes("components")) {
+    report.settingsDialog = [];
+    for (const viewport of viewports) {
+      await setViewport(viewport);
+      for (const theme of themes) {
+        await open("components", theme);
+        await page.evaluate(
+          `document.querySelector("[data-showcase-settings]").click(); return true;`,
+        );
+        await page.waitFor(
+          `return !!document.querySelector('[data-testid="settings-dialog"]');`,
+          { timeout: 15_000, what: "设置弹窗" },
+        );
+        await sleep(600);
+        const size = await page.evaluate(`
+          const box = document.querySelector('[data-testid="settings-dialog"]').getBoundingClientRect();
+          const nav = document.querySelector('[data-testid="settings-dialog"] nav').getBoundingClientRect();
+          return { width: box.width, height: box.height, nav: nav.width };
+        `);
+        const expected = Math.min(
+          Math.max(760, viewport.width * 0.8),
+          viewport.width - 48,
+        );
+        const name = `settings-dialog-${theme}-${viewport.width}`;
+        // 弹窗是 fixed：截当前视口（不给 clip——clip 用的是文档坐标）。
+        const shot = await page.call("Page.captureScreenshot", {
+          format: "png",
+        });
+        const file = join(output, `${name}.png`);
+        writeFileSync(file, Buffer.from(shot.data, "base64"));
+        page.drain();
+        report.settingsDialog.push({ ...size, expected, file });
+        if (viewport.width < 1024) {
+          step(`设置弹窗 ${name}`, file);
+          continue;
+        }
+        check(
+          Math.abs(size.width - expected) <= 1 &&
+            size.nav >= 176 &&
+            size.nav <= 240,
+          `设置弹窗 ${name}`,
+          `${Math.round(size.width)}px（应为 ${Math.round(expected)}），导航 ${Math.round(size.nav)}px`,
+        );
+      }
+    }
+    await setViewport(VIEWPORTS[0]);
   }
 
   /* -------------------------------- 对比度 ------------------------------ */

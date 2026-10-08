@@ -207,7 +207,7 @@ describe("SettingsDialog", () => {
     });
   });
 
-  it("弹窗按视口比例取尺寸，正文列封顶 960（设计系统 §2.7）", async () => {
+  it("弹窗按视口比例取尺寸，导航按比例夹在 176–240，正文列不封顶（设计系统 §2.7）", async () => {
     open();
     await screen.findByText(zh("settings.theme"));
     const dialog = screen.getByTestId("settings-dialog");
@@ -221,7 +221,25 @@ describe("SettingsDialog", () => {
     const column = screen
       .getByTestId("settings-page")
       .querySelector('[data-slot="settings-column"]') as HTMLElement;
-    expect(column.className).toContain("max-w-[960px]");
+    expect(column.className).not.toContain("max-w-[960px]");
+    expect(column.className).toContain("w-full");
+    expect(nav().className).toContain("w-[clamp(176px,16%,240px)]");
+  });
+
+  it("页头右端是这一页的作用范围徽标", async () => {
+    open();
+    await screen.findByText(zh("settings.theme"));
+    const scope = () =>
+      screen
+        .getByTestId("settings-heading")
+        .parentElement?.querySelector("[data-settings-scope]")?.textContent;
+    expect(scope()).toBe(zh("settings.scope.device"));
+    fireEvent.click(navItem(zh("settings.section.about")));
+    expect(scope()).toBe(zh("settings.scope.host"));
+    fireEvent.click(navItem(zh("settings.section.security")));
+    expect(scope()).toBe(zh("settings.scope.account"));
+    fireEvent.click(navItem(zh("settings.section.remoteAccess")));
+    expect(scope()).toBe(zh("settings.scope.local"));
   });
 
   it("手机底部 Sheet 取整高，压过 Sheet 自己的 h-auto", () => {
@@ -275,17 +293,26 @@ describe("SettingsDialog", () => {
   });
 
   it("重开设置回到上次那一页", async () => {
+    usePreferencesStore.setState({ lastSettingsSection: "keybindings" });
+    open();
+    await waitFor(() => expect(page().dataset.section).toBe("keybindings"));
+    expect(navItem(zh("settings.section.keybindings")).dataset.active).toBe(
+      "true",
+    );
+  });
+
+  it("上次停在旧版的分区 id：落到内容所在的新页（§2.2）", async () => {
     usePreferencesStore.setState({ lastSettingsSection: "terminal" });
     open();
-    await waitFor(() => expect(page().dataset.section).toBe("terminal"));
-    expect(navItem(zh("settings.section.terminal")).dataset.active).toBe(
+    await waitFor(() => expect(page().dataset.section).toBe("terminalLook"));
+    expect(navItem(zh("settings.section.terminalLook")).dataset.active).toBe(
       "true",
     );
   });
 
   it("SSH 主机在同一右栏里推入子页，← 返回列表", async () => {
     open();
-    fireEvent.click(navItem(zh("ssh.nav")));
+    fireEvent.click(navItem(zh("settings.section.machines")));
     const row = await screen.findByRole("button", { name: /构建机/ });
 
     fireEvent.click(row);
@@ -302,7 +329,7 @@ describe("SettingsDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: zh("settings.back") }));
     expect(screen.getByTestId("settings-heading").textContent).toBe(
-      zh("ssh.nav"),
+      zh("settings.section.machines"),
     );
     expect(usePreferencesStore.getState().settingsSubpage).toBeNull();
     expect(screen.getByRole("button", { name: /构建机/ })).toBeTruthy();
@@ -310,7 +337,7 @@ describe("SettingsDialog", () => {
 
   it("子页保存后写回整份主机表并弹回列表", async () => {
     open();
-    fireEvent.click(navItem(zh("ssh.nav")));
+    fireEvent.click(navItem(zh("settings.section.machines")));
     fireEvent.click(await screen.findByRole("button", { name: /构建机/ }));
     fireEvent.change(screen.getByLabelText(zh("ssh.field.name")), {
       target: { value: "生产机" },
@@ -330,7 +357,7 @@ describe("SettingsDialog", () => {
 
   it("换分区会丢掉子页", async () => {
     open();
-    fireEvent.click(navItem(zh("ssh.nav")));
+    fireEvent.click(navItem(zh("settings.section.machines")));
     fireEvent.click(await screen.findByRole("button", { name: /构建机/ }));
     expect(usePreferencesStore.getState().settingsSubpage).toBe("ssh:box");
 
@@ -339,9 +366,9 @@ describe("SettingsDialog", () => {
     expect(page().dataset.section).toBe("about");
   });
 
-  it("Agent 页的三态写进偏好", async () => {
+  it("Agent 三态写进偏好", async () => {
     open();
-    fireEvent.click(navItem(zh("settings.section.agent")));
+    fireEvent.click(navItem(zh("settings.section.customAgents")));
     const group = await screen.findByRole("radiogroup", {
       name: "Claude Code",
     });
@@ -368,7 +395,7 @@ describe("SettingsDialog", () => {
    */
   it("集成页一家一张分组：注入缺哪一半、旧残留与重新生成", async () => {
     open();
-    fireEvent.click(navItem(zh("integration.nav")));
+    fireEvent.click(navItem(zh("settings.section.agents")));
     // 「修复 N」也是「Runtime 真的答了这一组」的证据：`GET /api/agents` 那份
     // 兜底报不出残留，所以等它出现就等于等接口落地。
     fireEvent.click(
@@ -390,7 +417,7 @@ describe("SettingsDialog", () => {
 
   it("「修复」按 found / removed / kept / backup 报结果", async () => {
     open();
-    fireEvent.click(navItem(zh("integration.nav")));
+    fireEvent.click(navItem(zh("settings.section.agents")));
     fireEvent.click(
       await screen.findByRole("button", {
         name: zh("integration.action.repair").replace("{count}", "1"),
@@ -404,9 +431,9 @@ describe("SettingsDialog", () => {
     );
   });
 
-  it("数据页读 info 并按选项 PATCH 日志保留天数", async () => {
+  it("本机服务页带着数据目录、大小与对话数", async () => {
     open();
-    fireEvent.click(navItem(zh("settings.section.data")));
+    fireEvent.click(navItem(zh("settings.section.service")));
     expect(await screen.findByText("/tmp/armadra")).toBeTruthy();
     expect(screen.getByText("2 KB")).toBeTruthy();
     expect(

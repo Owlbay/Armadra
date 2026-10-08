@@ -253,7 +253,7 @@ export function Banners() {
         text={t("banner.legacyResidue", { agents: residue.data.join(" · ") })}
         actionLabel={t("banner.legacyRepair")}
         onAction={() => {
-          setSettingsSection("integration");
+          setSettingsSection("agents");
           setPanel("settings", true);
         }}
         onDismiss={() => setDismissed((list) => [...list, "residue"])}

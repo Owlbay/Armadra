@@ -5,32 +5,13 @@ import { RUNTIME_VIA_SERVER_SHELL } from "../api/request";
 import { usePreferencesStore, useT } from "../app/preferences-store";
 import { useAccess } from "../app/use-access";
 import { useCanvasStore } from "../store/canvas-store";
-import { AboutPage } from "./settings/pages/AboutPage";
-import { AccountsSharingPage } from "./settings/pages/AccountsSharingPage";
-import { AccountPage } from "./settings/pages/AccountPage";
-import { AgentPage } from "./settings/pages/AgentPage";
-import { BrowserPage } from "./settings/pages/BrowserPage";
-import { DataPage } from "./settings/pages/DataPage";
-import { GeneralPage } from "./settings/pages/GeneralPage";
-import { GithubPage } from "./settings/pages/GithubPage";
-import { IntegrationPage } from "./settings/pages/IntegrationPage";
-import { HostPage } from "./settings/pages/HostPage";
-import { KeybindingsPage } from "./settings/pages/KeybindingsPage";
-import { NotificationsPage } from "./settings/pages/NotificationsPage";
-import { ExecutionHostsPage } from "./settings/pages/ExecutionHostsPage";
-import { RemoteServicesPage } from "./settings/pages/RemoteServicesPage";
-import { SshPage } from "./settings/pages/SshPage";
-import { TerminalPage } from "./settings/pages/TerminalPage";
-import { UpdatesPage } from "./settings/pages/UpdatesPage";
-import { WhiteboardPage } from "./settings/pages/WhiteboardPage";
-import { WorkspacePage } from "./settings/pages/WorkspacePage";
-import { SecurityPage } from "./settings/pages/security/SecurityPage";
+import { SECTION_PAGES } from "./settings/pages";
+import { ScopeBadge } from "./settings/scope-badge";
 import { useRemoteAccess } from "./settings/remote-access";
 import { subpageTitleKey } from "./settings/subpage";
 import {
-  DEFAULT_SETTINGS_SECTION,
+  activeSectionId,
   groupSections,
-  isSettingsSectionId,
   settingsSection,
   visibleSettingsSections,
   type SettingsSection,
@@ -45,33 +26,10 @@ import { cn } from "@/lib/cn";
 import { Button } from "@/ui/button";
 import { useCompactLayout } from "@/platform/layout";
 
-/** 分区 id → 页面。顺序由 `nav.ts` 决定，这里只管挂组件。 */
-const SECTION_PAGES: Record<string, () => React.ReactElement> = {
-  general: GeneralPage,
-  notifications: NotificationsPage,
-  whiteboard: WhiteboardPage,
-  agent: AgentPage,
-  integration: IntegrationPage,
-  host: HostPage,
-  remote: RemoteServicesPage,
-  accounts: AccountsSharingPage,
-  security: SecurityPage,
-  github: GithubPage,
-  terminal: TerminalPage,
-  browser: BrowserPage,
-  workspace: WorkspacePage,
-  ssh: SshPage,
-  executionHosts: ExecutionHostsPage,
-  data: DataPage,
-  account: AccountPage,
-  keybindings: KeybindingsPage,
-  updates: UpdatesPage,
-  about: AboutPage,
-};
-
 /**
- * 弹窗尺寸（设计系统 §2.7）。桌面按视口比例取 `--settings-dialog-w/h`，再夹进
- * 视口减 48px 与安全区；平板（768–1023）满宽减 32、满高减 48。
+ * 弹窗尺寸（设计系统 §2.7）。桌面按视口比例取 `--settings-dialog-w/h`（不封顶，
+ * 屏越大弹窗越大），再夹进视口减 48px 与安全区；平板（768–1023）满宽减 32、
+ * 满高减 48。
  */
 export const SETTINGS_DIALOG_CLASS = cn(
   "h-[var(--settings-dialog-h)] w-[var(--settings-dialog-w)]",
@@ -91,8 +49,8 @@ export const SETTINGS_SHEET_CLASS =
 /**
  * 设置（⌘,，§24.1）。
  *
- * Codex 桌面端的分栏设置：居中对话框，左 200px 导航，右侧是**当前分区独立的
- * 一页**——切分区整页替换，没有跨分区滚动，也没有搜索框与 scroll-spy。
+ * 分栏设置：居中对话框，左侧导航（`clamp(176px, 16%, 240px)`），右侧是**当前
+ * 分区独立的一页**——切分区整页替换，没有跨分区滚动，也没有搜索框与 scroll-spy。
  * 子页（SSH 主机、自定义 Agent）在同一右栏里推入，页头换成「← 子页名」，
  * 不叠第二层对话框。
  */
@@ -142,11 +100,10 @@ function SettingsBody({ onClose }: { onClose: () => void }) {
   // 设置作用的 core 不在眼前（经中继、直连远端源、当前源是远程源）：只对本机
   // 有意义的那几页不列（`nav.ts` 的 `localOnly`）。
   const { remote } = useRemoteAccess();
-  const active = isSettingsSectionId(stored, member, remote)
-    ? stored
-    : DEFAULT_SETTINGS_SECTION;
+  // 存着的可能是上一版的分区 id（`LEGACY_SECTION_IDS`）：先映射再判断。
+  const active = activeSectionId(stored, member, remote);
   const section = settingsSection(active);
-  const Page = SECTION_PAGES[active] ?? GeneralPage;
+  const Page = SECTION_PAGES[active] ?? SECTION_PAGES.defaults!;
   const groups = React.useMemo(
     () =>
       groupSections(
@@ -159,7 +116,7 @@ function SettingsBody({ onClose }: { onClose: () => void }) {
     <div className="settings-layout flex h-full min-h-0 flex-row">
       <nav
         aria-label={t("settings.title")}
-        className="settings-navigation flex h-full w-[200px] shrink-0 max-lg:w-[176px] flex-col gap-3 overflow-y-auto border-r border-border bg-panel p-3"
+        className="settings-navigation flex h-full w-[clamp(176px,16%,240px)] shrink-0 flex-col gap-3 overflow-y-auto border-r border-border bg-panel p-3"
       >
         {groups.map((group) => (
           <div key={group.groupKey} className="flex flex-col gap-0.5">
@@ -195,6 +152,7 @@ function SettingsBody({ onClose }: { onClose: () => void }) {
           >
             {t(subpage ? subpageTitleKey(subpage) : section.labelKey)}
           </h2>
+          <ScopeBadge scope={section.scope} pinnedLocal={section.pinnedLocal} />
           <IconButton size="cluster" label={t("tab.close")} onClick={onClose}>
             <X />
           </IconButton>
@@ -206,10 +164,10 @@ function SettingsBody({ onClose }: { onClose: () => void }) {
           data-section={active}
           className="settings-page flex min-h-0 flex-1 flex-col overflow-y-auto px-6 pt-5 pb-8 duration-150 animate-in fade-in motion-reduce:animate-none"
         >
-          {/* 正文列封顶 960 且靠左：弹窗再宽，阅读起点也不漂。 */}
+          {/* 正文列随弹窗变宽：表格页（远程机器、快捷键、设备）天然受益。 */}
           <div
             data-slot="settings-column"
-            className="flex w-full max-w-[960px] flex-col gap-6"
+            className="flex w-full flex-col gap-6"
           >
             <Page />
           </div>

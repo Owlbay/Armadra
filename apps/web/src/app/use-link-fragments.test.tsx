@@ -36,7 +36,7 @@ describe("useLinkFragments", () => {
     window.history.replaceState(null, "", "#pair=abc.def");
     renderHook(() => useLinkFragments(true));
     expect(useCanvasStore.getState().panels.settings).toBe(true);
-    expect(usePreferencesStore.getState().lastSettingsSection).toBe("host");
+    expect(usePreferencesStore.getState().lastSettingsSection).toBe("service");
   });
 
   it("OAuth 回调打开到「安全」", () => {
@@ -79,7 +79,9 @@ describe("分享链接（A4-3p）", () => {
     window.history.replaceState(null, "", `#join=${encodeURIComponent(SHARE)}`);
     renderHook(() => useLinkFragments(true, false, false));
     expect(useCanvasStore.getState().panels.settings).toBe(true);
-    expect(usePreferencesStore.getState().lastSettingsSection).toBe("remote");
+    expect(usePreferencesStore.getState().lastSettingsSection).toBe(
+      "remoteAccess",
+    );
     expect(window.location.hash).toBe("");
     expect(takeJoinLink()).toBe(SHARE);
   });
@@ -108,7 +110,9 @@ describe("分享链接（A4-3p）", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(takeJoinLink()).toBe(deep);
-    expect(usePreferencesStore.getState().lastSettingsSection).toBe("remote");
+    expect(usePreferencesStore.getState().lastSettingsSection).toBe(
+      "remoteAccess",
+    );
     push?.("https://not-a-link.example.com/");
     expect(takeJoinLink()).toBeNull();
     push?.(deep);

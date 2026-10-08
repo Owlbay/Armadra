@@ -31,7 +31,7 @@ vi.mock("../use-runtime-settings", () => ({
   },
 }));
 
-import { GeneralPage, isCrashReportDsn } from "./GeneralPage";
+import { CrashReportGroup, GeneralPage, isCrashReportDsn } from "./GeneralPage";
 import { usePreferencesStore } from "../../../app/preferences-store";
 
 const DSN = "https://key@glitchtip.example.com/1";
@@ -40,7 +40,7 @@ function switchFor() {
   return screen.getByRole("switch", { name: "崩溃上报" });
 }
 
-describe("通用页的崩溃上报", () => {
+describe("通用页与崩溃上报", () => {
   beforeEach(() => {
     usePreferencesStore.setState({ locale: "zh-CN" });
     save.mutate.mockClear();
@@ -51,13 +51,13 @@ describe("通用页的崩溃上报", () => {
   afterEach(cleanup);
 
   it("缺省关：没有 DSN 输入框", () => {
-    render(<GeneralPage />);
+    render(<CrashReportGroup />);
     expect(switchFor().getAttribute("aria-checked")).toBe("false");
     expect(screen.queryByRole("textbox", { name: "DSN" })).toBeNull();
   });
 
   it("打开后填合格的 DSN 才保存；不合格的不存并标出", () => {
-    render(<GeneralPage />);
+    render(<CrashReportGroup />);
     fireEvent.click(switchFor());
     expect(save.mutate).not.toHaveBeenCalled();
     const input = screen.getByRole("textbox", { name: "DSN" });
@@ -75,7 +75,7 @@ describe("通用页的崩溃上报", () => {
 
   it("关掉即清空 DSN", () => {
     settings.data = { diagnostics: { crashReportDsn: DSN } };
-    render(<GeneralPage />);
+    render(<CrashReportGroup />);
     expect(switchFor().getAttribute("aria-checked")).toBe("true");
     expect(
       (screen.getByRole("textbox", { name: "DSN" }) as HTMLInputElement).value,
@@ -86,19 +86,27 @@ describe("通用页的崩溃上报", () => {
     });
   });
 
-  it("成员看不到这一组，也不去读设置文档（否则是一次 403）", () => {
-    access.member = true;
+  it("通用页只有本设备的五项：不画崩溃上报，也不去读设置文档", () => {
     render(<GeneralPage />);
     expect(screen.queryByRole("switch", { name: "崩溃上报" })).toBeNull();
     expect(runtimeSettings.calls).toBe(0);
+    for (const name of [
+      "侧栏默认展开",
+      "启动动画",
+      "打开时恢复上次工作空间",
+      "显示系统文件",
+      "用量徽标",
+    ])
+      expect(screen.getByRole("switch", { name }), name).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: "主题" })).toBeNull();
   });
 
   it("没有 DSN 时没有「包含页面错误」；有了才出现，缺省关，切换即存", () => {
-    render(<GeneralPage />);
+    render(<CrashReportGroup />);
     expect(screen.queryByRole("switch", { name: "包含页面错误" })).toBeNull();
     cleanup();
     settings.data = { diagnostics: { crashReportDsn: DSN } };
-    render(<GeneralPage />);
+    render(<CrashReportGroup />);
     const pages = screen.getByRole("switch", { name: "包含页面错误" });
     expect(pages.getAttribute("aria-checked")).toBe("false");
     fireEvent.click(pages);
