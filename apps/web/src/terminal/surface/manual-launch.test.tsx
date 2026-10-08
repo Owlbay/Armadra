@@ -49,6 +49,7 @@ function refs(): SurfaceRefs {
     launchPhaseRef: { current: "idle" },
     launchTimerRef: { current: null },
     promptTimerRef: { current: null },
+    statusRef: { current: { connection: "idle" } },
     transportRef: { current: { input: fixture.input } },
   } as unknown as SurfaceRefs;
 }

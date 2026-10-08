@@ -4,6 +4,9 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { rfc3339 } from "../workspaces/support";
 import { type AgentFixture, agentFixture } from "./fixture";
+import { LaunchGate, launchGate, resetLaunchGate } from "./launch-gate";
+import { launchOperations } from "./routes";
+import { LAUNCH_FAILED_REASON, byId, enqueue } from "../collab/send-queue";
 
 /**
  * Ported from the pre-merge implementation — the surfaces this
@@ -561,5 +564,113 @@ describe("/api/agents/ama/credentials", () => {
       { apiKey: "a\nb" },
     );
     expect(multiline.status).toBe(400);
+  });
+});
+
+describe("launch gate routes (契约 §52)", () => {
+  afterEach(() => resetLaunchGate());
+
+  const fast = { delay: async () => {}, graceMs: 0, pollMs: 0 };
+
+  function queueFor(target: string, source: string): string {
+    const id = `q-${target}`;
+    const inserted = enqueue(fixture.database, {
+      id,
+      workspaceId: fixture.workspaceId,
+      sourceNodeId: source,
+      targetNodeId: target,
+      origin: "first-task",
+      body: "做这件事",
+      hops: 0,
+      trail: [],
+      now: Math.floor(Date.now() / 1000),
+      state: "queued",
+    });
+    expect(inserted.kind).toBe("inserted");
+    return id;
+  }
+
+  it("grants a slot over HTTP, one codex at a time", async () => {
+    resetLaunchGate(new LaunchGate());
+    const a = fixture.agentNode("a", "codex");
+    const b = fixture.agentNode("b", "codex");
+    const first = await fixture.call("POST", "/api/agents/launch-slot", {
+      workspaceId: fixture.workspaceId,
+      nodeId: a,
+      agentId: "codex",
+    });
+    expect(first).toMatchObject({ status: 200, body: { granted: true } });
+    expect(launchGate().holds(a)).toBe(true);
+    const second = fixture.call("POST", "/api/agents/launch-slot", {
+      workspaceId: fixture.workspaceId,
+      nodeId: b,
+      agentId: "codex",
+    });
+    expect(launchGate().position(b)).toBe(1);
+    launchGate().forget(b);
+    expect((await second).body).toMatchObject({ granted: false });
+  });
+
+  it("refuses a node from another workspace and an unknown agent", async () => {
+    const a = fixture.agentNode("a", "codex");
+    const other = await fixture.call("POST", "/api/agents/launch-slot", {
+      workspaceId: "elsewhere",
+      nodeId: a,
+      agentId: "codex",
+    });
+    expect(other.status).toBe(404);
+    const bad = await fixture.call("POST", "/api/agents/launch-slot", {
+      workspaceId: fixture.workspaceId,
+      nodeId: a,
+      agentId: "gemini",
+    });
+    expect(bad.status).toBe(400);
+  });
+
+  it("calls an emptied pane with no report a failed launch, and settles the queue on the second", async () => {
+    const lead = fixture.agentNode("lead", "ama");
+    const member = fixture.agentNode("member", "codex");
+    fixture.session(member, "codex");
+    const queued = queueFor(member, lead);
+    fixture.terminal.foreground = { command: "zsh", children: [] };
+    const operations = launchOperations(fixture.collab, { watch: fast });
+    const body = {
+      workspaceId: fixture.workspaceId,
+      nodeId: member,
+      agentId: "codex",
+    };
+
+    expect(await operations.result({ ...body, attempt: 1 })).toEqual({
+      verdict: "failed",
+      settled: 0,
+    });
+    expect(byId(fixture.database, queued)?.state).toBe("queued");
+
+    expect(await operations.result({ ...body, attempt: 2 })).toEqual({
+      verdict: "failed",
+      settled: 1,
+    });
+    expect(byId(fixture.database, queued)).toMatchObject({
+      state: "cancelled",
+      settledBy: "gate",
+      lastReason: LAUNCH_FAILED_REASON,
+    });
+  });
+
+  it("is started while the CLI runs, and unknown when the backend cannot say", async () => {
+    const member = fixture.agentNode("member", "codex");
+    fixture.session(member, "codex");
+    const operations = launchOperations(fixture.collab, {
+      watch: { ...fast, windowMs: 0 },
+    });
+    const body = {
+      workspaceId: fixture.workspaceId,
+      nodeId: member,
+      agentId: "codex",
+    };
+    fixture.terminal.foreground = { command: "zsh", children: ["codex"] };
+    expect((await operations.result(body)).verdict).toBe("started");
+    fixture.terminal.foreground = { children: [] };
+    expect((await operations.result(body)).verdict).toBe("unknown");
   });
 });

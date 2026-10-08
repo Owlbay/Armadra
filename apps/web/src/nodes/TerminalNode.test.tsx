@@ -17,20 +17,31 @@ import type { CanvasNode, TerminalNodeData } from "@armadra/shared";
  * 会话视图，其余画终端；头部 `⋯` 里「会话视图 / 终端视图」打钩并经 core 切换。
  */
 
+// 表面挂上时报的状态；缺省「已退出」，个别用例换掉。
+const surfaceState = vi.hoisted(() => ({
+  status: undefined as Record<string, unknown> | undefined,
+  restart: vi.fn(),
+}));
+
 vi.mock("@/terminal/TerminalSurface", async () => {
   const React = await import("react");
   return {
     BELL_FLASH_MS: 600,
     // 表面一挂上就报「已退出」：节点头要不要把它带到会话视图上，是下面那条用例。
     TerminalSurface: React.forwardRef(
-      (props: { onStatusChange?: (status: unknown) => void }, _ref) => {
+      (props: { onStatusChange?: (status: unknown) => void }, ref) => {
+        React.useImperativeHandle(ref, () => ({
+          restart: surfaceState.restart,
+        }));
         React.useEffect(() => {
-          props.onStatusChange?.({
-            connection: "exited",
-            exitCode: 0,
-            error: null,
-            render: "live",
-          });
+          props.onStatusChange?.(
+            surfaceState.status ?? {
+              connection: "exited",
+              exitCode: 0,
+              error: null,
+              render: "live",
+            },
+          );
           // eslint-disable-next-line react-hooks/exhaustive-deps
         }, []);
         return <div data-testid="terminal-surface" />;
@@ -112,6 +123,8 @@ const codexRow = {
 
 beforeEach(() => {
   switchDriver.mockReset();
+  surfaceState.status = undefined;
+  surfaceState.restart.mockReset();
   access.canAnswer = true;
   useAgentStatusStore.setState({ statuses: {} });
   useWorkflowNodeSteps.setState({ steps: {} });
@@ -130,6 +143,20 @@ describe("TerminalNode body", () => {
     );
     expect(await screen.findByTestId("session-view")).toBeTruthy();
     expect(screen.queryByTestId("terminal-surface")).toBeNull();
+  });
+
+  it("marks a launch that failed twice and offers a retry that restarts the terminal", async () => {
+    surfaceState.status = {
+      connection: "live",
+      exitCode: null,
+      error: null,
+      render: "live",
+      launch: "failed",
+    };
+    renderNode(terminalNode({ kind: "terminal", agent: { id: "codex" } }));
+    expect(await screen.findByText("启动失败")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    expect(surfaceState.restart).toHaveBeenCalledTimes(1);
   });
 
   it("draws the terminal when the driver is terminal or absent", () => {

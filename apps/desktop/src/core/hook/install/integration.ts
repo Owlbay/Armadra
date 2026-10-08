@@ -251,8 +251,8 @@ function migrationFor(
 
 /**
  * Whether a line of an earlier build's migration record is about something of
- * ours. Those builds also removed skill directories under names other tools
- * use; their paths are not ours to show.
+ * ours. Those builds also removed skill directories under names that are not
+ * Armadra's; those lines are not ours to show.
  */
 function isOwnRecordEntry(entry: string): boolean {
   const segments = entry.split(/[\\/]/);

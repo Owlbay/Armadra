@@ -651,6 +651,24 @@ G5-25 追加：`GET /api/usage` 与 `POST /api/usage/refresh` 里 Claude 那一�
 - 控制端只要求 `remote.integration.v1` 就能同步，且不再发 `codexCommand`（旧 Worker 只在收到它时写信任）。只有 v1 的主机控制端记为「Worker 旧」：它之前写下的 Codex 信任记录要等 Worker 升级后才会被清。
 - 远端注入文件改为与本机同一个生成器：`run/<cli>`（POSIX 启动器）与委托给它的 `shims/<cli>`。
 
+### 13.5 注入给 CLI 的名称
+
+2026-10-09 起，交给 CLI 的每个名字都以本产品名开头，不用通用名，也不认改名前的旧名（代码与断言在 `core/hook/install/inject.ts`、`inject.test.ts` 的「our names」）：
+
+| 东西                                                                             | 名称                                                                                                                        |
+| -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Hook 与状态行的程序                                                              | `armadra-hook`（Windows `armadra-hook.exe` / `.cmd`）                                                                       |
+| 技能目录与 `SKILL.md` 的 `name`                                                  | `armadra`；尾注 `<!-- armadra:skill-revision N -->`                                                                         |
+| 插件清单 `name`（Claude、Copilot）                                               | `armadra`                                                                                                                   |
+| 状态模块（OpenCode / Pi / OMP）                                                  | `armadra-status.js` / `armadra-status.ts`（OpenCode 的导出名 `ArmadraStatus`）                                              |
+| Copilot 指令文件                                                                 | `armadra.instructions.md`                                                                                                   |
+| MCP 服务器（ACP `session/new.mcpServers` 与 `armadra-hook mcp` 的 `serverInfo`） | `armadra`；工具名在它的命名空间下                                                                                           |
+| 我们设的环境变量                                                                 | `ARMADRA_*`；`OPENCODE_CONFIG_DIR`、`OPENCODE_CONFIG_CONTENT`、`COPILOT_CUSTOM_INSTRUCTIONS_DIRS` 是 CLI 自己的变量，只填值 |
+| 备份后缀                                                                         | `<file>.armadra-backup-<时间戳>`                                                                                            |
+| Windows 启动器                                                                   | `armadra-launch.exe` 的副本 `run\<cli>.exe`；`run/<cli>`、`shims/<cli>` 必须与 CLI 同名，只在数据目录里                     |
+
+文件名由 CLI 规定的（`settings.json`、`plugin.json`、`hooks.json`、`SKILL.md`）不在此列。「清理旧版」（§39.1）也只认这些名字：与改名前同名的 Hook、指令块、技能目录、状态模块按其他工具的条目对待，不列、不改、不删。
+
 ## 14. ACP：`/api/acp/*` 与 `/api/agents` 行的 `acp`
 
 > 自协议 1.12 起这些路由同时是 `acp.*` procedure（§43.1），旧路径与 procedure 调同一份实现。
@@ -2815,7 +2833,7 @@ core 校验远程服务地址与指纹的写法时用具名码（状态均 400�
 ### 39.1 目录、模型菜单、集成与 ama 密钥
 
 - `models` 对不认识的 Agent 答 404；`integration*` 的拒绝是集成域自己的 `InstallError`（码与状态它带），其余失败是 500。
-- 集成只写数据目录（画布内注入）；`repairIntegration` 只在用户点击时动 CLI 自己的配置目录，且只认本产品写下的条目：程序是我们的 Hook 客户端（现名或改名前的名字，含开发构建）的 Hook 与状态行、调用它的状态模块、带我们签名的技能目录、我们的指令块标记 `armadra:skills` / `aicc:skills`、与我们的条目同在时 Codex `hooks.json` 顶层的 `version`；先备份再改。其他工具写进同一批文件的条目不列入 `found`、不进 `removed` / `kept`、不改不删（2026-10-08 起）。`kept` 只剩我们自己留下没删的（旁边有用户文件的技能目录、指令文件的其余部分）。
+- 集成只写数据目录（画布内注入）；`repairIntegration` 只在用户点击时动 CLI 自己的配置目录，且只认本产品写下的条目：程序是 `armadra-hook`（含开发构建）的 Hook 与状态行、调用它的状态模块 `armadra-status.*`、Copilot 的 `hooks/armadra.json`、技能目录 `armadra` / `armadra-canvas` / `armadra-linked-context` 且带我们签名、指令块标记 `armadra:skills`、与我们的条目同在时 Codex `hooks.json` 顶层的 `version`；先备份再改。其他工具写进同一批文件的条目不列入 `found`、不进 `removed` / `kept`、不改不删（2026-10-08 起）。2026-10-09 起不再认改名前的旧名（§13.5）：同名条目一律按其他工具的对待。`kept` 只剩我们自己留下没删的（旁边有用户文件的技能目录、指令文件的其余部分）。
 - ama 的密钥只进不出：三条都答「哪家设了、存在哪个后端」。密钥后端不可用时答 503，码是后端自己的（`secret_unavailable`），原话不带后端给的理由。
 
 <!-- rpc:begin contract=§39.1 -->
@@ -3568,3 +3586,16 @@ human initiator。页面不接收任何 controller 凭据；body owner/controlle
 - **谁遵循**：`open-agent`、`open-terminal`、`open-browser`、`sticky`、`worktree` 等建节点的控制动词都经 `placement`；`team` 的成员依次排成一行（纵向）/ 一列（横向），`--gather` 的汇总节点在成员那一行的下一行、水平居中于成员（横向：下一列、垂直居中）；有成员进了 worktree 分组或落点被占时退回普通放置。
 - **页面**：节点菜单「派生」与拖线建从用同一个 `dispatchPlacement`（拖线时落点是松手处，以它为中心）；整理（`canvas.tidy`）按方向排主从树、主居中于子（Dock 整理钮的右键「纵向整理 / 横向整理」只覆盖这一次，不写设置）。
 - **链接文档带 role**（行为说明，形状见 §39.4 的 `agents.putContextLinks`）：页面推送的链接文档每一项都带 `role`——`supervises` 边对 `source` 一侧写 `"sub"`、对 `target` 一侧写 `"main"`，对等边写 `"peer"`；「派生」建出的从因此立刻得到 `send` 的授权，与 Agent 自己 `open-agent` 的结果一致。
+
+## 52. 启动闸门：`launch-slot`、`launch-result`、垫片穿透与 `wait` 的 `launch_failed`
+
+自协议 1.24 起。同一份 CLI 配置目录上同时起几个 Codex，会同时迁移同一个状态库、同时对同一个账号做路由探测，其中一个起不来。core 按 `(agentId, 配置目录)` 排队启动，页面敲启动行前申请、敲完问结果，没起来就自动重敲一次。实现在 `core/agent/launch-gate.ts`（闸门与判定）、`core/agent/routes.ts`（两条路由）、`core/agent/registry.ts`（垫片穿透）与 `core/collab/send-queue.ts`（结算）。没有 procedure，两条都是 REST。
+
+- **闸门**：键是 `(agentId, 配置目录)`。自定义条目按它的 base；配置目录是 Codex 的 `CODEX_HOME`（缺省 `~/.codex`）、Claude 的 `CLAUDE_CONFIG_DIR`（缺省 `~/.claude`）、其余 `~/.<agentId>`，自定义条目的 `env` 优先。策略是 core 常量：`codex` 同时 1 个、持有上限 6 s、放行下一个前随机等 500–1500 ms；其余 CLI 不排队（立即 `granted: true`）。持有者的节点报出第一条真上报（来源 `hook` / `extension` / `acp`，不是 `restored`）或持有到期，先到者放行下一个。闸门只在内存里，重启即清空。依赖与运行由 core 启动的节点在 core 内直接过同一个闸门；SSH 节点不排。
+- **`POST /api/agents/launch-slot`** `{ workspaceId, nodeId, agentId }` → `200 { granted: boolean, waitedMs: number }`。长轮询，最多 30 s。`granted: false` 是等满没轮到，或被同一节点的新申请顶掉；闸门是减速带不是门禁，页面照常敲。
+- **`POST /api/agents/launch-result`** `{ workspaceId, nodeId, agentId, attempt }`（`attempt` 是 1–9 的整数，自动重试那一次是 2）→ `200 { verdict: "started" | "failed" | "unknown", settled: number }`。长轮询，最多约 30 s。判据只有两样，不读屏幕：节点终端里 shell 下面有没有进程、节点有没有报过状态。敲出后 30 s 内报过状态，或者看满 30 s 仍有进程是 `started`；前台连续两次为空、且一条状态都没报是 `failed`（启动行是敲进 shell 的，拿不到退出码，所以一个 30 s 内被人退掉、又从没报过状态的 CLI 也算失败）；终端后端答不出前台命令（Windows 的会话宿主）或节点没有终端是 `unknown`。`failed` 时放掉它在闸门上的位置；`attempt ≥ 2` 时把这个节点还排着的投递（`queued`）结算为 `cancelled`、`settledBy: "gate"`、原因 `launch_failed`，回执照常写回发送方，`settled` 是结算的条数。
+- 两条的错误：缺字段或 `agentId` 不是 Agent 答 400 `bad_request`；节点已落库且不在体里的工作空间答 404 `not_found`（还没落库的新节点不算越界）。权限：往自己起的节点里敲只要 `terminal:create`，别人的要 `terminal:drive`（与往别人的终端里写同一档）；服务器壳按体里的 `workspaceId` 判，节点在别的工作空间时拒绝。
+- **页面**：提示符安静后先 `launch-slot`（最多等 32 s），再敲，再 `launch-result`；`failed` 且是第一次就随机退避 2–5 s 重敲一次（`attempt: 2`）；第二次仍 `failed` 时节点头显示「启动失败」胶囊与「重试」按钮（重开终端并重新走这一遍），不再自动重敲。请求失败或旧 core 没有这两条路由时照常敲、不重试。
+- **`launchTarget` 的垫片穿透**：§26 的 `launchTarget` 原只用于 Windows 的 `.cmd` 包装（原文不改）。自 1.24 起，`GET /api/agents`（`agents.list`）的 `resolvedPath` 是 mise / asdf 的垫片（指向 `mise` / `asdf` 本体的符号链接，或路径含 `/mise/shims/`、`/.asdf/shims/`）时，core 在家目录里跑一次 `mise which <cli>`（asdf 同理，10 s 超时，按 `(垫片路径, mtime)` 缓存），答出的是真实存在的可执行文件就填 `launchTarget: { program: <真实路径>, args: [] }`。真实路径是 node 脚本时不再往下穿。只读，不写任何 CLI 或版本管理器的配置；问不出来就不带 `launchTarget`。Windows 不穿透。按目录切版本的项目以家目录里的全局版本为准。
+- **`wait --task`**（§15.5）：`status: "failed"` 时 `reason` 可以是 `launch_failed`——成员自动重试一次仍没起来，排给它的任务已经结算，调用方不必等到队列过期。
+- 事件无变化；不写数据库迁移（结算复用 `agent_send_queue` 已有的列）。

@@ -31,6 +31,9 @@ import {
   shimPath,
 } from "./inject";
 import { tempDir } from "../../testing/temp-dir";
+import { CANVAS_MCP_NAME } from "../../acp/mcp";
+import { agentEnvironment } from "../../terminal/environment";
+import { MCP_SERVER_NAME } from "../../../cli/armadra-hook/mcp";
 
 /**
  * The canvas injection: what each CLI is handed, and what is written for it.
@@ -327,6 +330,129 @@ describe("canvas injection", () => {
     writeFileSync(layout.module as string, "stale", "utf8");
     prepare("pi");
     expect(readFileSync(layout.module as string, "utf8")).not.toBe("stale");
+  });
+});
+
+/**
+ * Every name a CLI sees from us carries our own prefix, so nothing we hand a
+ * CLI can be mistaken for — or collide with — another tool's entry. The CLI's
+ * own fixed file names (`settings.json`, `plugin.json`, `SKILL.md`, …) and its
+ * own environment variables are the only exceptions, because the CLI chose
+ * them.
+ */
+describe("our names", () => {
+  const PREFIX = /^armadra/i;
+  /** File names the CLI itself fixes, or our own bookkeeping under our dir. */
+  const CLI_FIXED = new Set([
+    "settings.json",
+    "plugin.json",
+    "hooks.json",
+    "SKILL.md",
+    "instructions.md",
+    "injection.json",
+    "config.json",
+    "profile.json",
+    "overlay.yml",
+  ]);
+  /** Directories the CLI fixes inside a plugin or config directory. */
+  const CLI_DIRS = new Set([
+    ".claude-plugin",
+    ".github",
+    "config",
+    "instructions",
+    "plugin",
+    "plugins",
+    "skills",
+  ]);
+  /** Environment variables the CLI defines; we only fill them in. */
+  const CLI_ENV = new Set([
+    "OPENCODE_CONFIG_DIR",
+    "OPENCODE_CONFIG_CONTENT",
+    "COPILOT_CUSTOM_INSTRUCTIONS_DIRS",
+  ]);
+
+  function programOf(command: string): string {
+    const first = command.startsWith('"')
+      ? command.slice(1, command.indexOf('"', 1))
+      : command.startsWith("& ")
+        ? programOf(command.slice(2))
+        : (command.split(" ")[0] ?? "");
+    return first.replace(/\\/g, "/").split("/").pop() ?? "";
+  }
+
+  function commandsIn(value: unknown): string[] {
+    if (Array.isArray(value)) return value.flatMap(commandsIn);
+    if (typeof value !== "object" || value === null) return [];
+    return Object.entries(value).flatMap(([key, inner]) =>
+      ["command", "bash", "powershell"].includes(key) &&
+      typeof inner === "string"
+        ? [inner]
+        : commandsIn(inner),
+    );
+  }
+
+  it("prefixes every file, directory, plugin, skill and hook we hand a CLI", () => {
+    for (const agentId of INJECTED_AGENTS) {
+      prepare(agentId);
+      const dir = join(dataDir, "integration", agentId);
+      const walk = (at: string): string[] =>
+        readdirSync(at).flatMap((name) =>
+          statSync(join(at, name)).isDirectory()
+            ? [join(at, name), ...walk(join(at, name))]
+            : [join(at, name)],
+        );
+      for (const path of walk(dir)) {
+        const name = path.split(/[\\/]/).pop() as string;
+        const isDir = statSync(path).isDirectory();
+        if (isDir ? CLI_DIRS.has(name) : CLI_FIXED.has(name)) continue;
+        expect(name, `${agentId}: ${path}`).toMatch(PREFIX);
+      }
+
+      const layout = artifactLayout(dataDir, agentId);
+      const skill = readFileSync(layout.skill, "utf8");
+      expect(/^name: (.+)$/m.exec(skill)?.[1], agentId).toMatch(PREFIX);
+      if (layout.manifest !== undefined) {
+        const manifest = JSON.parse(readFileSync(layout.manifest, "utf8")) as {
+          name: string;
+        };
+        expect(manifest.name, agentId).toMatch(PREFIX);
+      }
+      for (const file of [layout.settings, layout.pluginHooks]) {
+        if (file === undefined) continue;
+        const commands = commandsIn(JSON.parse(readFileSync(file, "utf8")));
+        expect(commands.length, file).toBeGreaterThan(0);
+        for (const command of commands) {
+          expect(programOf(command), command).toMatch(PREFIX);
+        }
+      }
+      if (layout.module !== undefined) {
+        expect(readFileSync(layout.module, "utf8")).toContain(
+          JSON.stringify(hookBin),
+        );
+      }
+
+      const injection = inject(agentId);
+      for (const [name] of injection.env) {
+        if (CLI_ENV.has(name)) continue;
+        expect(name, agentId).toMatch(/^ARMADRA_/);
+      }
+      if (agentId === "codex") {
+        const hooks = injection.args.filter((arg) => arg.startsWith("hooks."));
+        expect(hooks.length).toBeGreaterThan(0);
+        for (const arg of hooks) {
+          const command = /command="([^"]+)"/.exec(arg)?.[1] ?? "";
+          expect(programOf(command), arg).toMatch(PREFIX);
+        }
+      }
+    }
+  });
+
+  it("names the MCP server and every variable a canvas node carries after us", () => {
+    expect(CANVAS_MCP_NAME).toMatch(PREFIX);
+    expect(MCP_SERVER_NAME).toMatch(PREFIX);
+    for (const [name] of agentEnvironment("n", "claude", dataDir, "a", "b")) {
+      expect(name).toMatch(/^ARMADRA_/);
+    }
   });
 });
 

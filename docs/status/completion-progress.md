@@ -3211,6 +3211,40 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - 共享：`GroupNodeData.origin?`。契约、协议号、数据库都不变。
 - 文案：`canvas.tidySelection`、`canvas.group.import`、`canvas.group.mermaid`、`canvas.group.ungroup`（`i18n/canvas.ts` 中英）。
 
+## 并发启动多个 Codex：启动闸门、失败重试、垫片穿透（界面第二波 §8，契约 §52，包 E）
+
+用户报：`canvas_team` 一次起 3 个 Codex，第 3 个报 `account/read failed during TUI bootstrap: … workspace routing discovery timed out` 起不来。调查（同一份 `CODEX_HOME` 上并发自举会争状态库迁移与账号路由探测；三个节点的启动行几乎同时敲出；PATH 上第一个命中的是 mise 垫片，每次多一层 mise + node）见设计 §8.1。
+
+做了什么：
+
+- **core 启动闸门**（新 `core/agent/launch-gate.ts`）：按 `(agentId, 配置目录)` 排队；Codex 同时 1 个，持有者报出第一条真上报（`hook` / `extension` / `acp`）或 6 s 到期放行下一个，再随机等 500–1500 ms；其余 CLI 不排。只在内存里。`agent/index.ts` 装配时订阅 `agent.status` 放行；依赖与运行由 core 启动的节点（`dependencies/launch.ts`）在敲行前直接 `acquire`，SSH 节点不排。
+- **两条 REST**（`core/agent/routes.ts`，登记进 `http/routes.ts`，服务器壳的路由门在 `identity/route-access.ts`）：`POST /api/agents/launch-slot` 长轮询拿位置；`POST /api/agents/launch-result` 判这一次起没起来——只看 shell 下面还有没有进程、节点报没报过状态，不读屏幕。第二次（`attempt ≥ 2`）仍失败时 `send-queue.ts::failLaunch` 把排给它的投递结算为 `cancelled` / `settledBy: "gate"` / `launch_failed`，回执照常写回，`wait --task` 答 `failed` + `reason: "launch_failed"`。
+- **页面**（`terminal/surface/use-launch.ts`）：提示符安静后先申请位置再敲，敲完问结果；失败退避 2–5 s 自动重敲一次；第二次失败节点头显示「启动失败」胶囊与「重试」按钮（重开终端走同一遍）。闸门请求失败或旧 core 没有路由时照常敲、不重试。文案 `agent.launch.failed` / `agent.launch.retry` 中英同步。
+- **垫片穿透**（`core/agent/registry.ts::versionManagerTarget`）：`resolvedPath` 是 mise / asdf 垫片时在家目录跑一次 `<manager> which <cli>`（10 s 超时，按 `(路径, mtime)` 缓存），把真实路径填进 `launchTarget`；页面与 `dependencies/launch.ts` 都优先起它。只读，问不出来维持原样。
+- 共享 schema：`launchSlotRequestSchema` / `launchSlotResponseSchema` / `launchResultRequestSchema` / `launchResultResponseSchema`、`LAUNCH_VERDICTS`、`LAUNCH_FAILED_REASON`。
+- 新探针 `tools/probes/launch-concurrency.mjs`（登记在 `tools/probes/README.md`）。
+
+实测（macOS arm64，基于 main 20248839）：
+
+- `launch-concurrency.mjs`：隔离数据目录 + 临时 HOME + `ARMADRA_NO_GLOBAL_WRITES=1` + 文件密钥后端，假 `codex`（同一状态目录同时只容两个自举、慢启动 2.5 s）。不过闸门同时敲：`failed, started, started`，恰好 2 个起来；过闸门：放行间隔 7314 / 7272 ms，三个都 `started`、都起来。
+- 新增 / 扩充用例：`launch-gate.test.ts`（串行放行间隔 ≥ 500 ms、上报提前放行、holdMs 兜底、非 Codex 与别的配置目录不排、等满答 `granted: false`、同节点重复申请顶掉旧的、`watchLaunch` 四种判定）、`registry.test.ts`（假 mise 垫片穿透、问不出来回退且缓存、答非可执行文件不收、普通程序不问）、`routes.test.ts`（HTTP 拿位置、越界 404 / 未知 Agent 400、两次失败结算队列、`started` / `unknown`）、`wait.test.ts`（`launch_failed`）、`dependencies/service.test.ts`（core 起的 Codex 等前一个放行才敲）、web `use-launch.test.ts`（先申请再敲、闸门不通照敲、失败重敲一次后标失败且不敲第三次、清掉后不重试）、`TerminalNode.test.tsx`（失败胶囊与重试钮）。
+- `pnpm libs:build && pnpm -r --if-present test` 全过（web 4032、desktop 5371 / 67 跳、shared 372、server 98 / 4 跳）；web typecheck、`pnpm check` 通过。
+
+没做 / 偏离：
+
+- **失败判定改在 core**：设计 §8.3 写的是页面看 `lastExitCode`，但启动行是敲进 shell 的，CLI 退出后 shell 还在，PTY 不会报退出、也拿不到 CLI 的退出码。改为新增 `launch-result` 长轮询由 core 看前台进程；代价是 30 s 内被人自己退掉、又从没报过状态的 CLI（Codex 启动不报 `SessionStart`）也会被当成失败并自动重敲一次。Windows 会话宿主答不出前台，判 `unknown`，不重试。
+- 「重试」按钮用重开终端（`restart()`）而不是 `ManualRunButton`：后者是带提示词的手动运行入口，语义不同。
+- ACP 驱动的 `AcpRuntime.open` 没接闸门：按 §10 由包 D 在 `startAdapter` 前 `launchGate().acquire(...)`、`session/new` 返回后 `release(nodeId)`。
+- 文件边界外的必要改动：`core/agent/index.ts`（装配一行）、`core/http/routes.ts`（路由登记，顺手把集成的三条 POST 收成一行以守住 1500 行上限）、`core/identity/route-access.ts`（服务器壳按体里的工作空间判）、`terminal/surface/types.ts`（`launch` 字段）、`manual-launch.test.tsx`（桩补 `statusRef`）、`docs/guides/architecture.md`。
+- `--no-daemon` 与真实账号下的路由探测没有验证（需要真实 ChatGPT 账号，见设计 §8.5）；按目录切版本的项目，垫片穿透以家目录的全局版本为准。
+- 没改全局 `PROTOCOL_MINOR`（仍 23）；§52 写「自协议 1.24 起」，由最后合入的包统一改。
+
+接口：
+
+- 契约 §52：`POST /api/agents/launch-slot { workspaceId, nodeId, agentId } → { granted, waitedMs }`；`POST /api/agents/launch-result { …, attempt } → { verdict: started|failed|unknown, settled }`；`agents.list` 的 `launchTarget` 也用于垫片；`wait` 的 `reason: "launch_failed"`。
+- core：`launchGate()`（`acquire({ agentId, configDir, nodeId, timeoutMs? })`、`release(nodeId)`、`forget(nodeId)`、`holds` / `position`）、`configDirFor(baseAgentId, env?, home?)`、`policyFor`、`watchLaunch`、`installLaunchGate(bus)`、`activeLaunchGate()`；`registry.versionManagerTarget(resolved, which?)`、`clearShimCache()`；`send-queue.failLaunch(database, nodeId)`、`LAUNCH_FAILED_REASON`；`routes.launchOperations(collab, options?)`。
+- 页面：`runtimeApi.launchSlot(body, signal?)`、`runtimeApi.launchResult(body, signal?)`；`TerminalSurfaceStatus.launch?: "failed" | null`。
+
 ## 集成清理只认本产品签名、启动不写 HOME（紧急修复 2026-10-08）
 
 用户要求：不动用户的配置与系统配置，只注入自己的，不管也不改别人的东西。审计发现 `hook/install/repair.ts` 把另一个独立应用写进 CLI 配置的 Hook、指令块与技能目录当成我们旧版的残留（按名字子串、任意 `target/debug/`、通用技能名、指令块前缀匹配），集成页「修复」会列出并删除；启动迁移不经点击就删技能目录。实证：该应用在用户机器上运行，`~/.copilot/hooks/` 里它的文件被反复清空，两边互相改写，累积了多份 `.armadra-backup-*`。
@@ -3343,3 +3377,30 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - 页面：`TidyOptions.direction`；`layoutDirection()`、`useLayoutDirection()`、`useLayoutDirectionSync()`、`tidyInDirection()`、`layoutDirectionOf()`；`spawnSubordinate`、`spawnPosition`、`buildSpawnItems`、`SpawnMenuItem`；`AddMenuContent` 的 `spawnFrom`；`NodeMenuItem.children / hint`；`useConnectEndSpawn`、`spawnSourceOf`；`linkColor`、`LINK_CONTEXT_COLOR`；`CLUSTER_PALETTE`；`minimapLinksFrom`、`MINIMAP_LINK_WIDTH`；`TidyButton`；`LayoutDirectionRow`。
 - 文案：`node.menu.spawn`、`node.menu.spawnFrom`（删 `node.menu.spawnAgent`、`wizard.*`、`integration.wizard.spawnTitle`）；`canvas.tidyVertical / tidyHorizontal`、`canvas.layoutDirection(.vertical / .horizontal)`。
 - token：`--link-context`。
+
+## 注入只用 armadra 命名、清理不再认旧名（2026-10-09）
+
+用户要求：注入的 Hook 等一律用本产品独立的名称，不和别的工具混淆，也不兼容旧别名。
+
+做了什么：
+
+- 盘点：交给 CLI 的名字已全部以 `armadra` 开头——Hook 程序 `armadra-hook`、技能 `armadra`、插件清单 `armadra`、状态模块 `armadra-status.*`（导出 `ArmadraStatus`）、Copilot `armadra.instructions.md`、MCP 服务器 `armadra`、环境变量 `ARMADRA_*`、备份后缀 `.armadra-backup-*`、`armadra-launch.exe`。不需要改名，因此也没有要迁移的旧 armadra 条目。清单写进契约 §13.5。
+- `repair.ts`：删掉改名前旧名的识别（Hook 客户端、`…:skills` 指令块、两个旧技能目录）；Copilot 只看我们写过的 `hooks/armadra.json`，状态模块只看 `armadra-status.ts` / `.js`，同目录的其他文件不再打开。
+- `integration.ts`：早期迁移记录里的旧名技能目录路径随之不再出现在 `migration`。
+- 测试：`inject.test.ts`「our names」对每个 CLI 生成产物，断言每个文件与目录名（CLI 规定的除外）、技能 `name`、插件 `name`、每条 Hook 命令的程序、Codex `-c hooks.*` 的程序都以 `armadra` 开头，我们设的环境变量以 `ARMADRA_` 开头，MCP 服务器名同样；`repair.test.ts`「entries under the former name」在六种 CLI 的每个扫描位置放与旧名同名的条目（以及调用我们客户端的他人文件），断言不列、不改、不删、不备份、字节不变。web 夹具与 `ui-features/integration.mjs` 改用 armadra 命名，探针多一条与旧名同名的命令，断言弹层不列、清理后保留。
+- 文档：契约 §13.5（新增）、§39.1，`design/agent-integration.md` §4 / §7，`guides/agent-collaboration.md`。
+
+实测（macOS arm64，基于 main f2f1d18b）：
+
+- `pnpm libs:build && pnpm -r --if-present test` 全过（web 4027、desktop 5342 / 74 跳、shared 372、server 98 / 4 跳）；web / desktop typecheck、`pnpm check` 通过。
+- `ui-features-e2e --only=integration` 通过（临时 HOME 与数据目录）。
+
+没做 / 偏离：
+
+- MCP 与 ama 的工具名（`canvas_post`、`browser_click` 等）不改：它们在 `armadra` 服务器的命名空间下，各 CLI 显示为该服务器的一组；改名会改动词表与契约。
+- `run/<cli>`、`shims/<cli>` 必须与 CLI 同名才能接管启动，只在数据目录里，不进 CLI 配置。
+- 用户机器上旧名的残留不再由「清理旧版」处理，需要时用户手动删除。
+
+接口：
+
+- core：`OWN_SKILL_DIRS` 只剩三个 armadra 目录；`isOwnCommand` 只认 `armadra-hook`。形状不变，契约 §13.5 新增、§39.1 改写。
