@@ -830,13 +830,15 @@ export function install(context: CoreContext): void {
   }
 
   // 冷启动预热（契约 §51）：core 起来空闲一会儿之后，每家已装的适配器跑一次
-  // `initialize` 与自带 CLI 的 `--version`。用例里不做（不起真适配器），
-  // `ARMADRA_ACP_WARMUP=0` 关掉。
+  // `initialize` 与自带 CLI 的 `--version`。用例与探针里不做（不替人起真 CLI，
+  // `ARMADRA_NO_GLOBAL_WRITES=1` 时不碰操作员的 CLI），`ARMADRA_ACP_WARMUP=0`
+  // 关掉。
   const owner = runtime;
   setAcpWarmer(owner?.warmer);
   if (
     owner !== undefined &&
     process.env.VITEST === undefined &&
+    process.env.ARMADRA_NO_GLOBAL_WRITES !== "1" &&
     process.env.ARMADRA_ACP_WARMUP !== "0"
   ) {
     const timer = setTimeout(() => {

@@ -3596,7 +3596,7 @@ human initiator。页面不接收任何 controller 凭据；body owner/controlle
 - **`POST /api/acp/sessions`**：`session/new` 60 s 没答复时答 504 `acp_session_timeout`，适配器进程被收掉（`initialize` 的 30 s 截止不变）。`prompt` 字段语义不变；页面在会话就绪前输入的第一条，若那时起会话的请求还没发出，就随这个字段发出，否则等会话开好后经 `acp.prompt` 发（带 `clientTurnId`，§39.9）。
 - **启动闸门**：本机 ACP 会话在起适配器之前过 §52 的闸门（键 `(agentId, 配置目录)`），`session/new` 答复（进入落设置那一段）或失败时放行下一个。
 - **`POST /api/acp/prestart`** `{ workspaceId, agentId }` → `204`。幂等；只是提速：不是 ACP 入口、没装、或这家不能预启动时同样 204。工作空间不存在 404 `not_found`，缺字段 400 `bad_request`。权限 `terminal:drive`；服务器壳按体里的 `workspaceId` 判。页面在右键 / Dock `+` 菜单打开时对默认 Agent（以 ACP 驱动的才调）调一次；远程源不调。core 按与起会话同一份程序、argv 与环境起适配器并完成 `initialize`，挂在 `(agentId, workspaceId)` 下，10 s 没被领走就收掉。之后同一工作空间同一家的 `POST /api/acp/sessions` 若启动签名（程序、argv、环境）相同就领走它，直接 `session/new`。预启动时还没有节点，进程环境里没有节点身份：所以只给注入不复用终端环境与 argv 的那几家（适配器表 `injection.reuse` 为空，今天是 Claude 与 ama），节点带凭据（§26.4）时不领。
-- **预热**：适配器或 CLI 装好 / 升级成功后、core 起来空闲 10 s 后、以及预启动时发现适配器程序换过，core 对每家已装的适配器跑一次 `initialize`，并执行一次它自带 CLI 的 `--version`（Claude：SDK 平台包里的 `claude`；Codex：`@openai/codex-<平台>` 里的原生程序），串行，同一家同一份程序 10 分钟内一次。没有接口；`ARMADRA_ACP_WARMUP=0` 关掉空闲预热。
+- **预热**：适配器或 CLI 装好 / 升级成功后、core 起来空闲 10 s 后、以及预启动时发现适配器程序换过，core 对每家已装的适配器跑一次 `initialize`，并执行一次它自带 CLI 的 `--version`（Claude：SDK 平台包里的 `claude`；Codex：`@openai/codex-<平台>` 里的原生程序），串行，同一家同一份程序 10 分钟内一次。没有接口；`ARMADRA_ACP_WARMUP=0` 或 `ARMADRA_NO_GLOBAL_WRITES=1`（探针）时不做空闲预热。
 - **耗时日志**：每次起会话记一条 info 日志 `ACP session start timings`，字段只有 `nodeId`、`agentId` 与 `spawnMs` / `initializeMs` / `sessionMs` / `configureMs` / `totalMs` / `prestarted`；适配器 stderr 里的 `[session/create] phase=<名> durationMs=<n>` 只取名字与数字记成 `ACP adapter phase`。stderr 正文仍不进日志。
 - `acp.log` 不变；不写数据库迁移（池与预热只在内存里）。
 
