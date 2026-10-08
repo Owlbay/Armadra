@@ -13,7 +13,6 @@ import {
   type WhiteboardSize,
 } from "../../../app/preferences-store";
 import { colorHex } from "../../../canvas/whiteboard/palette";
-import { RealtimeSetting } from "../../../realtime/RealtimeSetting";
 import { SettingsGroup } from "../SettingsGroup";
 import { SettingsRow } from "../SettingsRow";
 import { CONTROL_WIDTH } from "./GeneralPage";
@@ -38,7 +37,7 @@ import { Switch } from "@/ui/switch";
  *
  * 前两张半与右上工具簇的画布偏好菜单是**同一份 store**，两处任改一处、
  * 另一处立刻跟着变；默认样式那一组只在这里出现（菜单里放不下）。
- * 界面语言不在这里——它静默跟随应用语言。
+ * 界面语言不在这里——它静默跟随应用语言；实时协同是主机设置，在工作空间页。
  *
  * 换引擎删掉的四项见 §2.10：调试面板、增强辅助、缩放方向反转、手绘 /
  * 整洁风格档在 React Flow 下都没有对应能力。剩下的每一项 2026-09-06 逐条
@@ -234,8 +233,6 @@ export function WhiteboardPage() {
           </Select>
         </SettingsRow>
       </SettingsGroup>
-
-      <RealtimeSetting />
     </>
   );
 }

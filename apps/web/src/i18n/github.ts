@@ -351,7 +351,6 @@ const zh = {
   "github.error.unknownOutcome": "请求已发出但结果未知，刷新后核对远端状态",
 
   /* 设置 → GitHub */
-  "github.nav": "Git 托管",
   "github.settings.note": "GitHub API 凭据由 Host 保管，令牌不会回到界面。",
   "github.settings.source": "凭据来源",
   "github.settings.apiBase": "API base",
@@ -732,8 +731,6 @@ const en: Record<keyof typeof zh, string> = {
   "github.error.network": "Cannot reach the Host",
   "github.error.unknownOutcome":
     "The request was sent but its result is unknown; reload and check the remote",
-
-  "github.nav": "Git hosting",
   "github.settings.note":
     "The Host holds the GitHub API credential; a token never comes back to this page.",
   "github.settings.source": "Credential source",

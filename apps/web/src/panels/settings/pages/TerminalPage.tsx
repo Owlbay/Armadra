@@ -1,18 +1,9 @@
-import {
-  TERMINAL_CURSOR_STYLES,
-  TERMINAL_FONT_SIZE_RANGE,
-  TERMINAL_LINE_HEIGHT_RANGE,
-  usePreferencesStore,
-  useT,
-  type TerminalCursorStyle,
-} from "../../../app/preferences-store";
-import { RENDER_BUDGET_CHOICES } from "../../../terminal/render-budget";
+import { usePreferencesStore, useT } from "../../../app/preferences-store";
 import { LocalSourceBadge } from "../local-source";
 import { SettingsGroup } from "../SettingsGroup";
 import { SettingsRow } from "../SettingsRow";
 import { useRuntimeSettings } from "../use-runtime-settings";
 import { CONTROL_WIDTH } from "./GeneralPage";
-import { Input } from "@/ui/input";
 import {
   Select,
   SelectContent,
@@ -21,7 +12,6 @@ import {
   SelectValue,
 } from "@/ui/select";
 import { Switch } from "@/ui/switch";
-import { clamp } from "@/lib/math";
 
 /**
  * `settings.terminal.backend`（§15.1 + T01）。
@@ -96,13 +86,12 @@ const GRACE_CHOICES = [
 /**
  * 设置 → 终端（§24.1）。
  *
- * 上面一张卡是 Runtime 侧的会话策略（后端、断开保留），下面两张是纯本地的
- * 外观与键盘偏好：改一项 `TerminalSurface` 会重设 xterm options 并 fit 一次。
+ * 两张卡都是 Runtime 侧的：会话策略（后端、休眠、节能、断开保留）与电源和
+ * 资源。字体、光标、键盘与渲染这些本设备的外观偏好在「终端」外观页
+ * （`TerminalLookPage`）。
  */
 export function TerminalPage() {
   const t = useT();
-  const terminal = usePreferencesStore((state) => state.terminal);
-  const set = usePreferencesStore((state) => state.setTerminalPreference);
   // 阈值存两处：core 的设置（越线发 `resources.threshold`，推送据此叫人，
   // 契约 §27.4）与本地偏好（徽标变色、本机提醒不等设置读回来）。显示以 core
   // 为准。
@@ -112,9 +101,6 @@ export function TerminalPage() {
   const setMemoryWarnBytes = usePreferencesStore(
     (state) => state.setSessionMemoryWarnBytes,
   );
-  // 同理：能同时开几个 WebGL 上下文是这台机器的属性，不是账号偏好。
-  const renderBudget = usePreferencesStore((state) => state.renderBudget);
-  const setRenderBudget = usePreferencesStore((state) => state.setRenderBudget);
   const { settings, save } = useRuntimeSettings();
   const memoryWarnBytes =
     settings.data?.resources?.memoryWarnBytes ?? localMemoryWarnBytes;
@@ -346,139 +332,6 @@ export function TerminalPage() {
               ))}
             </SelectContent>
           </Select>
-        </SettingsRow>
-
-        <SettingsRow
-          label={t("terminal.settings.renderBudget")}
-          footnote={t("terminal.settings.renderBudgetHint")}
-        >
-          <Select
-            value={String(renderBudget)}
-            onValueChange={(value) => setRenderBudget(Number(value))}
-          >
-            <SelectTrigger
-              aria-label={t("terminal.settings.renderBudget")}
-              size="sm"
-              className={CONTROL_WIDTH}
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="z-[var(--z-dialog)]">
-              {RENDER_BUDGET_CHOICES.map((slots) => (
-                <SelectItem key={slots} value={String(slots)}>
-                  {slots}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </SettingsRow>
-      </SettingsGroup>
-
-      <SettingsGroup>
-        <SettingsRow label={t("terminal.settings.font")}>
-          <Input
-            className="h-8 w-[240px] text-xs"
-            aria-label={t("terminal.settings.font")}
-            value={terminal.fontFamily}
-            onChange={(event) => set("fontFamily", event.target.value)}
-          />
-        </SettingsRow>
-
-        <SettingsRow label={t("terminal.settings.fontSize")}>
-          <Input
-            type="number"
-            className="h-8 w-[90px] text-xs"
-            aria-label={t("terminal.settings.fontSize")}
-            min={TERMINAL_FONT_SIZE_RANGE[0]}
-            max={TERMINAL_FONT_SIZE_RANGE[1]}
-            step={1}
-            value={terminal.fontSize}
-            onChange={(event) =>
-              set(
-                "fontSize",
-                clamp(Number(event.target.value), ...TERMINAL_FONT_SIZE_RANGE),
-              )
-            }
-          />
-        </SettingsRow>
-
-        <SettingsRow label={t("terminal.settings.lineHeight")}>
-          <Input
-            type="number"
-            className="h-8 w-[90px] text-xs"
-            aria-label={t("terminal.settings.lineHeight")}
-            min={TERMINAL_LINE_HEIGHT_RANGE[0]}
-            max={TERMINAL_LINE_HEIGHT_RANGE[1]}
-            step={0.05}
-            value={terminal.lineHeight}
-            onChange={(event) =>
-              set(
-                "lineHeight",
-                clamp(
-                  Number(event.target.value),
-                  ...TERMINAL_LINE_HEIGHT_RANGE,
-                ),
-              )
-            }
-          />
-        </SettingsRow>
-
-        <SettingsRow label={t("terminal.settings.cursor")}>
-          <Select
-            value={terminal.cursorStyle}
-            onValueChange={(value) =>
-              set("cursorStyle", value as TerminalCursorStyle)
-            }
-          >
-            <SelectTrigger
-              aria-label={t("terminal.settings.cursor")}
-              size="sm"
-              className={CONTROL_WIDTH}
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="z-[var(--z-dialog)]">
-              {TERMINAL_CURSOR_STYLES.map((style) => (
-                <SelectItem key={style} value={style}>
-                  {t(`terminal.cursor.${style}`)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </SettingsRow>
-
-        <SettingsRow label={t("terminal.settings.cursorBlink")}>
-          <Switch
-            checked={terminal.cursorBlink}
-            aria-label={t("terminal.settings.cursorBlink")}
-            onCheckedChange={(next) => set("cursorBlink", next)}
-          />
-        </SettingsRow>
-      </SettingsGroup>
-
-      <SettingsGroup>
-        <SettingsRow label={t("terminal.settings.optionAsMeta")}>
-          <Switch
-            checked={terminal.macOptionIsMeta}
-            aria-label={t("terminal.settings.optionAsMeta")}
-            onCheckedChange={(next) => set("macOptionIsMeta", next)}
-          />
-        </SettingsRow>
-
-        <SettingsRow label={t("terminal.settings.webgl")}>
-          <Switch
-            checked={terminal.webgl}
-            aria-label={t("terminal.settings.webgl")}
-            onCheckedChange={(next) => set("webgl", next)}
-          />
-        </SettingsRow>
-
-        <SettingsRow label={t("terminal.settings.copyOnSelect")}>
-          <Switch
-            checked={terminal.copyOnSelect}
-            aria-label={t("terminal.settings.copyOnSelect")}
-            onCheckedChange={(next) => set("copyOnSelect", next)}
-          />
         </SettingsRow>
       </SettingsGroup>
     </>

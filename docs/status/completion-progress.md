@@ -3272,3 +3272,35 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - 共享：`ContextLink.role?: "peer" | "main" | "sub"`。协议号、数据库不变。
 - 文案：`edge.role.dispatch`、`node.linkHandle`（删 `node.linkIn / node.linkOut`），`edge.context` 改「上下文」/ "Context"。
 - token：`--mm-sticky / editor / files / browser / diff / automation / group`。
+
+## 设置框架：弹窗随窗口变大、8 组导航与作用范围（界面第二波 §1、§2.1–§2.3，包 A）
+
+做了什么：
+
+- 弹窗尺寸：`--settings-dialog-w: max(760px, 80vw)`、`-h: max(560px, 82dvh)`，不再封顶（1280 → 1024、1920 → 1536、2560 → 2048），外层仍夹视口 −48 与安全区；导航 `clamp(176px, 16%, 240px)`；正文列去掉 `max-w-[960px]`。DS §2.7 同步。
+- 导航（`panels/settings/nav.ts`）：8 组 21 行（设计表里的 18 页 + 浏览器 / 账号与共享 / 关于三个随壳显隐的页）；每页带 `scope: device / host / account`，`ownerOnly` 只在 `host` 页；`remoteAccess` 标 `pinnedLocal`。`LEGACY_SECTION_IDS` 把 11 个旧 id 映射到新页，`isSettingsSectionId` / `activeSectionId` 先映射再判断；`setLastSettingsSection` 的调用方改成新 id（`usage`、`service`、`forge`、`agents`、`remoteAccess`）。
+- 页头右端作用范围徽标（`settings/scope-badge.tsx`）：本设备 / 主机 / 账号，远程源带源名（`主机 · {name}`），远程访问页恒为「本机」；行内与页不同的项用同一枚小徽标（默认页的「Agent 默认视图」、通知页的「更新下载完成」）。
+- `pages/index.ts` 的 `SECTION_PAGES` 注册表；B 的新页先指向现有页：`agents` → 集成页，`customAgents / sessions / credentials` → Agent 页，`usage` → 账号与用量页，`workspace` = 工作区页 + 实时协同，`service` = 后台服务 + 终端会话策略 + 数据 + 崩溃上报（成员只见后台服务），`machines` = SSH + 执行主机（子页开着时只画推入它的那一段），`forge` / `remoteAccess` / `devices` / `security` 各指原页。
+- 新页 / 改页：`DefaultsPage`（Agent 默认视图、默认 Agent、默认权限、简洁模式、主题、语言；默认相关代码从 `AgentPage` 搬来）；通用页只剩本设备五项（「显示用量」改叫「用量徽标」，崩溃上报导出为 `CrashReportGroup` 挂到本机服务）；通知页加「更新下载完成」；白板页改名「画布」，实时协同移走；`TerminalLookPage` 四组（字体 `Select` 列本机探测到的等宽字体 / 跟随系统 / 自定义字体栈，字号·行高·字距一行，预览，光标，键盘，渲染），`TerminalPage` 只留会话策略与电源资源；快捷键页对成员开放（只写本设备层，不读写主机设置）；`UpdatesPage` 并入 `AboutPage` 后删除，版本只出现一次，成员与远端只读报版本。
+- `terminal/surface/fonts.ts`：候选名单 + `document.fonts.check` + canvas 比对（`monospace` 与 `serif` 两种兜底画同一串等宽才算装了，避免把恰是系统等宽回退的字体误判；`iiii` 与 `MMMM` 等宽才算等宽）；桌面壳里并入 `queryLocalFonts` 的 `family`；模块级缓存，>300ms 才画骨架。
+- 探针：`design-showcase.mjs` 加 `--width=1280,1920,2560`（不进默认矩阵），`components` 分区在每个宽度打开真设置弹窗量宽度并两主题截图；`remote-e2e` / `server-e2e` / `link-join` / `personal-roundtrip` / `relay-web-e2e` / `gateway-e2e` / `ui-features/integration` 的导航文字改成新页名。
+- 设计文档进仓库：`docs/design/ui-wave2.md`，登记 `docs/README.md`。
+
+实测（macOS arm64，基于 main 20248839）：
+
+- 新增 / 改写：`nav.test.ts`（顺序、分组、scope、ownerOnly 只在主机页、旧 id 映射、成员 / 远程可见性）、`SettingsDialog.test.tsx`（尺寸 class、页头徽标、旧 id 落新页）、`pages/index.test.tsx`、`DefaultsPage` / `NotificationsPage` / `WhiteboardPage` / `TerminalLookPage` / `GeneralPage` / `AboutPage` / `KeybindingsPage`（成员）测试、`fonts.test.ts`。
+- `design-showcase.mjs --only=components --width=1280,1920,2560,390`：弹窗宽 1024 / 1536 / 2048 与 80vw 相符，导航 176 / 240 / 240，两主题截图、Tab 可达、对比度与控制台全过。
+- 全量 `pnpm libs:build && pnpm -r --if-present test`、web typecheck、`pnpm check` 通过。
+
+没做 / 偏离：
+
+- §2.4 只做到设计写的范围；§2.5–§2.7（Agent CLI 主表与子页、远程机器合表、远程访问页）是包 B。过渡期同一现有页会出现在几个新导航项下（例如 Agent 页同时在自定义 Agent / 会话 / 凭据下），B 拆页后消失。
+- 18 页 vs 21 行：设计 §2.1 表本身列了 21 个 id，测试按表断言。
+- 字体探测用 `queryLocalFonts` 的 `family` 而不是 `fullName`：写进 `font-family` 的是族名。
+- 页名键统一放在 `i18n/modals.ts` 的 `settings.section.*`，没有用设计里 B 的 `agents.nav`；原 `*.nav` 键（集成、后台服务、远程服务、Git 托管、SSH、执行主机、安全、账号与共享）没人引用后删除。`acp.settings.defaultDriver` 文案改为「Agent 默认视图」。
+- 配对链接 `#pair=` 现在打开到 `service`（后台服务那段所在页）；B 若把配对移到远程访问 / 设备页，要同步 `use-link-fragments.ts`。
+
+接口：
+
+- `nav.ts`：`SettingsScope`、`SettingsSection.scope / pinnedLocal`、`LEGACY_SECTION_IDS`、`canonicalSectionId`、`activeSectionId`；`pages/index.ts`：`SECTION_PAGES`（B 只改自己那些行）；`scope-badge.tsx`：`ScopeBadge`、`useScopeLabel`；`useRuntimeSettings({ enabled })`；`GeneralPage.tsx` 导出 `CrashReportGroup`；`AboutPage.tsx` 导出 `UpdateStatusRows / UpdateStatusNotes / loadThirdPartyNotices`；`fonts.ts`：`MONOSPACE_CANDIDATES`、`filterMonospace`、`detectMonospaceFonts`、`useMonospaceFonts`；偏好 `TERMINAL_LETTER_SPACING_RANGE`。
+- 文案：`settings.group.*`（8 组）、`settings.section.*`（21 页）、`settings.scope.*`（6 个）、`terminal.settings.{fontSystem,fontCustom,fontStack,letterSpacing,preview,previewSample,group.*}`。契约、协议号、数据库都不变。

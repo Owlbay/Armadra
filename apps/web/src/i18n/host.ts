@@ -2,7 +2,6 @@ import type { MessageModule } from "./index";
 
 export const host: MessageModule = {
   "zh-CN": {
-    "host.nav": "后台服务与对外服务",
     "host.note": "检查后台服务连接，不会切换当前正在运行的工作空间或终端。",
     "host.check": "检查连接",
     "host.cancel": "取消",
@@ -25,7 +24,6 @@ export const host: MessageModule = {
     "host.error.remote": "服务暂时无法完成连接检查。",
   },
   en: {
-    "host.nav": "Background and external services",
     "host.note":
       "Check the background service without switching the workspace or terminals currently running.",
     "host.check": "Check connection",

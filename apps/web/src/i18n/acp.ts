@@ -96,7 +96,7 @@ export const acp: MessageModule = {
     "acp.export.frame": "Mermaid",
     "acp.source.from": "来自 · {name}",
     "acp.source.goto": "跳回来源 {name}",
-    "acp.settings.defaultDriver": "缺省视图",
+    "acp.settings.defaultDriver": "Agent 默认视图",
     "acp.settings.simpleMode": "简洁模式",
   },
   en: {
@@ -193,7 +193,7 @@ export const acp: MessageModule = {
     "acp.export.frame": "Mermaid",
     "acp.source.from": "From · {name}",
     "acp.source.goto": "Go to source {name}",
-    "acp.settings.defaultDriver": "Default view",
+    "acp.settings.defaultDriver": "Default agent view",
     "acp.settings.simpleMode": "Simple mode",
   },
 };

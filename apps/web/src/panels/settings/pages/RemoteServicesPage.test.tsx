@@ -194,7 +194,7 @@ describe("远程服务页", () => {
       }),
     );
     await waitFor(() =>
-      expect(boot.reloadIntoSettings).toHaveBeenCalledWith("remote"),
+      expect(boot.reloadIntoSettings).toHaveBeenCalledWith("remoteAccess"),
     );
   });
 
@@ -519,7 +519,7 @@ describe("通过链接加入（A4-3p）", () => {
       }),
     );
     await waitFor(() =>
-      expect(boot.reloadIntoSettings).toHaveBeenCalledWith("remote"),
+      expect(boot.reloadIntoSettings).toHaveBeenCalledWith("remoteAccess"),
     );
     expect(sessionStorage.getItem("armadra.sources.openAfterJoin")).toBe(
       joined.sourceId,

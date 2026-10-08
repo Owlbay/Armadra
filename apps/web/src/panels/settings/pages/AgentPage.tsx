@@ -1,20 +1,14 @@
 import * as React from "react";
 import { Plus } from "lucide-react";
 import {
-  AGENT_DRIVERS,
   AGENT_IDS,
-  supportedPermissionModes,
   customAgentSchema,
   type BuiltinAgentId,
   type AgentCapability,
-  type AgentDriver,
   type CustomAgent,
-  type PermissionMode,
 } from "@armadra/shared";
 import { toast } from "sonner";
 import { CapabilityInheritance } from "@/agent/CapabilityInheritance";
-import { driverSettingOf } from "@/acp/driver";
-import { useSimpleModeStore } from "@/acp/simple-mode";
 
 import { useAgentsQuery } from "../../../app/use-agents";
 import {
@@ -60,7 +54,7 @@ import { Empty, EmptyContent, EmptyHeader, EmptyTitle } from "@/ui/empty";
  * 设置 → Agent（§24.1）。
  *
  * 每个内置 CLI 一行：三态（默认 / 启用 / 禁用）+ 自定义启动命令；
- * 下面是全局的默认 Agent 与默认权限模式；最后是自定义 Agent 列表，
+ * 默认 Agent、默认权限、默认视图与简洁模式在「默认」页；最后是自定义 Agent 列表，
  * 「添加 / 点一行」推入同一右栏里的子页，而不是叠一层对话框。
  */
 export function AgentPage() {
@@ -75,21 +69,8 @@ export function AgentPage() {
   const setLaunchOverride = usePreferencesStore(
     (state) => state.setLaunchOverride,
   );
-  const defaultAgentId = usePreferencesStore((state) => state.defaultAgentId);
-  const setDefaultAgentId = usePreferencesStore(
-    (state) => state.setDefaultAgentId,
-  );
-  const permissionMode = usePreferencesStore(
-    (state) => state.defaultPermissionMode,
-  );
   const autoTitle = usePreferencesStore((state) => state.autoTitle);
   const setAutoTitle = usePreferencesStore((state) => state.setAutoTitle);
-  const setPermissionMode = usePreferencesStore(
-    (state) => state.setDefaultPermissionMode,
-  );
-
-  const simpleMode = useSimpleModeStore((state) => state.simpleMode);
-  const setSimpleMode = useSimpleModeStore((state) => state.setSimpleMode);
 
   const list = agents.data ?? [];
   // 自定义 Agent 也在 `GET /api/agents` 里（§24.1），但三态、启动命令这两组
@@ -102,20 +83,6 @@ export function AgentPage() {
     () => settings.data?.agents?.custom ?? [],
     [settings.data],
   );
-
-  const selectedAgentId = defaultAgentId ?? list[0]?.id ?? "claude";
-  const selectedBase =
-    list.find((agent) => agent.id === selectedAgentId)?.baseAgent ??
-    selectedAgentId;
-  const permissionModes = supportedPermissionModes(selectedBase);
-  const effectivePermission = permissionModes.includes(permissionMode)
-    ? permissionMode
-    : "default";
-
-  React.useEffect(() => {
-    if (effectivePermission !== permissionMode)
-      setPermissionMode(effectivePermission);
-  }, [effectivePermission, permissionMode, setPermissionMode]);
 
   if (subpage.current?.startsWith("agent:")) {
     return (
@@ -193,97 +160,6 @@ export function AgentPage() {
       </SettingsGroup>
 
       <AmaKeys />
-
-      <SettingsGroup>
-        <SettingsRow label={t("settings.defaultAgent")}>
-          <Select
-            value={selectedAgentId}
-            onValueChange={(id) => {
-              const base =
-                list.find((agent) => agent.id === id)?.baseAgent ?? id;
-              if (!supportedPermissionModes(base).includes(permissionMode))
-                setPermissionMode("default");
-              setDefaultAgentId(id);
-            }}
-          >
-            <SelectTrigger
-              aria-label={t("settings.defaultAgent")}
-              size="sm"
-              className={CONTROL_WIDTH}
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="z-[var(--z-dialog)]">
-              {list.map((agent) => (
-                <SelectItem key={agent.id} value={agent.id}>
-                  {agent.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </SettingsRow>
-
-        <SettingsRow label={t("settings.defaultPermission")}>
-          <Select
-            value={effectivePermission}
-            onValueChange={(value) =>
-              setPermissionMode(value as PermissionMode)
-            }
-          >
-            <SelectTrigger
-              aria-label={t("settings.defaultPermission")}
-              size="sm"
-              className={CONTROL_WIDTH}
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="z-[var(--z-dialog)]">
-              {permissionModes.map((mode) => (
-                <SelectItem key={mode} value={mode}>
-                  {t(`permission.${mode}`)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </SettingsRow>
-      </SettingsGroup>
-
-      {/* 普通用户入口（ACP 设计 §8）：缺省驱动与简洁模式。 */}
-      <SettingsGroup>
-        <SettingsRow label={t("acp.settings.defaultDriver")}>
-          <Select
-            value={driverSettingOf(settings.data)}
-            disabled={!settings.data}
-            onValueChange={(value) =>
-              save.mutate({ agents: { defaultDriver: value as AgentDriver } })
-            }
-          >
-            <SelectTrigger
-              aria-label={t("acp.settings.defaultDriver")}
-              size="sm"
-              className={CONTROL_WIDTH}
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="z-[var(--z-dialog)]">
-              {[...AGENT_DRIVERS].reverse().map((driver) => (
-                <SelectItem key={driver} value={driver}>
-                  {t(
-                    driver === "acp" ? "acp.view.session" : "acp.view.terminal",
-                  )}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </SettingsRow>
-        <SettingsRow label={t("acp.settings.simpleMode")}>
-          <Switch
-            checked={simpleMode}
-            aria-label={t("acp.settings.simpleMode")}
-            onCheckedChange={setSimpleMode}
-          />
-        </SettingsRow>
-      </SettingsGroup>
 
       <SettingsGroup title={t("settings.autoTitle")}>
         <SettingsRow

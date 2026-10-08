@@ -718,7 +718,7 @@ async function passkeyFromThePage(base, owner, workspaceId) {
     await page.waitFor(
       `return !!document.querySelector('[role="dialog"] nav');`,
     );
-    await page.click('[role="dialog"] nav button', "安全");
+    await page.click('[role="dialog"] nav button', "账号与安全");
     await sleep(600);
   };
   await openSecurity();

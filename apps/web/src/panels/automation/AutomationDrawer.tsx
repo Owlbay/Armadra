@@ -249,7 +249,7 @@ export function AutomationDrawer() {
             className="min-h-10"
             onClick={() => {
               setPanel("automation", "closed");
-              usePreferencesStore.getState().setLastSettingsSection("host");
+              usePreferencesStore.getState().setLastSettingsSection("service");
               setPanel("settings", true);
             }}
           >

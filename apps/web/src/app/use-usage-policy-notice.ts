@@ -62,7 +62,7 @@ export function useUsagePolicyNotice(): void {
       action: {
         label: t("usage.policy.open"),
         onClick: () => {
-          usePreferencesStore.getState().setLastSettingsSection("account");
+          usePreferencesStore.getState().setLastSettingsSection("usage");
           useCanvasStore.getState().setPanel("settings", true);
         },
       },

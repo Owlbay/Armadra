@@ -9,8 +9,6 @@ import type { MessageModule } from "./index";
 export const updates: MessageModule = {
   "zh-CN": {
     "updates.nav": "更新",
-    "updates.note":
-      "只查询是否有新版本，不会下载或安装。安装需要带签名的发布包，由你自己决定何时进行。",
     "updates.version": "当前版本",
     "updates.hostVersion": "主机版本",
     "updates.version.unknown": "未知",
@@ -37,7 +35,7 @@ export const updates: MessageModule = {
     "updates.autoDownload": "自动下载更新",
     "updates.autoDownload.note":
       "打开后会在后台下载安装包，安装与重启仍需你确认。",
-    "updates.notify": "下载完成后通知",
+    "updates.notify": "更新下载完成",
     "updates.notify.note":
       "关掉后只有托盘菜单里会出现「重启以完成更新」，不再发系统通知。",
     "updates.missing.pubkey": "此构建没有内置签名公钥，无法验证任何安装包。",
@@ -118,12 +116,10 @@ export const updates: MessageModule = {
     "updates.blocked.noPermission": "此设备没有读取更新信息的权限。",
     "updates.blocked.noReleaseSource":
       "此版本没有可询问的发布来源，无法判断有没有新版本。",
-    "updates.blocked.action": "前往后台服务设置",
+    "updates.blocked.action": "前往本机服务设置",
   },
   en: {
     "updates.nav": "Updates",
-    "updates.note":
-      "This only asks whether a newer release exists. Nothing is downloaded or installed; installing needs a signed package and stays your decision.",
     "updates.version": "Current version",
     "updates.hostVersion": "Host version",
     "updates.version.unknown": "Unknown",
@@ -150,7 +146,7 @@ export const updates: MessageModule = {
     "updates.autoDownload": "Download automatically",
     "updates.autoDownload.note":
       "Downloads the package in the background. Installing and restarting still need your confirmation.",
-    "updates.notify": "Notify when downloaded",
+    "updates.notify": "Update downloaded",
     "updates.notify.note":
       "With this off, only the tray menu offers \u201cRestart to finish updating\u201d; no system notification is sent.",
     "updates.missing.pubkey":
@@ -246,6 +242,6 @@ export const updates: MessageModule = {
       "This device is not allowed to read update information.",
     "updates.blocked.noReleaseSource":
       "This build has no release source to ask, so it cannot tell whether a newer version exists.",
-    "updates.blocked.action": "Open background service settings",
+    "updates.blocked.action": "Open local service settings",
   },
 };

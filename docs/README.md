@@ -78,6 +78,7 @@
 | [工程规范化](design/engineering-standardization.md)                             | 接口改 typed procedure（HTTP + 一条多路复用 WebSocket）的利弊与迁移、WebSocket 生命周期规范、组件审计与守卫、ESLint / knip / 覆盖率等工具评估、分阶段计划与待拍板清单                                                                                                   |
 | [正规化平台落地总计划](design/platform-implementation-plan.md)                  | E0–E6 与平台阶段 0–6（含个人中转）合成的七个波次：依赖图、逐包的仓库 / 目录 / 编号 / 交付 / 验收命令 / 模型 / 规模、第 1 波派发清单、测试与验收体系、风险与回滚、待拍板点                                                                                               |
 | [界面与 ACP 刷新](design/ui-acp-refresh.md)                                     | 集成页一家一张分组与适配器 / CLI 代装（契约 §47）、画布建 Agent 的可用性与「派生 Agent…」（§48）、设置弹窗尺寸、节点头常显、ACP 会话视图内容类型（§49）、画布整理刚体化、多端加入不刷新；A–E 五个包的文件边界                                                           |
+| [界面第二波](design/ui-wave2.md)                                                | 设置弹窗随窗口变大、8 组导航与作用范围徽标、Agent 连线按 role 渲染与四边把手、纵横布局与派生直接创建、小地图簇色、ACP 创建提速（§51）、并发启动闸门（§52）；A–E 包的文件边界                                                                                            |
 
 落地总计划的逐包规格（`design/platform/`）：
 

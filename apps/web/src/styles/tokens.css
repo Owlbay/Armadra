@@ -282,12 +282,12 @@
   --drawer-w: 360px;
   --scm-w: 460px;
   /*
-   * 设置弹窗（设计系统 §2.7）：按视口比例取，桌面三档常见屏（1280×800 /
-   * 1440×900 / 1920×1080）都落在 760–1280 之间；再由调用方的 max-* 夹进
+   * 设置弹窗（设计系统 §2.7）：按视口比例取、不封顶——屏越大弹窗越大
+   * （1280 → 1024、1920 → 1536、2560 → 2048）；再由调用方的 max-* 夹进
    * 视口减 48px 与安全区。平板与手机的形态在 `SettingsDialog` 里另给。
    */
-  --settings-dialog-w: clamp(760px, 78vw, 1280px);
-  --settings-dialog-h: clamp(560px, 80vh, 960px);
+  --settings-dialog-w: max(760px, 80vw);
+  --settings-dialog-h: max(560px, 82dvh);
   /* Git 工具窗口停在底部（Git 工具窗口设计 §2.1）；拖过之后走偏好里的 px。 */
   --git-window-h: 40vh;
 

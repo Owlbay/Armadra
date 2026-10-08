@@ -619,8 +619,8 @@ try {
   await run.shot(page, "05-recovered-1440");
 
   /* ------------------------ 经中继打开的设置页 ------------------------ */
-  // 远程服务页上页面正走的那个中继：标出来、不给停用分享；更新页只读报主机
-  // 版本；数据页没有「在访达中打开」。
+  // 远程访问页上页面正走的那个中继：标出来、不给停用分享；关于页只读报主机
+  // 版本；本机服务页（数据）没有「在访达中打开」。
   const settingsNav = (label) =>
     page.clickOn(
       `return [...document.querySelectorAll('[role="dialog"] nav button')].find((b) => b.getAttribute("aria-label") === ${JSON.stringify(label)})`,
@@ -651,7 +651,7 @@ try {
       `return !!document.querySelector('[role="dialog"] nav')`,
       "设置框",
     );
-    await settingsNav("远程服务");
+    await settingsNav("远程访问");
     await page.until(
       `return document.querySelector('[role="dialog"]')?.innerText.includes("本页经此连接")`,
       "远程服务页标出页面正走的中继",
@@ -671,7 +671,7 @@ try {
   await run.shot(page, "06-settings-remote-1440-light");
   await setTheme(page, "dark");
   await run.shot(page, "06-settings-remote-1440-dark");
-  await settingsNav("更新");
+  await settingsNav("关于");
   await page.until(
     `return document.querySelector('[role="dialog"]')?.innerText.includes("主机版本")`,
     "更新页只读报主机版本",
@@ -683,14 +683,14 @@ try {
     "更新页经中继只读：没有频道与开关",
   );
   await run.shot(page, "07-settings-updates-1440-dark");
-  await settingsNav("数据");
+  await settingsNav("本机服务");
   await sleep(800);
   run.check(
     !(await dialogText()).includes("在访达中打开"),
     "数据页经中继不给「在访达中打开」",
   );
   // 窄屏：设置开着时换宽度（框按断点换成底部抽屉），看同一页。
-  await settingsNav("远程服务");
+  await settingsNav("远程访问");
   await page.viewport(390, 844, true);
   await sleep(1_000);
   await page.until(
