@@ -19,7 +19,7 @@ import { usePreferencesStore } from "../app/preferences-store";
 import { useCanvasStore } from "../store/canvas-store";
 import { initialPanels } from "../store/canvas/internal";
 import { MAX_ZOOM, MIN_ZOOM } from "../canvas/zoom";
-import { Dock, ZoomControls } from "./Dock";
+import { Dock, TidyButton, ZoomControls } from "./Dock";
 
 installDomPolyfills();
 afterEach(cleanup);
@@ -214,5 +214,33 @@ describe("缩放段 [−] [NN%] [+]", () => {
     );
     expect(screen.getByLabelText("缩小")).toBeTruthy();
     expect(screen.getByLabelText("放大")).toBeTruthy();
+  });
+});
+
+describe("整理钮的右键菜单（ui-wave2 §4.2）", () => {
+  it("纵向 / 横向整理各跑一次 canvas.tidy，期间方向被覆盖、之后复原", async () => {
+    const { registerCanvasCommand } = await import("../canvas/commands");
+    const { layoutDirection, setLayoutDirectionForTest } = await import(
+      "../canvas/layout-direction"
+    );
+    setLayoutDirectionForTest("vertical");
+    const seen: string[] = [];
+    const off = registerCanvasCommand("canvas.tidy", () => {
+      seen.push(layoutDirection());
+    });
+    render(
+      <TestProviders>
+        <TidyButton label="整理画布" />
+      </TestProviders>,
+    );
+    const button = screen.getByLabelText("整理画布");
+    fireEvent.click(button);
+    fireEvent.contextMenu(button);
+    fireEvent.click(await screen.findByText("横向整理"));
+    fireEvent.contextMenu(button);
+    fireEvent.click(await screen.findByText("纵向整理"));
+    expect(seen).toEqual(["vertical", "horizontal", "vertical"]);
+    expect(layoutDirection()).toBe("vertical");
+    off();
   });
 });

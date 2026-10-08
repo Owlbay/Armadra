@@ -236,22 +236,26 @@ describe("提交", () => {
 });
 
 describe("§6.4 / §6.5", () => {
-  it("主从边：主在左，从在右侧同一列顶对齐", () => {
+  it("主从边：纵向（缺省）从在主下面同一行，横向从在主右侧同一列", () => {
     const main = makeNode("terminal", { position: { x: 3000, y: 3000 } });
     const subs = [0, 1, 2].map((index) =>
       makeNode("terminal", { position: { x: index * 700, y: index * 50 } }),
     );
-    load([main, ...subs], {
-      edges: subs.map((sub) => ({
-        ...makeEdge(main.id, sub.id),
-        role: "supervises" as const,
-      })),
-    });
-    const applied = arrangeCanvas({ aspect: 100 });
-    const xs = new Set(subs.map((sub) => applied[sub.id]!.x));
+    const edges = subs.map((sub) => ({
+      ...makeEdge(main.id, sub.id),
+      role: "supervises" as const,
+    }));
+    load([main, ...subs], { edges });
+    const down = arrangeCanvas({ aspect: 100 });
+    const ys = new Set(subs.map((sub) => down[sub.id]!.y));
+    expect(ys.size).toBe(1);
+    expect([...ys][0]).toBeGreaterThan(down[main.id]!.y);
+
+    load([main, ...subs], { edges });
+    const across = arrangeCanvas({ aspect: 100, direction: "horizontal" });
+    const xs = new Set(subs.map((sub) => across[sub.id]!.x));
     expect(xs.size).toBe(1);
-    expect([...xs][0]).toBeGreaterThan(applied[main.id]!.x);
-    expect(applied[subs[0]!.id]!.y).toBe(applied[main.id]!.y);
+    expect([...xs][0]).toBeGreaterThan(across[main.id]!.x);
   });
 
   it("散落的白板孤岛整体平移，岛内相对位置不变", () => {

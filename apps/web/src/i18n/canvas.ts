@@ -122,6 +122,9 @@ const zh = {
   "canvas.fitView": "适应视图",
   "canvas.tidy": "整理画布",
   "canvas.tidySelection": "整理选中",
+  // 布局方向（ui-wave2 §4.2）：Dock 整理钮的右键菜单，一次性覆盖、不写设置。
+  "canvas.tidyVertical": "纵向整理",
+  "canvas.tidyHorizontal": "横向整理",
   /* 导入批次的组名（UI 设计 §6.3）与解组 */
   "canvas.group.import": "导入",
   "canvas.group.mermaid": "Mermaid", // i18n-exempt
@@ -345,6 +348,8 @@ const en: Record<keyof typeof zh, string> = {
   "canvas.fitView": "Fit view",
   "canvas.tidy": "Tidy",
   "canvas.tidySelection": "Tidy selection",
+  "canvas.tidyVertical": "Tidy vertically",
+  "canvas.tidyHorizontal": "Tidy horizontally",
   "canvas.group.import": "Import",
   "canvas.group.mermaid": "Mermaid", // i18n-exempt
   "canvas.group.ungroup": "Ungroup",
