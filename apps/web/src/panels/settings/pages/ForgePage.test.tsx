@@ -50,7 +50,7 @@ vi.mock("../../../api/forge", async (original) => ({
   ...forgeApi,
 }));
 
-import { GithubPage } from "./GithubPage";
+import { ForgePage } from "./ForgePage";
 
 const gitlabRow = {
   repoKey: "gitlab.example.test",
@@ -102,7 +102,7 @@ function renderPage(api: ReturnType<typeof client>) {
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <GithubPage />
+      <ForgePage />
     </QueryClientProvider>,
   );
 }
