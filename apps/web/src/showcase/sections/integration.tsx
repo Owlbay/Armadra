@@ -1,6 +1,5 @@
 import { useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { ExecutionHost } from "@armadra/shared";
 
 import { useT, usePreferencesStore } from "@/app/preferences-store";
 import { ForgeHosted, PullBody, forgeKeys } from "@/panels/github/ForgeHosted";
@@ -9,20 +8,15 @@ import {
   forgeConfigKeys,
 } from "@/panels/settings/pages/ForgeConfigs";
 import { adapterInstallKey } from "@/acp/adapter-install";
+import { AgentRow } from "@/panels/settings/pages/AgentsPage";
+import { AgentDetailPage } from "@/panels/settings/pages/AgentDetailPage";
+import { SettingsGroup } from "@/panels/settings/SettingsGroup";
 import {
-  AgentIntegrationGroup,
-  OutdatedWorkers,
-} from "@/panels/settings/pages/IntegrationPage";
-import { FleetGroup } from "@/panels/settings/pages/execution-hosts/FleetGroup";
+  HealthTable,
+  MachinesTable,
+} from "@/panels/settings/pages/execution-hosts/MachinesTable";
 import { integrationKey } from "@/panels/settings/pages/integration/use-integration";
-import {
-  BUILD_BOX,
-  CLI_GROUP,
-  FLEET,
-  GPU_NODE,
-  LOCAL,
-  idleJob,
-} from "../fixtures/integration";
+import { CLI_GROUP, FLEET, GPU_NODE, idleJob } from "../fixtures/integration";
 import {
   FORGE_CONFIGS,
   GITEA_DETECTION,
@@ -53,22 +47,18 @@ function Sample({
 }
 
 /**
- * `integration` 分区（设计展示页 §2.1，设计系统 §5.15）：执行主机页真的
- * `FleetGroup`，喂假数据。
+ * `integration` 分区（设计展示页 §2.1，设计系统 §5.15）：设置页真的 Agent CLI
+ * 主表、一家的子页与远程机器表，喂假数据。
  *
- * 舰队（在线且最新、离线且 Worker 过期带一串失败记录、配了 Worker 还没握过
- * 手、只跑终端）· 正在全部重新同步 · 只有一台 Worker 主机时（没有「全部重新
- * 同步」，那一台正在同步）。
- *
- * CLI 分组：集成设置页真的分组组件，集成状态与安装任务预先放进 query 缓存
- * （永不过期，不去请求 core）——正常、版本过旧（页首带一台 Worker 待升级的
- * 主机）、原生 ACP 而启动器异常、适配器不接画布工具且重新安装失败、CLI 未检测
- * 到各一组。
+ * 主表：正常 · 注入待更新 · 启动器异常 · 安装失败 · CLI 未检测到各一行；集成状态
+ * 与安装任务预先放进 query 缓存（永不过期，不去请求 core）。子页：注入待更新、
+ * 带两条本产品旧版本残留的那一家。远程机器：宽屏表格、窄屏条目与一台机器的
+ * 健康记录。
  *
  * 托管平台（{@link ForgeSamples}）：Gitea 的 PR 列表、GitLab 的 MR 详情与设置页
  * 的配置行。
  */
-function CliGroup() {
+function useCliCache() {
   const client = useQueryClient();
   // 渲染之前放好：行组件第一次读缓存就拿到，不出现「读取中」也不发请求。
   useState(() => {
@@ -85,17 +75,27 @@ function CliGroup() {
     }
     return true;
   });
-  const outdated = CLI_GROUP.find(
-    ({ integration }) => (integration.outdatedHosts?.length ?? 0) > 0,
-  );
+}
+
+function CliTable() {
+  useCliCache();
   return (
-    <div className="flex flex-col gap-6">
-      {outdated && <OutdatedWorkers agent={outdated.agent} />}
+    <SettingsGroup>
       {CLI_GROUP.map(({ agent }) => (
-        <AgentIntegrationGroup key={agent.id} agent={agent} />
+        <AgentRow key={agent.id} agent={agent} />
       ))}
-    </div>
+    </SettingsGroup>
   );
+}
+
+function CliDetail() {
+  useCliCache();
+  const stale = CLI_GROUP.find(({ integration }) => integration.stale);
+  return stale ? (
+    <div className="flex flex-col gap-6">
+      <AgentDetailPage agent={stale.agent} />
+    </div>
+  ) : null;
 }
 
 /**
@@ -157,42 +157,35 @@ function ForgeSamples() {
 
 export default function IntegrationSection() {
   const t = useT();
-  const label = (host: ExecutionHost) =>
-    host.kind === "local"
-      ? t("executionHosts.local")
-      : host.name || host.executionHostId;
-  const fleet = {
-    resyncing: null,
-    resyncingAll: false,
-    validating: false,
-    onResync: noop,
-    onResyncAll: noop,
+  const machines = FLEET.filter((host) => host.kind === "ssh");
+  const table = {
+    hosts: machines,
+    validating: null,
     onValidate: noop,
-    label,
+    onOpen: noop,
   };
   return (
     <div className="grid gap-6 lg:grid-cols-2">
       <div className="flex min-w-0 flex-col gap-6 lg:col-span-2">
         <Sample caption={t("showcase.integration.cli")}>
-          <CliGroup />
+          <CliTable />
         </Sample>
       </div>
       <div className="flex min-w-0 flex-col gap-6">
-        <Sample caption={t("executionHosts.showcase.fleet")}>
-          <FleetGroup {...fleet} hosts={FLEET} />
+        <Sample caption={t("agents.showcase.detail")}>
+          <CliDetail />
         </Sample>
       </div>
       <div className="flex min-w-0 flex-col gap-6">
-        <Sample caption={t("executionHosts.showcase.resyncingAll")}>
-          <FleetGroup {...fleet} hosts={[BUILD_BOX, GPU_NODE]} resyncingAll />
+        <Sample caption={t("executionHosts.showcase.table")}>
+          <MachinesTable {...table} />
         </Sample>
-        <Sample caption={t("executionHosts.showcase.single")}>
-          <FleetGroup
-            {...fleet}
-            hosts={[LOCAL, GPU_NODE]}
-            resyncing={GPU_NODE.executionHostId}
-          />
+        <Sample caption={t("executionHosts.showcase.compact")}>
+          <div className="w-full max-w-[390px]">
+            <MachinesTable {...table} compact />
+          </div>
         </Sample>
+        <HealthTable samples={GPU_NODE.health ?? []} />
       </div>
       <ForgeSamples />
     </div>
