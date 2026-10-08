@@ -6,6 +6,7 @@ import type { CanvasEdgeRole, CanvasNode } from "@armadra/shared";
 import { useDeliveryEdge, type DeliveryMark } from "@/agent/delivery-store";
 import { useT } from "@/app/preferences-store";
 import { useFamilyColor } from "@/canvas/family";
+import { useLayoutDirection } from "@/canvas/layout-direction";
 import { displayNameOf } from "@/canvas/supervision";
 import { formatRelativeTime } from "@/lib/format";
 import type { Box, LinkAnchor } from "../../geometry";
@@ -13,6 +14,7 @@ import type { LinkFlowEdge } from "../../sync/project";
 import {
   arrowHead,
   DISPATCH_LABEL_KEY,
+  linkColor,
   linkView,
   INTERACTION_WIDTH,
   LABEL_FONT_SIZE,
@@ -112,7 +114,7 @@ export function LinkEdge({
 }: EdgeProps<LinkFlowEdge>) {
   const t = useT();
   // 派发线的走向跟着布局方向（纵向：主底 → 子顶）。
-  const direction: "vertical" | "horizontal" = "vertical";
+  const direction = useLayoutDirection();
   const familyColor = useFamilyColor(source);
   const sourceNode = useInternalNode(source);
   const targetNode = useInternalNode(target);
@@ -154,14 +156,9 @@ export function LinkEdge({
   );
   const { curve, arrowStart, arrowEnd } = view;
   const width = selected ? STROKE_WIDTH_SELECTED : STROKE_WIDTH;
-  // 派发线用簇色：同一个主派出来的线同色，不同主不同色；对等线中性——大多数
-  // 边都是对等的，全画成高亮就等于没有高亮。选中与投递那一下都用品牌色。
-  const color =
-    flashing || selected
-      ? "var(--brand)"
-      : supervises
-        ? (familyColor ?? "var(--brand)")
-        : "var(--muted-foreground)";
+  // 派发线用簇色：同一个主派出来的线同色，不同主不同色；上下文线用专用的
+  // `--link-context`，与所有簇色都分得开。选中与投递那一下都用品牌色。
+  const color = linkColor({ supervises, familyColor, selected, flashing });
   const labelKey =
     view.labelKey ?? (supervises && selected ? DISPATCH_LABEL_KEY : null);
   const label = labelKey !== null && zoom >= LABEL_MIN_ZOOM ? t(labelKey) : "";

@@ -178,9 +178,8 @@ describe("LinkEdge", () => {
       ".react-flow__edge-path",
     ) as SVGPathElement;
     expect(plainPath.style.strokeWidth).toBe("2");
-    expect(edgeGroup(plain.container).style.color).toBe(
-      "var(--muted-foreground)",
-    );
+    // 上下文线用专用的 `--link-context`，与簇色分开（用户硬性要求）。
+    expect(edgeGroup(plain.container).style.color).toBe("var(--link-context)");
     cleanup();
 
     const picked = renderEdge("terminal", "terminal", { selected: true });
@@ -245,10 +244,11 @@ describe("LinkEdge", () => {
 
     it("只画一个指向从的箭头，颜色是簇色", () => {
       const peer = renderEdge("terminal", "terminal");
-      // 对等的终端 ↔ 终端是两个箭头，颜色中性。
+      // 对等的终端 ↔ 终端是两个箭头，颜色是上下文线色。
       expect(edgeGroup(peer.container).querySelectorAll("path")).toHaveLength(
         4,
       );
+      expect(edgeGroup(peer.container).style.color).toBe("var(--link-context)");
       expect(edgeGroup(peer.container).dataset.role).toBeUndefined();
       cleanup();
 

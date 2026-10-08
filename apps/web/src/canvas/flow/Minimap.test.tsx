@@ -11,6 +11,7 @@ import {
   Minimap,
   minimapFill,
   minimapItemOf,
+  minimapLinksFrom,
   minimapStroke,
   minimapStrokeWidth,
 } from "./Minimap";
@@ -167,5 +168,67 @@ describe("收起开关", () => {
         .getByRole("button", { name: "展开缩略图" })
         .getAttribute("aria-expanded"),
     ).toBe("false");
+  });
+});
+
+describe("小地图里的连线", () => {
+  const box = (x: number) => ({ x, y: 0, width: 100, height: 50 });
+  const boxes: Record<string, ReturnType<typeof box>> = {
+    b: box(300),
+    c: box(600),
+  };
+  const edge = (id: string, target: string, role?: "supervises") =>
+    ({
+      id,
+      type: "link",
+      source: "a",
+      target,
+      ...(role ? { data: { role } } : { data: {} }),
+    }) as never;
+
+  it("上下文线用 --link-context，派发线用主的簇色；中心连中心", () => {
+    const links = minimapLinksFrom(
+      "a",
+      box(0),
+      [
+        edge("e1", "b"),
+        edge("e2", "c", "supervises"),
+        { id: "r", type: "reference", source: "a", target: "b" } as never,
+      ],
+      (id) => boxes[id],
+      () => "var(--node-color-6)",
+    );
+    expect(links).toEqual([
+      {
+        key: "e1",
+        x1: 50,
+        y1: 25,
+        x2: 350,
+        y2: 25,
+        color: "var(--link-context)",
+        role: "context",
+      },
+      {
+        key: "e2",
+        x1: 50,
+        y1: 25,
+        x2: 650,
+        y2: 25,
+        color: "var(--node-color-6)",
+        role: "dispatch",
+      },
+    ]);
+  });
+
+  it("目标不在小地图里就不画", () => {
+    expect(
+      minimapLinksFrom(
+        "a",
+        box(0),
+        [edge("e1", "gone")],
+        () => undefined,
+        () => undefined,
+      ),
+    ).toEqual([]);
   });
 });

@@ -1,6 +1,6 @@
 import { scoped } from "../../sources/scope";
 import * as React from "react";
-import { MiniMap, Panel, useReactFlow } from "@xyflow/react";
+import { MiniMap, Panel, useReactFlow, useStore } from "@xyflow/react";
 import type { MiniMapNodeProps } from "@xyflow/react";
 import { ChevronDown, Map } from "lucide-react";
 
@@ -14,7 +14,8 @@ import { useT } from "@/app/preferences-store";
 import { IconButton } from "@/ui/icon-button";
 import { isItemId } from "../whiteboard/model";
 import { useFamilies, type Family } from "../family";
-import type { CanvasFlowNode } from "../sync/project";
+import type { CanvasFlowEdge, CanvasFlowNode } from "../sync/project";
+import { linkColor } from "./edges/link-visual";
 
 /**
  * 状态缩略图（React Flow 计划 F20 / §1.2，归属 B1）。
@@ -28,7 +29,8 @@ import type { CanvasFlowNode } from "../sync/project";
  * DPR、主题重读全部由库负责。
  *
  * 配色（ui-wave2 §5.2）：填充按 `familyOf`——派发簇同色、独立 Agent 标识色、
- * 其他节点按类型；描边仍是三种状态，派发簇成员无状态时描边用簇色。
+ * 其他节点按类型；描边仍是三种状态，派发簇成员无状态时描边用簇色。连线也画
+ * 进来，和画布上同一套颜色：上下文线 `--link-context`、派发线取主的簇色。
  *
  * 保留的行为：三种状态描边、点一下定位到那个节点、可收起（收起状态在
  * `app/minimap-preferences.ts`）、位置右下角、离右边与下边各 14px，
@@ -154,22 +156,121 @@ export function MinimapNode({
   onClick,
 }: MiniMapNodeProps) {
   return (
-    <rect
-      className={`react-flow__minimap-node${selected ? " selected" : ""} ${className}`}
-      x={x}
-      y={y}
-      rx={borderRadius}
-      ry={borderRadius}
-      width={width}
-      height={height}
-      style={{
-        fill: color,
-        stroke: strokeColor,
-        strokeWidth: minimapStrokeWidth(strokeColor ?? MINIMAP_COLORS.plain),
-      }}
-      shapeRendering={shapeRendering}
-      onClick={onClick ? (event) => onClick(event, id) : undefined}
-    />
+    <>
+      <MinimapLinks id={id} x={x} y={y} width={width} height={height} />
+      <rect
+        className={`react-flow__minimap-node${selected ? " selected" : ""} ${className}`}
+        x={x}
+        y={y}
+        rx={borderRadius}
+        ry={borderRadius}
+        width={width}
+        height={height}
+        style={{
+          fill: color,
+          stroke: strokeColor,
+          strokeWidth: minimapStrokeWidth(strokeColor ?? MINIMAP_COLORS.plain),
+        }}
+        shapeRendering={shapeRendering}
+        onClick={onClick ? (event) => onClick(event, id) : undefined}
+      />
+    </>
+  );
+}
+
+/** 小地图里连线的粗细（屏幕像素，不随缩略图缩放）。 */
+export const MINIMAP_LINK_WIDTH = 1.5;
+
+export interface MinimapLink {
+  key: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  color: string;
+  role: "context" | "dispatch";
+}
+
+/**
+ * 从 `sourceId` 出发的上下文连线（`link` 边）→ 小地图里的线段，中心连中心。
+ * 内容引用（`reference` 边）不画：它不是 Agent 之间的关系。
+ */
+export function minimapLinksFrom(
+  sourceId: string,
+  source: { x: number; y: number; width: number; height: number },
+  edges: readonly CanvasFlowEdge[],
+  boxOf: (
+    id: string,
+  ) => { x: number; y: number; width: number; height: number } | undefined,
+  familyColorOf: (id: string) => string | undefined,
+): MinimapLink[] {
+  const links: MinimapLink[] = [];
+  for (const edge of edges) {
+    if (edge.type !== "link" || edge.source !== sourceId) continue;
+    const target = boxOf(edge.target);
+    if (!target) continue;
+    const supervises = edge.data?.role === "supervises";
+    links.push({
+      key: edge.id,
+      x1: source.x + source.width / 2,
+      y1: source.y + source.height / 2,
+      x2: target.x + target.width / 2,
+      y2: target.y + target.height / 2,
+      color: linkColor({ supervises, familyColor: familyColorOf(sourceId) }),
+      role: supervises ? "dispatch" : "context",
+    });
+  }
+  return links;
+}
+
+/** 一个节点发出去的连线；画在它的矩形下面。 */
+function MinimapLinks({
+  id,
+  x,
+  y,
+  width,
+  height,
+}: Pick<MiniMapNodeProps, "id" | "x" | "y" | "width" | "height">) {
+  // 订阅 `nodes` 只为了在节点移动时重画；坐标从 `nodeLookup` 读绝对位置。
+  useStore((state) => state.nodes);
+  const edges = useStore((state) => state.edges) as CanvasFlowEdge[];
+  const lookup = useStore((state) => state.nodeLookup);
+  const families = useFamilies();
+  const links = minimapLinksFrom(
+    id,
+    { x, y, width, height },
+    edges,
+    (target) => {
+      const node = lookup.get(target);
+      if (!node) return undefined;
+      const at = node.internals.positionAbsolute;
+      return {
+        x: at.x,
+        y: at.y,
+        width: node.measured.width ?? node.width ?? 0,
+        height: node.measured.height ?? node.height ?? 0,
+      };
+    },
+    (source) => families.get(source)?.color,
+  );
+  if (links.length === 0) return null;
+  return (
+    <g data-slot="minimap-links">
+      {links.map((link) => (
+        <line
+          key={link.key}
+          data-role={link.role}
+          x1={link.x1}
+          y1={link.y1}
+          x2={link.x2}
+          y2={link.y2}
+          stroke={link.color}
+          strokeWidth={MINIMAP_LINK_WIDTH}
+          strokeLinecap="round"
+          vectorEffect="non-scaling-stroke"
+        />
+      ))}
+    </g>
   );
 }
 

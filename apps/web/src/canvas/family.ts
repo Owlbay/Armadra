@@ -9,7 +9,8 @@ import { useCanvasStore } from "@/store/canvas-store";
  * 三种来源，优先级从上到下：
  *
  *  1. **派发簇**：`role: "supervises"` 的边连成的树。树按根的 id 排序（uuidv7
- *     单调，即创建顺序），第 i 棵取 `--node-color-${i % 7 + 1}`，根与子孙同色。
+ *     单调，即创建顺序），第 i 棵取 {@link CLUSTER_PALETTE} 的第 `i % 5` 色，
+ *     根与子孙同色。
  *     簇色回答「谁派的」。
  *  2. **独立 Agent**：不在任何树上的 Agent 终端，用它的标识色（`--agent-<id>`），
  *     回答「是谁」。
@@ -27,11 +28,16 @@ export interface Family {
   readonly color: string;
 }
 
-/** 七色循环（`NODE_COLORS` 的变量形式）。 */
-export const CLUSTER_COLOR_COUNT = 7;
+/**
+ * 派发簇的五色循环：节点调色板（`--node-color-n`）去掉红（4）与紫（5）。
+ * 红读起来像出错；紫与上下文线的品红（`--link-context`）色相太近，两类线
+ * 必须一眼分开（`styles/tokens.test.ts` 守住色相间距）。
+ */
+export const CLUSTER_PALETTE = [1, 2, 3, 6, 7] as const;
+export const CLUSTER_COLOR_COUNT = CLUSTER_PALETTE.length;
 
 export function clusterColor(index: number): string {
-  return `var(--node-color-${(index % CLUSTER_COLOR_COUNT) + 1})`;
+  return `var(--node-color-${CLUSTER_PALETTE[index % CLUSTER_COLOR_COUNT]})`;
 }
 
 /** 非 Agent 节点的类型色；没有登记的类型（纯 shell、活动卡片）用中性色。 */
