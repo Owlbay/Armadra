@@ -28,6 +28,7 @@ import { installRoutes } from "./routes";
 import { AmaCredentials, setAmaCredentials } from "./ama-credentials";
 import { secretsFor } from "../secrets";
 import { installHookBridge } from "./hook-bridge";
+import { installLaunchGate } from "./launch-gate";
 import {
   AdapterInstaller,
   installAdapterInstallRoutes,
@@ -194,6 +195,9 @@ export function install(context: CoreContext): CollabContext {
       error: error instanceof Error ? error.message : String(error),
     });
   }
+
+  // 启动闸门（契约 §52）：持有者报出第一条状态就放行下一个。
+  installLaunchGate(context.bus);
 
   // 出队挂在 `agent.status` 的发布点上，不轮询（§4.6）。同一条事件回答两个
   // 问题：谁的一轮结束了（扇出计数清零），以及谁空出来了（该出队了）。

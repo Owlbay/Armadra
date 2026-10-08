@@ -12,6 +12,7 @@ import { launchFor } from "../../dependencies/store";
 import { taskRun } from "../../workflow/task-runs";
 import { type ControlOutcome, controlDispatcher } from ".";
 import { resetSendLimits } from "../send-limits";
+import { LAUNCH_FAILED_REASON, failLaunch } from "../send-queue";
 import { resetInboxWake } from "../wake";
 import { parseCursor, resetWaitTrackers } from "./wait";
 
@@ -528,6 +529,16 @@ describe("wait", () => {
       status: "failed",
       reason: "TARGET_STARTING",
     });
+  });
+
+  it("fails with launch_failed once the member's launch has failed twice", async () => {
+    const member = await openTask("s1:dead");
+    expect(failLaunch(fixture.database, member)).toBeGreaterThan(0);
+    expect(await wait("s1:dead")).toMatchObject({
+      status: "failed",
+      reason: LAUNCH_FAILED_REASON,
+    });
+    expect(taskRun(fixture.database, "s1:dead")?.status).toBe("failed");
   });
 
   it("holds the request until the timeout and then answers running", async () => {

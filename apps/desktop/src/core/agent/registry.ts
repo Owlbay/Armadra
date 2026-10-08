@@ -1,5 +1,13 @@
-import { accessSync, constants, statSync } from "node:fs";
-import { delimiter, dirname, isAbsolute, join, sep } from "node:path";
+import { execFileSync } from "node:child_process";
+import {
+  accessSync,
+  constants,
+  lstatSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
+import { homedir } from "node:os";
+import { basename, delimiter, dirname, isAbsolute, join, sep } from "node:path";
 import { agentPath, hookClient } from "../terminal/environment";
 import { type ShimTarget, fileProbe, shimTarget } from "./windows-shim";
 
@@ -404,6 +412,9 @@ export interface AgentInfo {
    * wrapper on Windows (`claude.cmd`): the program behind it and the words
    * that go in front of the CLI's own (`node.exe <cli.js>`). Absent when the
    * path is the program itself, or the wrapper could not be read.
+   *
+   * 自协议 1.24 起也用于版本管理器的垫片（mise / asdf，契约 §52）：
+   * `program` 是垫片背后那份真实的 CLI，`args` 为空。
    */
   readonly launchTarget?: ShimTarget;
 }
@@ -413,7 +424,7 @@ function located(
   command: string,
 ): Pick<AgentInfo, "resolvedPath" | "installed" | "launchTarget"> {
   const resolved = resolveCommand(command);
-  const target = launchTargetOf(resolved);
+  const target = launchTargetOf(resolved) ?? versionManagerTarget(resolved);
   return {
     resolvedPath: resolved ?? null,
     installed: resolved !== undefined,
@@ -516,6 +527,111 @@ export function launchTargetOf(
     resolved,
     fileProbe((name) => resolveCommand(name, ambient)),
   );
+}
+
+/* --------------------------- version-manager shims -------------------------- */
+
+/** 解析垫片最多等这么久。 */
+const SHIM_WHICH_TIMEOUT_MS = 10_000;
+
+/** 跑一次 `<manager> which <cli>`，答标准输出；失败答 `undefined`。 */
+export type ShimWhich = (
+  manager: string,
+  args: readonly string[],
+) => string | undefined;
+
+const runWhich: ShimWhich = (manager, args) => {
+  try {
+    return execFileSync(manager, [...args], {
+      encoding: "utf8",
+      timeout: SHIM_WHICH_TIMEOUT_MS,
+      stdio: ["ignore", "pipe", "ignore"],
+      // 在家目录里问：答的是全局那一版，不受 core 恰好站在哪个项目里影响。
+      cwd: homedir(),
+      windowsHide: true,
+    });
+  } catch {
+    return undefined;
+  }
+};
+
+/** `(垫片路径, mtime)` → 背后的程序；`null` 是问过但没问出来。 */
+const shimCache = new Map<string, ShimTarget | null>();
+
+/** 用例之间换一份干净的。 */
+export function clearShimCache(): void {
+  shimCache.clear();
+}
+
+/**
+ * 垫片是哪家版本管理器的：mise 的垫片是指向 `mise` 本体的符号链接，asdf 的是
+ * `~/.asdf/shims/` 下的脚本。都不是答 `undefined`。
+ */
+function shimManager(
+  path: string,
+): { readonly name: "mise" | "asdf"; readonly program?: string } | undefined {
+  const posix = path.split(sep).join("/");
+  let target: string | undefined;
+  try {
+    if (lstatSync(path).isSymbolicLink()) target = realpathSync(path);
+  } catch {
+    target = undefined;
+  }
+  const real = target === undefined ? "" : basename(target);
+  if (real === "mise" || real === "mise.exe")
+    return { name: "mise", program: target as string };
+  if (real === "asdf") return { name: "asdf", program: target as string };
+  if (posix.includes("/mise/shims/")) return { name: "mise" };
+  if (posix.includes("/.asdf/shims/")) return { name: "asdf" };
+  return undefined;
+}
+
+/**
+ * 穿透 mise / asdf 的垫片（界面第二波 §8.4、契约 §52）。
+ *
+ * 启动行若用 PATH 上第一个命中的垫片，每次启动都要多一层版本解析进程；几个节点
+ * 同时起时这一层也一起并发。这里问一次 `mise which <cli>`（asdf 同理），把真实
+ * 路径作为 `launchTarget.program`。只读：不写任何 CLI 或版本管理器的配置，问不
+ * 出来就维持原样。真实路径是 node 脚本时不再往下穿（`node` 本身也可能是垫片）。
+ */
+export function versionManagerTarget(
+  resolved: string | undefined,
+  which: ShimWhich = runWhich,
+  ambient: NodeJS.ProcessEnv = process.env,
+): ShimTarget | undefined {
+  if (resolved === undefined || process.platform === "win32") return undefined;
+  const manager = shimManager(resolved);
+  if (manager === undefined) return undefined;
+  let mtime: number;
+  try {
+    mtime = lstatSync(resolved).mtimeMs;
+  } catch {
+    return undefined;
+  }
+  const key = `${resolved}\u0000${mtime}`;
+  const cached = shimCache.get(key);
+  if (cached !== undefined) return cached ?? undefined;
+  const program =
+    manager.program ?? resolveCommand(manager.name, ambient) ?? undefined;
+  let found: ShimTarget | undefined;
+  if (program !== undefined) {
+    const answer = which(program, ["which", basename(resolved)]);
+    const line = answer
+      ?.split(/\r?\n/)
+      .map((entry) => entry.trim())
+      .find((entry) => entry !== "");
+    if (
+      line !== undefined &&
+      isAbsolute(line) &&
+      line !== resolved &&
+      shimManager(line) === undefined &&
+      isExecutable(line)
+    ) {
+      found = { program: line, args: [] };
+    }
+  }
+  shimCache.set(key, found ?? null);
+  return found;
 }
 
 function isExecutable(path: string): boolean {

@@ -33,6 +33,9 @@ const zh = {
   "agent.state.done": "已完成",
   "agent.state.errored": "已失败",
   "agent.state.interrupted": "已暂停",
+  /* 启动闸门（契约 §52）：自动重试一次之后仍没起来。 */
+  "agent.launch.failed": "启动失败",
+  "agent.launch.retry": "重试",
 
   /* 状态来源（协作通道 §3.2 / §3.4）。前两个是同一份认证报告的两种传输，
      第三个是 PTY 侧的猜测，只作头部提示，不作任何判据。 */
@@ -76,6 +79,8 @@ const en: Record<keyof typeof zh, string> = {
   "agent.state.done": "Done",
   "agent.state.errored": "Turn failed",
   "agent.state.interrupted": "Paused",
+  "agent.launch.failed": "Launch failed",
+  "agent.launch.retry": "Retry",
 
   "agent.stateSource.hook": "Reported by hook",
   "agent.stateSource.hook.note": "The state comes from the CLI's hooks.",
