@@ -367,7 +367,7 @@ async function scenario(ctx) {
   /* --------------------------- 1. 建远端工作空间 --------------------------- */
 
   await attempt(ctx, "01-remote-workspace", async () => {
-    await openSettings(page, "SSH");
+    await openSettings(page, "远程机器");
     await page.fill('input[aria-label="远程项目路径"]', project);
     await page.click('[role="dialog"] button', "打开远程项目");
     await page.waitFor(
@@ -387,7 +387,7 @@ async function scenario(ctx) {
       listed?.id ?? "没有",
     );
     // Git 要在工作区上执行命令：远端工作空间建出来默认不许，打开它。
-    await openSettings(page, "工作区");
+    await openSettings(page, "工作空间");
     await page.click('button[aria-label="允许工作区执行命令"]');
     await sleep(800);
     await page.capture("01-remote-workspace");
@@ -803,7 +803,7 @@ async function scenario(ctx) {
     );
     await page.settle();
     const switchTo = async (hostLabel) => {
-      await openSettings(page, "执行主机");
+      await openSettings(page, "远程机器");
       await page.click('[role="dialog"] button', "切换", { exact: true });
       await page.click('[role="dialog"] button[role="combobox"]');
       await page.click('[role="option"]', hostLabel, { exact: true });
@@ -1278,7 +1278,7 @@ async function scenario(ctx) {
       "集成状态给出 outdatedHosts（同一构建的 Worker 不在其中）",
       JSON.stringify(integration.outdatedHosts),
     );
-    await openSettings(page, "执行主机");
+    await openSettings(page, "远程机器");
     await page.waitFor(
       `return document.body.innerText.includes("Worker ${row.worker?.version ?? ""}");`,
       { what: "执行主机页的 Worker 版本徽标" },

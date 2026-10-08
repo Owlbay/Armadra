@@ -615,17 +615,15 @@ await h.run(async () => {
   );
   report.memberSettingsNav = memberNav;
   const ownerOnly = [
-    "Agent",
-    "集成",
-    "终端",
-    "工作区",
-    "Git 托管",
-    "SSH",
-    "执行主机",
-    "数据",
-    "账号与用量",
-    "快捷键",
-    "更新",
+    "Agent CLI",
+    "自定义 Agent",
+    "会话",
+    "凭据与密钥",
+    "用量与额度",
+    "工作空间",
+    "远程机器",
+    "代码托管",
+    "远程访问",
   ];
   check(
     memberNav.length > 0 &&
