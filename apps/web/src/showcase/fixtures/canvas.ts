@@ -197,7 +197,7 @@ export const CLUSTER_EDGES = [
   [CLUSTER_IDS.leadB, CLUSTER_IDS.subB1, "supervises"],
   [CLUSTER_IDS.note, CLUSTER_IDS.lone, "peer"],
   // 跨簇的上下文线：专用色 `--link-context`，与两簇的派发线一眼分开。
-  [CLUSTER_IDS.subB1, CLUSTER_IDS.note, "peer"],
+  [CLUSTER_IDS.lone, CLUSTER_IDS.subB1, "peer"],
 ].map(([source, target, role]) => ({
   id: `cluster-${source}-${target}`,
   boardId: BOARD,
