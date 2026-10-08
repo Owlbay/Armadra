@@ -3333,6 +3333,7 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 
 - 边界外改动：`agent/launch.ts`（加 `agentRegistry()`，菜单工厂要同步拿 Agent 列表）、`canvas/menus/node-menu.tsx`（注册项支持一层 `children`）、`acp/simple-mode.ts`、`canvas/whiteboard/tools/ToolLayer.tsx` 与 `showcase/ShowcaseApp.tsx`（删向导的挂载点）、`acp/adapter-install.test.tsx`、`i18n/integration.ts`（删不再引用的 `integration.wizard.spawnTitle`）、`store/canvas/types.ts`（`arrangeNodes` 收 `direction`）、`apps/web/src/api/settings.ts`（PATCH 类型）、`tools/probes/canvas-tidy.mjs`；用户授权范围内改了 C1 的 `link-visual.ts`、`family.ts`、`tokens.css`，以及 `LinkEdge.tsx` 的颜色几行与 `Minimap.tsx`。
 - 协议号仍 1.23（契约 §50 写「自 1.24 起」，由最后合入的包统一改）；无数据库迁移。
+- 共享画布的成员读不了主机设置（`settings.get` 403），画布按缺省纵向、设置页不摆「布局方向」一行；core 侧放置照旧按主机设置。CI 的 `server-e2e`「成员打开共享画布没有任何 403」第一次就抓到了这一条，已修并本地复跑通过。
 - 浅色主题下黄色簇（`--node-color-3`）在白底上偏淡，是节点调色板本身的取值，本包没改。
 
 接口：
