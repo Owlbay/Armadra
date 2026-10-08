@@ -45,10 +45,10 @@
 
 ## 4. 旧残留的清理（修复）
 
-`hook/install/repair.ts`，设置页按钮 + core 启动时自动检测（只报不改）：
+`hook/install/repair.ts`，只在设置页按钮被点击时改动；集成状态里列出（只读）。
 
-- 识别：各 CLI 配置里的旧版接入残留（早期 hook 安装路径），以及指向 `aicc-hook`、`target/debug/…` 的 hook 条目；技能目录 `aicc-canvas`、`aicc-linked-context`、`get-linked-context`、早期画布管理技能、旧版 `armadra`（内容修订号落后）；Codex `hooks.json` 顶层的 `version`；全局 `AGENTS.md` / `CLAUDE.md` 里 由早期接入标记或 `aicc:` 前缀的 HTML 注释（`start/end`）围起来的指令块（2026-09-15 补）。
-- 动作：列出 → 备份为 `<file>.armadra-backup-<时间戳>` → 删条目 / 目录 → 按现行写法重写；只动我们认得的条目，其余原样。
+- 识别（2026-10-08 收紧为只认本产品签名）：程序是我们的 Hook 客户端（`armadra-hook` 或改名前的 `aicc-hook`，含 `.exe` / `.cmd` 与开发构建路径）的 Hook 条目与状态行；调用它的状态模块；技能目录 `armadra`、`armadra-canvas`、`armadra-linked-context`、`aicc-canvas`、`aicc-linked-context`，且 `SKILL.md` 带修订号尾注或调用我们的客户端；全局 `AGENTS.md` / `CLAUDE.md` 里恰为 `armadra:skills` / `aicc:skills` 的标记块；与我们的条目同在时 Codex `hooks.json` 顶层的 `version`。按名字相似、宽泛路径（如任意 `target/debug/`）或通用技能名的匹配全部取消。
+- 动作：列出 → 备份为 `<file>.armadra-backup-<时间戳>` → 删条目 / 目录 → 按现行写法重写；只动我们的条目。其他工具写进同一批文件的 Hook、技能、指令块不列出、不报告、不改不删。
 - 报告：每种 CLI 一份 `{found, removed, kept, backup}`。
 
 ## 5. 接口

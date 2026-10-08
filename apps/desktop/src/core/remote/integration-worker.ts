@@ -37,15 +37,6 @@ import {
 } from "node:http";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
-import { globalWritesDisabled } from "../hook/install/inject";
-import {
-  type MigrationRecord,
-  type SessionTrustMigration,
-  clearCodexSessionTrust,
-  migrationPath,
-  readMigration,
-} from "../hook/install/migrate";
-import { configHome, writeAtomically } from "../hook/install/shared";
 import { badRequest } from "../workspaces/support";
 import type { WorkerSession } from "./session";
 
@@ -177,7 +168,6 @@ export interface SyncResult {
 export function sync(
   stateDir: string | undefined,
   args: Record<string, unknown>,
-  env: NodeJS.ProcessEnv = process.env,
 ): SyncResult {
   const fence = join(stateBase(stateDir), "integration") + sep;
   const missing: string[] = [];
@@ -206,35 +196,7 @@ export function sync(
     writeFile(target, entry.content, entry.mode);
     written += 1;
   }
-  clearSessionTrustOnce(stateDir, env);
   return { missing, written };
-}
-
-/**
- * 迁移 v2 在执行主机上的那一步：旧 Worker 收到 `codexCommand` 时往这台机器的
- * `~/.codex/config.toml` 写过 `/<session-flags>/` 信任记录，这里清掉一次，结果
- * 记进 `<状态目录>/integration/global-migration.json`。记录里已有
- * `sessionTrust` 就什么也不做，失败也算做过——与本机同一条规矩。没有
- * `~/.codex` 不建，认不出的文件不改，备份在它旁边。关着全局写入（测试）不做。
- */
-export function clearSessionTrustOnce(
-  stateDir: string | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-  now: Date = new Date(),
-): SessionTrustMigration | undefined {
-  if (globalWritesDisabled(env)) return undefined;
-  const base = stateBase(stateDir);
-  const existing = readMigration(base);
-  if (existing?.sessionTrust !== undefined) return existing.sessionTrust;
-  const sessionTrust = clearCodexSessionTrust(configHome("codex", env), now);
-  const record: MigrationRecord = {
-    version: 2,
-    migratedAt: existing?.migratedAt ?? sessionTrust.at,
-    agents: existing?.agents ?? {},
-    sessionTrust,
-  };
-  writeAtomically(migrationPath(base), `${JSON.stringify(record, null, 2)}\n`);
-  return sessionTrust;
 }
 
 /* ---------------------------------- 中继 ---------------------------------- */

@@ -2,10 +2,11 @@
 //
 // core 的 HOME / CLAUDE_CONFIG_DIR 指向探针自己造的临时目录（`prepareIntegrationHome`
 // 在 core 启动前调用），里面的 `.claude/settings.json` 在 11 个 Hook 事件下各挂
-// 一条同样的旧命令，外加一条用户自己的命令。截图确认：Claude Code 那张分组的
-// 标题在视口里、「画布注入」一行行高正常、「修复 11」点开的清单弹层在设置对话框
-// 之上且没被盖住、同一条命令合并成一行并标 ×11。最后点清单底下的「修复」：残留
-// 清掉、用户自己的那条留着、旁边多一份备份——这些都只发生在临时目录里。
+// 一条同样的本产品旧版命令，外加一条用户自己的命令和一条别的工具的命令。截图
+// 确认：Claude Code 那张分组的标题在视口里、「画布注入」一行行高正常、「清理旧版
+// 11」点开的清单弹层在设置对话框之上且没被盖住、同一条命令合并成一行并标 ×11、
+// 别的工具的命令不出现。最后点清单底下的「清理」：我们的条目清掉、用户与别的工具
+// 的留着、旁边多一份备份——这些都只发生在临时目录里。
 import {
   existsSync,
   mkdirSync,
@@ -18,6 +19,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { removeTree, sleep } from "./harness.mjs";
+
+/** 别的工具装进同一个文件的 Hook：不列、不改、不删。 */
+const OTHER_TOOL = "sh '/Users/dev/.othertool/agent-hooks/claude.sh'";
 
 const EVENTS = [
   "PreToolUse",
@@ -33,13 +37,12 @@ const EVENTS = [
   "PermissionRequest",
 ];
 
-/** 造一个带 11 条重复旧残留的 HOME；返回路径与删除函数。 */
+/** 造一个带 11 条重复旧残留（本产品旧版写的）的 HOME；返回路径与删除函数。 */
 export function prepareIntegrationHome() {
   const path = mkdtempSync(join(tmpdir(), "armadra-ui-home-"));
   const claude = join(path, ".claude");
   mkdirSync(claude, { recursive: true });
-  const script = join(path, ".aicc/aicc-hook/claude.sh");
-  const legacy = `(if [ -r '${script}' ]; then sh '${script}'; fi)`;
+  const legacy = `"${join(path, "Old Build", "aicc-hook")}" claude`;
   const hooks = Object.fromEntries(
     EVENTS.map((event) => [
       event,
@@ -47,6 +50,7 @@ export function prepareIntegrationHome() {
     ]),
   );
   hooks.Stop.push({ hooks: [{ type: "command", command: "echo mine" }] });
+  hooks.Stop.push({ hooks: [{ type: "command", command: OTHER_TOOL }] });
   writeFileSync(
     join(claude, "settings.json"),
     `${JSON.stringify({ hooks }, null, 2)}\n`,
@@ -89,8 +93,8 @@ export default async function integration({ stack, output, report, scenario }) {
   await page.settle();
   await openIntegration(page);
 
-  const badge = `return [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent.trim() === "修复 11");`;
-  await page.centerOf(badge, "「修复 11」");
+  const badge = `return [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent.trim() === "清理旧版 11");`;
+  await page.centerOf(badge, "「清理旧版 11」");
   // Claude Code 那张分组：标题在分组里、「画布注入」一行没有被一段命令撑开。
   const row = await page.evaluate(`
     const badge = (() => { ${badge} })();
@@ -131,22 +135,23 @@ export default async function integration({ stack, output, report, scenario }) {
   run.check(popover.inViewport, "弹层整块在视口内");
   run.check(
     popover.text.includes("×11") &&
-      popover.text.split("aicc-hook/claude.sh").length === 3,
-    "同一条命令只列一行并标 ×11",
+      popover.text.split('aicc-hook" claude').length === 2 &&
+      !popover.text.includes("othertool"),
+    "同一条命令只列一行并标 ×11，别的工具的命令不列",
     popover.text.slice(0, 160),
   );
   await sleep(300);
   await run.shot(page, "integration-2-popover");
 
-  /* -------------------------------- 修复 --------------------------------- */
-  // 看过清单再修：「修复」在弹层底下。
+  /* -------------------------------- 清理 --------------------------------- */
+  // 看过清单再清理：「清理」在弹层底下。
   await page.clickOn(
-    `return [...document.querySelectorAll('[data-slot="popover-content"] button')].find((b) => b.textContent.trim() === "修复");`,
-    "修复",
+    `return [...document.querySelectorAll('[data-slot="popover-content"] button')].find((b) => b.textContent.trim() === "清理");`,
+    "清理",
   );
   await page.until(
-    `return !document.body.innerText.includes("修复 11")`,
-    "修复后徽标消失",
+    `return !document.body.innerText.includes("清理旧版 11")`,
+    "清理后徽标消失",
     { timeout: 20_000 },
   );
   const after = JSON.parse(readFileSync(settings, "utf8"));
@@ -155,8 +160,9 @@ export default async function integration({ stack, output, report, scenario }) {
   );
   run.check(
     commands.every((command) => !command.includes("aicc-hook")) &&
-      commands.includes("echo mine"),
-    "残留全部移除，用户自己的命令保留",
+      commands.includes("echo mine") &&
+      commands.includes(OTHER_TOOL),
+    "我们的旧条目全部移除，用户与别的工具的命令保留",
     commands,
   );
   const backups = readdirSync(join(stack.home, ".claude")).filter((name) =>
@@ -167,7 +173,7 @@ export default async function integration({ stack, output, report, scenario }) {
   await run.shot(page, "integration-3-repaired");
 
   /* -------------------------------- 窄屏 --------------------------------- */
-  // 修复后没有徽标了；重新造一份残留，看窄屏下的行与弹层。
+  // 清理后没有徽标了；重新造一份残留，看窄屏下的行与弹层。
   writeFileSync(settings, original);
   const phone = await stack.browser.page(await stack.browser.context());
   await phone.viewport(390, 844, true);
@@ -182,7 +188,7 @@ export default async function integration({ stack, output, report, scenario }) {
     `return [...document.querySelectorAll('[role="dialog"] button, [role="dialog"] a')].find((b) => b.getAttribute("aria-label") === "集成" || b.textContent.trim() === "集成");`,
     "手机集成页",
   );
-  await phone.clickOn(badge, "手机上点开「修复 11」");
+  await phone.clickOn(badge, "手机上点开「清理旧版 11」");
   await phone.until(
     `return !!document.querySelector('[data-slot="popover-content"]')`,
     "手机弹层",

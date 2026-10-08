@@ -53,27 +53,28 @@ core 分不出也不会因此多给任何权限。区别只是省掉每个事件
 
 Hook、技能（`SKILL.md`）与画布说明是一组**注入产物**，生成在 `<数据目录>/integration/<cli>/`，由同目录下的启动器 `run/<cli>` 在 CLI 启动时交给它：画布节点的启动行是 `<launcher> <程序> <旗标>`，启动器路径由 `GET /api/agents` 每行的 `launcher` 给出（契约 §13.1），注入只在环境里有 `ARMADRA_NODE_ID` 时追加；在画布外重跑同一行、或用户自己启动的 CLI 什么都看不到。各 CLI 的参数与恢复时的行为见 [画布内注入](../design/canvas-only-integration.md) §3，启动器见 [画布启动器](../design/canvas-launcher.md)。修订号仍是 `INTEGRATION_REVISION`（`<Hook 修订>×100 + <技能修订>`），变了就在下一次启动时重写产物；Hook 事件契约（`HOOK_CLIENT_REVISION`）不随之变。
 
-数据目录之外不写任何文件：Codex 的 Hook 信任靠启动器追加的会话级旗标 `--dangerously-bypass-hook-trust`。升级后第一次启动会把旧版装进各 CLI 全局配置的 Hook、模块与技能备份后清掉，并清掉旧版本写进 `~/.codex/config.toml` 的 `/<session-flags>/` 信任记录，只做一次，结果记在 `<数据目录>/integration/global-migration.json`（`version: 2`），集成页上可见。集成页没有「安装 / 卸载」，只有「重新生成」。
+数据目录之外不写任何文件：Codex 的 Hook 信任靠启动器追加的会话级旗标 `--dangerously-bypass-hook-trust`。启动不改用户 HOME 下的任何文件：一次性迁移只清数据目录里旧安装器的标记，记在 `<数据目录>/integration/global-migration.json`（`version: 3`）。旧版装进各 CLI 全局配置的东西列在集成页，用户点「清理旧版」才处理。集成页没有「安装 / 卸载」，只有「重新生成」。
 
-### 旧残留与修复
+### 旧残留与清理
 
-旧版接入残留不会自己消失：早期 hook 安装路径，以及指向 `aicc-hook` 或某人 `target/debug/` 的 hook 条目；
-技能目录 `aicc-canvas`、`aicc-linked-context`、`get-linked-context`、早期画布管理技能，以及改版前的
-`armadra-canvas` / `armadra-linked-context`；Codex `hooks.json` 顶层的 `version`——Codex 用 `deny_unknown_fields`
-解析这个文件，多一个陌生键，**整份文件的 hook 全都不跑**，包括用户自己的；还有全局 `AGENTS.md` /
-`CLAUDE.md` 里由早期接入标记或 `aicc:` 前缀的 HTML 注释（`start/end`）围起来的指令块——两百行教模型去跑
-旧版画布控制脚本的 `open-claude` 命令，那个脚本只会报「当前会话不是有效的 Agent 节点」，而模型信了指令就不会再找现行技能
-（2026-09-15 用户实测：Codex 在画布里被要求「创建一个 Claude Code」时跑的正是它）。
+本产品旧版本留在 CLI 全局配置里的东西不会自己消失：程序是我们 Hook 客户端（`armadra-hook`，或改名前的
+`aicc-hook`，含开发构建）的 Hook 条目与状态行、调用它的状态模块；技能目录 `armadra`、`armadra-canvas`、
+`armadra-linked-context`、`aicc-canvas`、`aicc-linked-context`（`SKILL.md` 带我们的修订号尾注或调用我们的客户端）；
+全局 `AGENTS.md` / `CLAUDE.md` 里 `armadra:skills` / `aicc:skills` 标记块；以及与我们的条目同在时 Codex
+`hooks.json` 顶层的 `version`——Codex 用 `deny_unknown_fields` 解析这个文件，多一个陌生键，**整份文件的 hook
+全都不跑**，包括用户自己的。
 
-core 每次启动扫描并在日志里报出来，`GET /api/agents/{id}/integration` 的 `legacy.found` 也带着它，
-但**只报不改**。真正动手的只有设置页的「修复」按钮：先把要重写的文件备份成 `<file>.armadra-backup-<时间戳>`，
-只删认得出是我们写的条目，其余原样写回，然后按现行写法重写（Codex 那份顺带去掉顶层未知键）。
-报告给出 `{found, removed, kept, backup}`，`kept` 就是它认出来「不是我们的、原样留下」的那些。
+只认这些签名。其他工具也会往同一批文件和目录里装 Hook、技能和指令块，名字可能与我们的旧版相似；
+它们不出现在集成状态里，不出现在清理结果里，也不会被改动或删除。
+
+`GET /api/agents/{id}/integration` 的 `legacy.found` 列出这些条目，启动时**不改**任何 CLI 文件。真正动手的只有
+设置页的「清理旧版」：先把要重写的文件备份成 `<file>.armadra-backup-<时间戳>`，只删我们的条目，其余原样写回。
+报告给出 `{found, removed, kept, backup}`，只含我们自己的条目；`kept` 是我们的、但因旁边有用户文件而留下的那些。
 旧技能目录不备份：里面是我们自己生成的说明书，没有用户的东西，而 `SKILL.md` 旁边多一个备份文件反而要教 CLI 忽略；
 目录里若还有用户自己放的文件，只删 `SKILL.md`，目录留下并在 `kept` 里写明。指令文件只删标记块本身，
 块外的每个字节原样保留（备份整份），块删空了的文件才删除。
 
-修复之前，这些残留的后果是可以直接观察到的：Codex 启动时报 `failed to parse hooks config … unknown field \`version\``，
+清理之前，这些残留的后果是可以直接观察到的：Codex 启动时报 `failed to parse hooks config … unknown field \`version\``，
 于是没有任何 hook 跑，节点头上的状态一直停在启动时的样子；而旧指令块让模型去跑旧版画布控制脚本。画布启动时若任一 CLI 有残留，顶部会有一条
 通知条指向 设置 → 集成。
 
@@ -235,9 +236,9 @@ ACP 是同一个 Agent 节点的另一种驱动方式，不是第二条 Agent �
 
 使用独立临时 SQLite 数据库测试完整 HTTP 路由：节点 token 缺失/伪造、未连线、跨工作空间移动、正文超限、重复 key 冲突、满容量、分页、过期清理、重复确认、数据库重新连接后确认状态仍保留，以及没有终端会话时仍可完成收发确认。共享包测试覆盖六种 CLI 命令和不支持权限模式拒绝。所有测试不修改真实 CLI 的凭据、配置或会话。
 
-集成的验证分三层：`hook/install/**` 的单元测试断言每个安装器写出的字节与重装的幂等；`hook/install/repair.rs`
+集成的验证分三层：`hook/install/**` 的单元测试断言每个安装器写出的字节与重装的幂等；`hook/install/repair.test.ts`
 用用户真实报上来的三种形状（`aicc-hook` 的 Claude `settings.json`、带顶层 `version` 的 Codex `hooks.json`、
-`aicc-canvas` 这类技能目录）当夹具，夹具写在测试里，不读任何真实目录；`pnpm agent:smoke <cli>` 在临时 `HOME`
+`aicc-canvas` 这类技能目录）当夹具，并在同一批文件里放一个中性名字的其他工具的 Hook、技能与指令块，断言扫描、清理与启动迁移都不碰它；夹具写在测试里，不读任何真实目录；`pnpm agent:smoke <cli>` 在临时 `HOME`
 下用真实 CLI 跑「装一次 → Hook 事件到达 + 技能文件在位 + `armadra-hook canvas/context` 动词可用 → 卸载后两者都不在」，
 并连线两个节点验证 `context summary` 能读到对方的真实转录。`pnpm ownership:e2e --domain agent` 证明 Host 模式下这四个
 动作是**转发**给执行主机的，Host 一个字节也不写。

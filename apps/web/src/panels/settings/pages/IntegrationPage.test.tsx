@@ -157,7 +157,7 @@ describe("IntegrationPage", () => {
     expect(screen.queryByText(zh("integration.state.stale"))).toBeNull();
   });
 
-  /** 「修复 N」点开是清单，看过再按清单底下的「修复」。 */
+  /** 「清理旧版 N」点开是清单，看过再按清单底下的「清理」。 */
   it("lists every leftover entry before offering the repair", async () => {
     mock.integration.mockResolvedValue({
       ...healthy,
@@ -210,8 +210,7 @@ describe("IntegrationPage", () => {
    * 次数，主目录写成 `~`。整段命令拼进脚注曾把这一行撑到几屏高。
    */
   it("groups repeated leftovers by file with a count", async () => {
-    const command =
-      "(if [ -r '/Users/dev/.aicc/aicc-hook/claude.sh' ]; then sh '/Users/dev/.aicc/aicc-hook/claude.sh'; fi)";
+    const command = "/Users/dev/Applications/Old Build/aicc-hook claude";
     mock.integration.mockResolvedValue({
       ...healthy,
       legacy: {
@@ -224,16 +223,16 @@ describe("IntegrationPage", () => {
     });
     view();
     expect(await screen.findByText("Claude Code")).toBeTruthy();
-    expect(screen.queryByText(/aicc-hook\/claude/)).toBeNull();
+    expect(screen.queryByText(/aicc-hook claude/)).toBeNull();
     fireEvent.click(
       await screen.findByRole("button", {
         name: zh("integration.action.repair").replace("{count}", "11"),
       }),
     );
     expect(await screen.findByText("~/.claude/settings.json")).toBeTruthy();
-    const entries = screen.getAllByText(/aicc-hook\/claude\.sh/);
+    const entries = screen.getAllByText(/aicc-hook claude/);
     expect(entries).toHaveLength(1);
-    expect(entries[0]?.textContent).toContain("'~/.aicc/aicc-hook");
+    expect(entries[0]?.textContent).toContain("~/Applications/Old Build");
     expect(screen.getByText("×11")).toBeTruthy();
   });
 

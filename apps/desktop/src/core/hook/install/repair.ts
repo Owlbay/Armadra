@@ -8,7 +8,6 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, extname, join } from "node:path";
-import { managedContextCommand } from "./claude";
 import { SKILLS_ROOT, instructionFile } from "./skills";
 import {
   type JsonObject,
@@ -20,66 +19,64 @@ import {
 
 /**
  * What earlier versions of this product left in the user's CLI configuration
- * (docs/design/agent-integration.md §4).
+ * (docs/design/agent-integration.md §4), cleaned up only when the user asks.
  *
- * Two renames and one schema change are on disk out there:
+ * What is on disk out there, all of it ours:
  *
- *   * hook entries invoking an earlier product's binary, and entries pointing
- *     into somebody's `target/debug/` — a developer build that was installed
- *     once and then moved, so the hook silently never fires;
- *   * skill directories from before the merge, including the revision-4 pair
- *     `armadra-canvas` / `armadra-linked-context`;
- *   * Codex's `hooks.json` with a top-level `version`, which that CLI parses
- *     with `deny_unknown_fields` — one stale key and *every* hook in the file
- *     stops running, the user's included;
- *   * instruction blocks in the CLI's global `AGENTS.md` / `CLAUDE.md`, fenced
- *     with a marker comment: two hundred lines telling the model to drive the
- *     canvas through a script that rejects the current session — the model
- *     believes the instructions and never looks for the current skill.
+ *   * hook entries and status lines whose program is our hook client, under
+ *     its current name or the one before the rename — including a developer
+ *     build of it that was installed once and then moved;
+ *   * the generated status modules that call that client;
+ *   * skill directories we installed (`armadra`, the revision-4 pair and the
+ *     pair before the rename), when the `SKILL.md` in them carries our
+ *     signature;
+ *   * the instruction block we fenced into the CLI's global `AGENTS.md` /
+ *     `CLAUDE.md` before skills were separate;
+ *   * the top-level `version` our installer wrote into Codex's `hooks.json`,
+ *     which that CLI parses with `deny_unknown_fields` — one stale key and
+ *     *every* hook in the file stops running.
  *
  * Three rules, in order of how much they matter:
  *
- *   1. **Recognise, never guess.** An entry is removed when its command names
- *      one of our own binaries, past or present. Everything else is reported
- *      as `kept` and written back exactly as it was read.
+ *   1. **Ours by signature, never by resemblance.** An entry counts only when
+ *      it names our own client binary, carries our skill trailer, or is fenced
+ *      with our exact block names. Other tools install hooks, skills and
+ *      instruction blocks into the same files; those are not looked at, not
+ *      listed, not reported and never changed — not even when their names
+ *      look like something we might once have written.
  *   2. **Back up before rewriting.** Any file this module rewrites is copied
- *      to `<file>.armadra-backup-<timestamp>` first. Legacy *skills* are not
- *      backed up: their body is a generated file of ours with nothing of the
- *      user's in it, and a backup beside a `SKILL.md` is a second skill the
- *      CLI would have to be taught to ignore.
- *   3. **Detect on start, change only when asked.** Start-up scans and logs;
- *      the settings page's Repair button is the only thing that writes. A
- *      machine that boots and silently edits the user's CLI configuration is
- *      the problem this module exists to clean up after.
+ *      to `<file>.armadra-backup-<timestamp>` first. Our skills are not
+ *      backed up: their body is a generated file of ours, and a backup beside
+ *      a `SKILL.md` is a second skill the CLI would have to ignore.
+ *   3. **Change only when asked.** Nothing here runs at start-up; the
+ *      settings page's Repair button is the only thing that writes.
  */
 
 /**
- * Binaries and directories that were ours under an earlier name. A command
- * naming any of them is one we wrote, however long ago.
+ * Our hook client as a path's last segment: the current name, the one before
+ * the rename, and the Windows launchers of either. A directory of that name
+ * (`…/<name>/x.sh`) is not the client and does not count.
  */
-const LEGACY_MARKERS = ["aicc-hook", "nodeterm", ".nodeterm"];
+const OWN_CLIENT =
+  /(?:^|[\s"'`=/\\])(?:armadra-hook|aicc-hook)(?:\.exe|\.cmd)?(?=$|[\s"'`;)])/i;
+
+/** The instruction blocks we fenced, by their exact marker names. */
+const OWN_BLOCKS = ["armadra:skills", "aicc:skills"];
+
+/** Our skill trailer (`skills.ts` `revisionOf`). */
+const OWN_SKILL_TRAILER = /<!--\s*armadra:skill-revision\s+\d+\s*-->/;
 
 /**
- * A path into somebody's build directory. It was ours when it was written and
- * it resolves to nothing now, so it is residue either way.
+ * Skill directories we installed under the CLI's skills root. A directory is
+ * ours only when it has one of these names *and* its `SKILL.md` carries our
+ * trailer or calls our client.
  */
-const DEVELOPMENT_BUILD_MARKERS = ["target/debug/", "target\\debug\\"];
-
-/** Comment-marker prefixes earlier versions fenced their instruction blocks with. */
-const LEGACY_BLOCK_PREFIXES = ["nodeterm:", "aicc:"];
-
-/**
- * Skill directories earlier versions installed, under the CLI's skills root.
- * `armadra` itself is not here: it is the current one, and a stale revision of
- * it is reinstalled rather than removed.
- */
-export const LEGACY_SKILL_DIRS = [
-  "aicc-canvas",
-  "aicc-linked-context",
-  "get-linked-context",
-  "manage-nodeterm-canvas",
+export const OWN_SKILL_DIRS = [
+  "armadra",
   "armadra-canvas",
   "armadra-linked-context",
+  "aicc-canvas",
+  "aicc-linked-context",
 ];
 
 /** The providers a scan walks, in registry order. */
@@ -92,7 +89,7 @@ export const AGENT_IDS = [
   "copilot",
 ] as const;
 
-/** One thing found, in the words the settings page shows. */
+/** One thing of ours found, in the words the settings page shows. */
 export interface LegacyFinding {
   /**
    * `hook_entry` / `skill_dir` / `codex_unknown_key` / `status_line` /
@@ -101,10 +98,7 @@ export interface LegacyFinding {
   readonly kind: string;
   /** The file or directory it was found in. */
   readonly path: string;
-  /**
-   * The command, key or directory name — enough for a person to recognise
-   * something they put there themselves.
-   */
+  /** The command, key or directory name of ours. */
   readonly detail: string;
 }
 
@@ -115,7 +109,10 @@ export interface RepairReport {
   found: LegacyFinding[];
   /** Entries, keys and directories that are gone. */
   removed: string[];
-  /** Foreign entries in the files we rewrote, left exactly as they were. */
+  /**
+   * Things of ours left in place: a skill directory something else sits in,
+   * the rest of an instruction file. Never another tool's entries.
+   */
   kept: string[];
   /** The newest backup written, for the sentence the settings page shows. */
   backup?: string;
@@ -123,13 +120,14 @@ export interface RepairReport {
   backups: string[];
 }
 
-/** True when this hook command was written by a version of us that is gone. */
-export function isLegacyCommand(command: string): boolean {
-  const normalized = command.toLowerCase();
-  return (
-    LEGACY_MARKERS.some((marker) => normalized.includes(marker)) ||
-    DEVELOPMENT_BUILD_MARKERS.some((marker) => normalized.includes(marker))
-  );
+/** True when this command (or generated file) runs our own hook client. */
+export function isOwnCommand(command: string): boolean {
+  return OWN_CLIENT.test(command);
+}
+
+/** True when a `SKILL.md` body is one we generated. */
+export function isOwnSkill(body: string): boolean {
+  return OWN_SKILL_TRAILER.test(body) || isOwnCommand(body);
 }
 
 /* ---------------------------------- scan ---------------------------------- */
@@ -163,7 +161,7 @@ export function scanIn(agentId: string, home: string): LegacyFinding[] {
     found.push(...scanHookFile(agentId, path));
   }
   for (const path of generatedModuleFiles(agentId, home)) {
-    if (readText(path).some(isLegacyCommand)) {
+    if (readText(path).some(isOwnCommand)) {
       found.push(finding("hook_entry", path, basename(path)));
     }
   }
@@ -196,7 +194,7 @@ function isFile(path: string): boolean {
   }
 }
 
-/** The global instruction files a provider reads and earlier versions wrote into. */
+/** The global instruction files a provider reads and earlier versions of us wrote into. */
 function instructionFiles(agentId: string, home: string): string[] {
   const files = [instructionFile(home)];
   if (agentId === "claude") files.push(join(home, "CLAUDE.md"));
@@ -204,9 +202,10 @@ function instructionFiles(agentId: string, home: string): string[] {
 }
 
 /**
- * Every legacy block in an instruction file: its name and its character range,
- * start marker through end marker inclusive. A start without its end is not a
- * block we recognise, and is left alone.
+ * Every block of ours in an instruction file: its name and its character
+ * range, start marker through end marker inclusive. Only {@link OWN_BLOCKS}
+ * count; a start without its end is not a block we recognise, and is left
+ * alone.
  */
 export function legacyBlocks(text: string): [string, [number, number]][] {
   const blocks: [string, [number, number]][] = [];
@@ -221,9 +220,7 @@ export function legacyBlocks(text: string): [string, [number, number]][] {
     cursor = close + " -->".length;
     if (!marker.endsWith(":start")) continue;
     const name = marker.slice(0, -":start".length);
-    if (!LEGACY_BLOCK_PREFIXES.some((prefix) => name.startsWith(prefix))) {
-      continue;
-    }
+    if (!OWN_BLOCKS.includes(name)) continue;
     const endMarker = `<!-- ${name}:end -->`;
     const endOffset = text.indexOf(endMarker, cursor);
     if (endOffset < 0) continue;
@@ -235,7 +232,7 @@ export function legacyBlocks(text: string): [string, [number, number]][] {
 }
 
 /**
- * The file without its legacy blocks, and the names of what went. The text
+ * The file without our blocks, and the names of what went. The text
  * around them is kept character for character; only the blank lines a removed
  * block leaves behind are collapsed to one.
  */
@@ -275,8 +272,8 @@ function lastLine(text: string): string[] {
 
 /**
  * The JSON files a provider keeps hook entries in. Copilot merges a whole
- * directory, so every file in it is ours to look at — and none of them is ours
- * to rewrite unless it holds one of our commands.
+ * directory, so every file in it is read — and none of them is rewritten
+ * unless it holds one of our commands.
  */
 function hookFiles(agentId: string, home: string): string[] {
   switch (agentId) {
@@ -291,7 +288,7 @@ function hookFiles(agentId: string, home: string): string[] {
   }
 }
 
-/** The generated modules a provider auto-discovers, ours or a predecessor's. */
+/** The modules a provider auto-discovers; only ones calling our client count. */
 function generatedModuleFiles(agentId: string, home: string): string[] {
   const directory =
     agentId === "opencode"
@@ -335,31 +332,30 @@ function scanHookFile(agentId: string, path: string): LegacyFinding[] {
     return [];
   }
   const found: LegacyFinding[] = [];
-  if (agentId === "codex") {
-    for (const key of Object.keys(document)) {
-      if (key !== "description" && key !== "hooks") {
-        found.push(finding("codex_unknown_key", path, key));
-      }
-    }
+  if (hasOwnVersionKey(agentId, document)) {
+    found.push(finding("codex_unknown_key", path, "version"));
   }
   const command = statusLineCommand(document);
-  if (command !== undefined && isRetiredStatusLine(command)) {
+  if (command !== undefined && isOwnCommand(command)) {
     found.push(finding("status_line", path, command));
   }
   for (const entry of hookCommands(document)) {
-    if (isLegacyCommand(entry)) found.push(finding("hook_entry", path, entry));
+    if (isOwnCommand(entry)) found.push(finding("hook_entry", path, entry));
   }
   return found;
 }
 
 /**
- * A status line this product wrote, under any of its names. The current name
- * is in here too: the `context-usage` subcommand it calls was removed with the
- * context readout, and a settings file still pointing at it would run a
- * no-op on every status refresh.
+ * The `version` key our Codex installer wrote, recognised only beside an
+ * entry of ours: any other top-level key — or a `version` in a file we have
+ * no entry in — belongs to whoever wrote it.
  */
-function isRetiredStatusLine(command: string): boolean {
-  return isLegacyCommand(command) || managedContextCommand(command);
+function hasOwnVersionKey(agentId: string, document: JsonObject): boolean {
+  return (
+    agentId === "codex" &&
+    document.version !== undefined &&
+    hookCommands(document).some(isOwnCommand)
+  );
 }
 
 function statusLineCommand(document: JsonObject): string | undefined {
@@ -421,8 +417,8 @@ function entryCommand(entry: JsonValue): string | undefined {
 
 function scanSkills(home: string): LegacyFinding[] {
   const root = join(home, SKILLS_ROOT);
-  return LEGACY_SKILL_DIRS.map((name) => join(root, name))
-    .filter((path) => isFile(join(path, "SKILL.md")))
+  return OWN_SKILL_DIRS.map((name) => join(root, name))
+    .filter((path) => readText(join(path, "SKILL.md")).some(isOwnSkill))
     .map((path) => finding("skill_dir", path, basename(path)));
 }
 
@@ -433,8 +429,8 @@ export function repair(agentId: string): RepairReport {
 }
 
 /**
- * Backs up, removes what it recognises, and rewrites each file in the current
- * shape. Everything it does not recognise is reported and left alone.
+ * Backs up, removes what is ours, and rewrites each file in the current
+ * shape. Everything else is left alone and not reported.
  */
 export function repairIn(
   agentId: string,
@@ -454,7 +450,7 @@ export function repairIn(
     repairHookFile(agentId, path, stamp, report);
   }
   for (const path of generatedModuleFiles(agentId, home)) {
-    if (readText(path).some(isLegacyCommand)) {
+    if (readText(path).some(isOwnCommand)) {
       rmSync(path, { force: true });
       report.removed.push(path);
     }
@@ -517,33 +513,25 @@ function repairHookFile(
     return;
   }
   const removed: string[] = [];
-  const kept: string[] = [];
 
-  if (agentId === "codex") {
-    // Codex reads this file with `deny_unknown_fields`: one stale key and none
-    // of its hooks run, the user's included.
-    for (const key of Object.keys(document)) {
-      if (key !== "description" && key !== "hooks") {
-        removed.push(`${path}: ${key}`);
-        delete document[key];
-      }
-    }
+  if (hasOwnVersionKey(agentId, document)) {
+    // Codex reads this file with `deny_unknown_fields`: the key our installer
+    // wrote stops every hook in it, the user's included.
+    removed.push(`${path}: version`);
+    delete document.version;
   }
   const command = statusLineCommand(document);
-  if (command !== undefined && isRetiredStatusLine(command)) {
+  if (command !== undefined && isOwnCommand(command)) {
     delete document.statusLine;
     removed.push(`${path}: statusLine`);
   }
   const events = document.hooks;
   if (typeof events === "object" && events !== null && !Array.isArray(events)) {
-    stripLegacyEntries(events, path, removed, kept);
+    stripOwnEntries(events, path, removed);
     if (Object.keys(events).length === 0) delete document.hooks;
   }
 
-  if (removed.length === 0) {
-    report.kept.push(...kept);
-    return;
-  }
+  if (removed.length === 0) return;
   const backup = backupPath(path, stamp);
   copyFileSync(path, backup);
   report.backups.push(backup);
@@ -557,7 +545,6 @@ function repairHookFile(
     writeJsonObject(path, document);
   }
   report.removed.push(...removed);
-  report.kept.push(...kept);
 }
 
 /** Whether a file with no hooks left in it has nothing of the user's either. */
@@ -574,14 +561,13 @@ function isOursAlone(
 }
 
 /**
- * Removes every legacy entry from a `hooks` map in either shape, recording
- * what went and what stayed.
+ * Removes every entry of ours from a `hooks` map in either shape, recording
+ * what went. Entries that are not ours are kept in place and not recorded.
  */
-function stripLegacyEntries(
+function stripOwnEntries(
   events: JsonObject,
   path: string,
   removed: string[],
-  kept: string[],
 ): void {
   for (const [event, groups] of Object.entries(events)) {
     if (!Array.isArray(groups)) continue;
@@ -592,7 +578,7 @@ function stripLegacyEntries(
       const handlers = group.hooks;
       if (Array.isArray(handlers)) {
         group.hooks = handlers.filter((handler) =>
-          retainEntry(handler, path, event, removed, kept, "hooks"),
+          retainEntry(handler, path, event, removed, "hooks"),
         );
       }
     }
@@ -605,7 +591,7 @@ function stripLegacyEntries(
       if (handlers !== undefined) {
         return !Array.isArray(handlers) || handlers.length > 0;
       }
-      return retainEntry(group, path, event, removed, kept, "entry");
+      return retainEntry(group, path, event, removed, "entry");
     });
     if (surviving.length === 0) delete events[event];
     else events[event] = surviving;
@@ -617,17 +603,12 @@ function retainEntry(
   path: string,
   event: string,
   removed: string[],
-  kept: string[],
   shape: string,
 ): boolean {
   const command = entryCommand(entry);
-  if (command === undefined) return true;
-  if (isLegacyCommand(command)) {
-    removed.push(`${path}: ${event} ${shape} → ${command}`);
-    return false;
-  }
-  kept.push(`${path}: ${event} → ${command}`);
-  return true;
+  if (command === undefined || !isOwnCommand(command)) return true;
+  removed.push(`${path}: ${event} ${shape} → ${command}`);
+  return false;
 }
 
 function backupPath(path: string, stamp: string): string {
