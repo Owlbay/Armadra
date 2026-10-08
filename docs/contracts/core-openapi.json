@@ -1886,6 +1886,30 @@
                                   "type": "object",
                                   "properties": {
                                     "type": {
+                                      "const": "acp.starting"
+                                    },
+                                    "nodeId": {
+                                      "type": "string"
+                                    },
+                                    "phase": {
+                                      "enum": [
+                                        "spawn",
+                                        "initialize",
+                                        "session",
+                                        "configure"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "at": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["type", "nodeId", "phase", "at"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
                                       "const": "terminal.exit"
                                     },
                                     "sessionId": {

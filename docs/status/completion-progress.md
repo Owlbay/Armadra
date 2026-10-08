@@ -3435,3 +3435,46 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 接口：
 
 - `AgentsPage.tsx`：`agentState`、`AgentRow`；`AgentDetailPage.tsx`：`AgentModeSelect`；`integration/parts.tsx`：`useIntegrationActions`、`useMigrationNotice`、`CleanupButton`、`injectionProblem`、`historyValue`、`canvasAgentsValue`；`MachinesPage.tsx`：`machineRows`、`executionHostLabel`、`EXECUTION_HOSTS_KEY`、`parseHostForm`；`execution-hosts/MachinesTable.tsx`：`MachinesTable`、`HealthTable`；`gateway/GatewaySection.tsx`：`GatewayConfigSection({ extra })`、`GatewayDevicesSection`；`GatewayPanel` 去掉设备表 props、加 `extra`；`RemoteShareSection` 加 `label`；`SessionsPage.tsx`：`DATA_INFO_KEY`；`ServicePage.tsx`：`ConnectionGroup`；`security/LoginSessions.tsx`。契约、协议号、数据库都不变。
+
+## ACP 创建提速：先显示可先输入、阶段提示、60 s 截止、预启动与预热（界面第二波 §7，契约 §51，包 D）
+
+用户报：右键创建 ACP Agent 很慢，节点出来后一直是骨架屏、输入框禁用。调查（`_shared/acp-create-latency.md`）：core 自己的链路约 14 ms；时间在适配器的 `session/new`（同步跑完 CLI 启动，含用户的 SessionStart hook 与账号探测），页面又要等它返回才让输入；`session/new` 也没有截止时间。
+
+做了什么：
+
+- **core 阶段与计时**（`core/acp/host.ts`）：`startAcp` 每阶段开始时报 `onPhase`（spawn / initialize / session / configure），结束时报 `onTimings`（各段毫秒、`prestarted`）；`session/new` 带 60 s 截止（`SESSION_NEW_TIMEOUT_MS`），超时答 `acp_session_timeout`（HTTP 504）并收掉进程。`startAdapter` 拆出 `adapterStartOptions`，预启动按同一份程序 / argv / 环境起。
+- **事件与日志**（`core/acp/index.ts`）：阶段发成 `acp.starting { nodeId, phase, at }`；每次起会话记 info 日志 `ACP session start timings`（只有数字）；适配器 stderr 里 `[session/create] phase=<名> durationMs=<n>` 只取名字与数字记成 `ACP adapter phase`，正文仍不进日志。
+- **接入包 E 的闸门**：本机 ACP 会话在 `startAdapter` 前 `launchGate().acquire({ agentId: base, configDir: configDirFor(base, env), nodeId })`，进入 `configure`（`session/new` 已答）或失败时 `release(nodeId)`。两个 Codex 同时起时第二个在第一个 `session/new` 答复之后才 spawn（用例里用假 `codex-acp` 验证）。
+- **预启动**（新 `core/acp/prestart.ts`，`POST /api/acp/prestart { workspaceId, agentId }` → 204）：`(agentId, workspaceId)` 一个已 `initialize` 的进程，10 s 没领走就收；起会话时启动签名相同就领走，直接 `session/new`。回调经 `callbackRelay` 转接，领走时换成会话那一套。
+- **预热**：`adapter-install.ts` 装好 / 升级成功后、core 空闲 10 s 后、预启动时发现适配器程序（路径 + mtime）换过，对每家已装适配器跑一次 `initialize` 并执行一次自带 CLI 的 `--version`（`bundledCli` 找 SDK 平台包里的 `claude`、`@openai/codex-<平台>` 里的原生程序）；串行、同一家同一份程序 10 分钟一次；Codex 也过闸门。`ARMADRA_ACP_WARMUP=0` 关空闲预热，vitest 里不做。
+- **页面**（`acp/SessionView.tsx`）：输入框只在断线或起会话失败时禁用；会话就绪前发的第一条先画成用户气泡，`createSession` 还没发出就随 `prompt` 一起发，已发出就等会话开好、镜像读到后经 `acp.prompt`（带 `clientTurnId`）发；骨架区上方一行 11px 阶段提示 + 12px Spinner，`session` 阶段超过 3 s 追加「首次启动较慢」；超时显示「启动超时」+「重试」。节点挂载时工作空间还没读到的，读到后再起会话（以前不会再起）。
+- **菜单打开时预启动**：`acp/api.ts::usePrestartOnOpen(agents)`，`AddMenuContent.tsx` 加一行；只对默认 Agent、以 ACP 驱动、本机源。
+- 契约 §51（§14.2 错误码、§14.3 事件列表各加一句指向）；协议 minor 统一升到 24（`identity/protocol.ts`、`parity-identity.test.ts`、`http/rpc.test.ts`）；文案 `acp.starting.{spawn,initialize,session,configure,cold}`、`acp.error.timeout` 中英同步；`docs/guides/architecture.md`、`development.md`（`ARMADRA_ACP_WARMUP`）。
+
+实测（macOS arm64，隔离 `ARMADRA_DATA_DIR` + 临时 HOME + `ARMADRA_NO_GLOBAL_WRITES=1`，无任何账号；Vite 开发页 + 无头 Chrome；从点下菜单里的 Agent 到「输入框可输入」/「会话就绪」，每家 4 次取后 3 次）：
+
+| Agent                                                    | main 5059e4f2：可输入（= 就绪） | 本分支：可输入 | 本分支：就绪                                |
+| -------------------------------------------------------- | ------------------------------- | -------------- | ------------------------------------------- |
+| Claude（真 claude-agent-acp 0.88，临时 HOME）            | 650–700 ms                      | 160–180 ms     | 440–590 ms（领走预启动，`sessionMs` ≈ 257） |
+| 假 Agent，`session/new` 慢 3 s（模拟 SessionStart hook） | 3320–3360 ms                    | 150–165 ms     | 3250–3275 ms                                |
+
+- 「可输入」剩下的 ~160 ms 是建节点、懒加载会话视图（开发模式）；「就绪」仍取决于 CLI 自己的启动，预启动只省 spawn + `initialize`（Claude 约 180–200 ms）。core 日志里每次都有 `prestarted: true` 的 timings；空闲预热记了 claude 205 ms / `--version` 11 ms、codex 2175 ms / 18 ms。
+- `acp-e2e.mjs` 全过，新增一步：会话视图挂出到输入框可聚焦 0 ms（≤ 200 ms），节点出现到可输入 316 ms。
+- 新增用例：`host.test.ts`（四阶段按序、计时只有数字、`session/new` 不答 300 ms 后 `acp_session_timeout` 且进程被收、预启动进程不再 spawn / 协商且回调接上）、`prestart.test.ts`（签名与环境顺序无关、领走一次且幂等、签名不同不领、10 s 回收、起不来丢弃、`bundledCli`、预热节流与换文件重做、过闸门、`adapterPhases` 只取名字与数字、HTTP 预启动 → 领走只报 session / configure、注入按节点的不预启动、400 / 404、两个 Codex 过闸门串行）、web `SessionView.test.tsx`（起会话期间可输入可聚焦、阶段文字随事件变、首条等会话开好经 prompt 发、请求未发时随 `createSession.prompt` 发、首次启动较慢、启动超时）、`acp/api.test.ts`（默认 Agent 以 ACP 驱动才预启动、只一次、远程源与没有工作空间不调、失败不打扰）。
+- `pnpm libs:build && pnpm -r --if-present test` 全过（web 4104、desktop 5385 / 67 跳、shared 372、server 98 / 4 跳）；web typecheck、`pnpm check` 通过。
+
+没做 / 偏离：
+
+- **预启动只给注入不靠节点身份的那几家**（适配器表 `injection.reuse` 为空：Claude、ama）。预启动时还没有节点，进程环境里没有 `ARMADRA_NODE_ID` 等；画布工具的身份随 `mcpServers` 走不受影响，但 Codex / OpenCode / Copilot / Pi 复用终端注入的环境或 argv，在 CLI 里按节点身份生效，领走会让它们的注入失效。这几家调 prestart 答 204、不起进程。节点带凭据或 SSH 节点不领。
+- **`resolveCommand` / `agentPath` 的解析缓存没做**：实测 < 5 ms，而按 PATH + mtime 校验缓存要 stat 同样多的目录，省不下来；也避免与包 E 在 `registry.ts` 上冲突。
+- 「`agents.list` 发现版本变化后预热」改为「预启动时发现适配器程序换过」触发（不改 `agent/routes.ts`）；安装 / 升级与空闲两条照做。
+- `session/new` 的截止用 `Promise.race` + 收进程实现，没有给 `mcp.ts` 的 `sessionOpener` 加 signal；`session/load` / `resume` 不设截止（长会话回放可能合法地久）。
+- 文件边界外的必要改动：`core/acp/client.ts`（错误码一行）、`core/bus.ts`（事件类型）、`packages/shared/src/api/events.ts`（事件进联合）、`core/http/routes.ts` / `route-scopes.ts` / `identity/route-access.ts`（新路由登记、`terminal:drive`、服务器壳按体里的工作空间判）、`docs/guides/*`。
+- 真实账号下 Claude 的 hook / 插件与 Codex 的路由探测耗时没有测（隔离环境测不到）；用户机器上看 info 日志的 `ACP session start timings` 与 `ACP adapter phase` 即可定位。
+
+接口：
+
+- 契约 §51：事件 `acp.starting { nodeId, phase, at }`；`POST /api/acp/sessions` 新错误 504 `acp_session_timeout`；`POST /api/acp/prestart { workspaceId, agentId } → 204`（权限 `terminal:drive`）。
+- core：`host.ts` 的 `SESSION_NEW_TIMEOUT_MS`、`AcpStartPhase`、`AcpStartTimings`、`AcpPrestarted`、`callbackRelay`、`adapterStartOptions`、`negotiate`、`ACP_CLIENT_INFO`，`AcpStartOptions.{sessionTimeoutMs,prestarted,onPhase,onTimings}`；`prestart.ts` 的 `AcpPrestartPool`（`key / prestart / claim / dispose / killAllSync`）、`launchSignature`、`spawnPrestarted`、`AcpWarmer`、`bundledCli`、`programFingerprint`、`adapterPhases`、`setAcpWarmer`、`warmAfterInstall`；`acp/index.ts::acpPrestartPool()`。
+- 共享：`ACP_START_PHASES`、`acpStartPhaseSchema`、`acpStartingEventSchema`、`acpPrestartRequestSchema`。
+- 页面：`acpApi.prestart(workspaceId, agentId)`、`usePrestartOnOpen(agents)`。
