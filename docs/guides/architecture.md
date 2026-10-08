@@ -283,7 +283,7 @@ profile）、models.dev 目录中该 provider 的条目、以及离线兜底表�
 缓存超过 24 小时就拉一次 `https://models.dev/api.json`，之后每天一次；联网只发生在
 core 侧。同一份目录供计费（内置表 → 目录 → `model-pricing.json`）与上下文上限
 （目录 → 家族规则）使用，
-来源与更新时间在设置页「账号与用量」里显示（`GET /api/models/catalog`）。
+来源与更新时间在设置页「用量与额度」里显示（`GET /api/models/catalog`）。
 
 Agent 之间的协作走 core 的两个动词表面：
 
@@ -611,7 +611,7 @@ id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../desig
     经 `sources/mounts.ts` 同时作为远程源挂进页面源表。中继自己停了（`me.stream` 回不到 open）与主机
     下线分开提示。设置页按 `panels/settings/remote-access.ts` 判断设置作用的 core 在不在眼前（经中继、
     直连远端源、当前源是远程源）：只对本机有意义的分区不列，「在访达中打开」不出，更新页只读报主机
-    版本；页面正走的中继与当前源在远程服务页上不给停用、登出与移除。
+    版本；页面正走的中继与当前源在远程访问页上不给停用、登出与移除。
     CSRF 只在
     Cookie 会话上核对，Bearer 不是环境凭据（`identity/http.ts::csrfRequired`）。Gateway 的每个答案带
     HSTS 与 `nosniff`，接口答案再带沙箱 CSP 与缺省 `no-store`（`gateway/csp.ts`）。
