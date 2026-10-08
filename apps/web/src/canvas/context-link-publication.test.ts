@@ -109,7 +109,7 @@ it("serializes requests so a slow previous PUT cannot overwrite a newer referenc
   });
   expect(put).toHaveBeenCalledTimes(2);
   expect(put.mock.calls[1]?.[2]).toEqual([
-    { id: "note", title: "Newest", kind: "sticky" },
+    { id: "note", title: "Newest", kind: "sticky", role: "peer" },
   ]);
   unmount();
 });
@@ -158,7 +158,7 @@ it("白板引用与节点对端并进同一份文档，准备中的也推", asyn
   });
   expect(put).toHaveBeenCalledTimes(1);
   expect(put.mock.calls[0]?.[2]).toEqual([
-    { id: "note", title: "Original", kind: "sticky" },
+    { id: "note", title: "Original", kind: "sticky", role: "peer" },
     shapeLink("r1", "pending"),
   ]);
   unmount();
@@ -225,7 +225,7 @@ it("引用整条消失时推一份不含它的文档", async () => {
   });
   expect(put).toHaveBeenCalledTimes(2);
   expect(put.mock.calls[1]?.[2]).toEqual([
-    { id: "note", title: "Original", kind: "sticky" },
+    { id: "note", title: "Original", kind: "sticky", role: "peer" },
   ]);
   unmount();
 });
