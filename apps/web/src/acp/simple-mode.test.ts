@@ -56,14 +56,14 @@ beforeEach(() => {
 });
 
 describe("隐藏清单", () => {
-  it("节点菜单隐藏回收 / 权限模式 / 终端视图，新建菜单只留新建 Agent 与便签 / 白板", () => {
+  it("节点菜单隐藏回收 / 权限模式 / 终端视图，新建菜单只留各 Agent 与便签 / 白板", () => {
     expect(SIMPLE_HIDDEN_NODE_MENU).toEqual([
       "agent.recycle",
       "agent.permission.*",
       "agent.driver.terminal",
     ]);
     expect(SIMPLE_ADD_MENU).toEqual([
-      "add.newAgent",
+      "add.agent.*",
       "add.sticky",
       "add.text",
       "add.frame",
@@ -101,11 +101,14 @@ describe("节点菜单", () => {
 });
 
 describe("新建菜单", () => {
-  it("第一项是新建 Agent…；开着时只剩清单里的几项", () => {
-    const all = buildAddMenu([], t as never, [], false);
-    expect(all[0]?.id).toBe("add.newAgent");
+  it("没有向导项；开着时只剩各 Agent 与清单里的几项", () => {
+    const agents = [
+      { id: "claude", label: "Claude", resolvedPath: "/bin/claude" },
+    ] as never;
+    const all = buildAddMenu(agents, t as never, [], false);
+    expect(all.some((item) => item.id === "add.newAgent")).toBe(false);
     expect(visibleAddMenu(all, true).map((item) => item.id)).toEqual([
-      "add.newAgent",
+      "add.agent.claude",
       "add.sticky",
       "add.text",
       "add.frame",

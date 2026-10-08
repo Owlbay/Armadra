@@ -1,4 +1,10 @@
-import type { CanvasEdge, CanvasNode, Position } from "@armadra/shared";
+import {
+  DEFAULT_LAYOUT_DIRECTION,
+  type CanvasEdge,
+  type CanvasNode,
+  type LayoutDirection,
+  type Position,
+} from "@armadra/shared";
 import { COLLAPSED_HEIGHT, defaultNodeSize } from "../store/defaults";
 
 /**
@@ -11,9 +17,10 @@ import { COLLAPSED_HEIGHT, defaultNodeSize } from "../store/defaults";
  *   2. **阅读顺序**：单元按原位置排序，先按 `y` 以 `ROW_GAP` 量化成行，行内
  *      按 `x`。后面所有「谁先谁后」都用它，所以整理两次结果不变（幂等）。
  *   3. **主从树**：只取 `role: "supervises"` 的边建森林（一个单元最多一个主，
- *      先到的赢）。根在第 0 列，子在第 1 列顶对齐根、纵向等距，孙在第 2 列按
- *      父的顺序分段。对等边连着的非 Agent 单元作为「附件」挂在它连的那个树
- *      成员同列正下方。每棵树（连同附件）是一个簇：多主各成簇。
+ *      先到的赢）。按布局方向（`options.direction`，缺省纵向）一层一层排：
+ *      纵向子在主下面一行、横向子在主右侧一列，主居中于它的子（`layoutTree`）。
+ *      对等边连着的非 Agent 单元作为「附件」挂在它连的那个树成员旁边（纵向在
+ *      右侧同一行，横向在正下方）。每棵树（连同附件）是一个簇：多主各成簇。
  *   4. **其余分量**：剩下的单元按无向连通分量成簇，簇内拓扑分列；列内顺序
  *      第 0 列按阅读顺序，之后每列按上一列邻居的平均 y（重心法）排。
  *   5. **裹行**：簇按阅读顺序塞进当前行，行宽超过
@@ -50,6 +57,11 @@ export interface TidyOptions {
   aspect?: number;
   /** 网格边长，默认 8。 */
   grid?: number;
+  /**
+   * 主从树往哪个方向长（契约 §50 `canvas.layoutDirection`），缺省纵向。
+   * 只影响主从树簇；其余分量的拓扑分列不变。
+   */
+  direction?: LayoutDirection;
 }
 
 /** 版式常量（§6.4）。 */
@@ -210,6 +222,7 @@ function treeClusters(
   links: readonly UnitLink[],
   used: Set<string>,
   up: Step,
+  direction: LayoutDirection,
 ): Cluster[] {
   const order = byRank(units);
   const parent = new Map<string, string>();
@@ -322,61 +335,120 @@ function treeClusters(
   for (const list of attachments.values()) list.sort(order);
 
   return roots.map((root) =>
-    layoutTree(root, units, children, parent, attachments, up),
+    layoutTree(root, units, children, attachments, up, direction),
   );
 }
 
-/** 一棵树排成列：父 j 的子块起点 = max(父 j 顶边, 上一段底边 + 行距)。 */
+/**
+ * 一棵树按布局方向排（ui-wave2 §4.3）。「主轴」是深度走的方向，「交叉轴」是
+ * 兄弟排开的方向：
+ *
+ *   | 方向       | 主轴      | 交叉轴    | 附件                         |
+ *   | ---------- | --------- | --------- | ---------------------------- |
+ *   | vertical   | y（向下） | x（向右） | 宿主右侧同一行               |
+ *   | horizontal | x（向右） | y（向下） | 宿主正下方                   |
+ *
+ * 宿主连同它的附件是一个「块」。自底向上算每棵子树在交叉轴上的跨度
+ * `span = max(块宽, Σ子 span + (n−1)·间距)`，父块居中于子块（子块比父块窄时
+ * 反过来子块居中于父块）。同一深度的块共用一层，层厚取这一层最厚的块。
+ * 只看结构与尺寸、不看坐标，所以整理两次结果不变。
+ */
 function layoutTree(
   root: string,
   units: ReadonlyMap<string, Unit>,
   children: ReadonlyMap<string, readonly string[]>,
-  parent: ReadonlyMap<string, string>,
   attachments: ReadonlyMap<string, readonly string[]>,
   up: Step,
+  direction: LayoutDirection,
 ): Cluster {
-  const columns: string[][] = [[root]];
-  for (let depth = 1; depth <= MAX_DEPTH; depth += 1) {
-    const next = columns[depth - 1]!.flatMap((id) => children.get(id) ?? []);
-    if (next.length === 0) break;
-    columns.push(next);
+  const vertical = direction === "vertical";
+  const mainOf = (unit: Unit) => (vertical ? unit.height : unit.width);
+  const crossOf = (unit: Unit) => (vertical ? unit.width : unit.height);
+  const mainGap = vertical ? ROW_GAP : COLUMN_GAP;
+  const crossGap = vertical ? COLUMN_GAP : ROW_GAP;
+
+  // 深度与每层的厚度。超过 MAX_DEPTH 的子孙当作叶子之外的东西不排（与旧版
+  // 同一个上限，病态长链才会碰到）。
+  const depth = new Map<string, number>([[root, 0]]);
+  const kidsOf = (id: string): readonly string[] =>
+    depth.get(id)! < MAX_DEPTH ? (children.get(id) ?? []) : [];
+  const blockOf = (id: string) => [id, ...(attachments.get(id) ?? [])];
+  const thickness: number[] = [];
+  const blockCross = new Map<string, number>();
+  const stack = [root];
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    const level = depth.get(id)!;
+    let main = 0;
+    let cross = 0;
+    for (const [index, member] of blockOf(id).entries()) {
+      const unit = units.get(member)!;
+      main = Math.max(main, mainOf(unit));
+      cross = (index === 0 ? 0 : up(cross + crossGap)) + crossOf(unit);
+    }
+    blockCross.set(id, cross);
+    thickness[level] = Math.max(thickness[level] ?? 0, main);
+    for (const child of kidsOf(id)) {
+      depth.set(child, level + 1);
+      stack.push(child);
+    }
+  }
+  const layerStart: number[] = [0];
+  for (let level = 1; level < thickness.length; level += 1) {
+    layerStart[level] = up(
+      layerStart[level - 1]! + thickness[level - 1]! + mainGap,
+    );
   }
 
-  const top = new Map<string, number>();
-  const offsets = new Map<string, Position>();
-  let x = 0;
-  let right = 0;
-  let height = 0;
-  let rank = units.get(root)!.rank;
-  for (const [depth, column] of columns.entries()) {
-    let bottom = 0;
-    let free = 0;
-    let width = 0;
-    let lastParent: string | undefined;
-    for (const id of column) {
-      const boss = depth === 0 ? undefined : parent.get(id);
-      let y = free;
-      if (boss !== undefined && boss !== lastParent) {
-        y = Math.max(top.get(boss) ?? 0, y);
-      }
-      lastParent = boss;
-      // 节点本身，然后是它的附件，同列正下方。
-      for (const member of [id, ...(attachments.get(id) ?? [])]) {
-        const unit = units.get(member)!;
-        offsets.set(member, { x, y });
-        if (member === id) top.set(id, y);
-        rank = Math.min(rank, unit.rank);
-        width = Math.max(width, unit.width);
-        bottom = y + unit.height;
-        free = up(bottom + ROW_GAP);
-        y = free;
-      }
+  // 自底向上：子树跨度与子块跨度。
+  const span = new Map<string, number>();
+  const kidsSpan = new Map<string, number>();
+  const measure = (id: string): number => {
+    let cursor = 0;
+    for (const [index, child] of kidsOf(id).entries()) {
+      if (index > 0) cursor = up(cursor + crossGap);
+      cursor += measure(child);
     }
-    height = Math.max(height, bottom);
-    right = x + width;
-    x = up(right + COLUMN_GAP);
+    kidsSpan.set(id, cursor);
+    const total = Math.max(blockCross.get(id)!, cursor);
+    span.set(id, total);
+    return total;
+  };
+  measure(root);
+
+  // 自顶向下摆：父块与子块在这棵子树的跨度里各自居中。
+  const offsets = new Map<string, Position>();
+  let rank = units.get(root)!.rank;
+  const at = (main: number, cross: number): Position =>
+    vertical ? { x: cross, y: main } : { x: main, y: cross };
+  const place = (id: string, start: number) => {
+    const total = span.get(id)!;
+    const main = layerStart[depth.get(id)!]!;
+    let cross = start + up((total - blockCross.get(id)!) / 2);
+    for (const [index, member] of blockOf(id).entries()) {
+      const unit = units.get(member)!;
+      if (index > 0) cross = up(cross + crossGap);
+      offsets.set(member, at(main, cross));
+      rank = Math.min(rank, unit.rank);
+      cross += crossOf(unit);
+    }
+    let cursor = start + up((total - kidsSpan.get(id)!) / 2);
+    for (const [index, child] of kidsOf(id).entries()) {
+      if (index > 0) cursor = up(cursor + crossGap);
+      place(child, cursor);
+      cursor += span.get(child)!;
+    }
+  };
+  place(root, 0);
+
+  let width = 0;
+  let height = 0;
+  for (const [id, offset] of offsets) {
+    const unit = units.get(id)!;
+    width = Math.max(width, offset.x + unit.width);
+    height = Math.max(height, offset.y + unit.height);
   }
-  return { width: right, height, offsets, rank };
+  return { width, height, offsets, rank };
 }
 
 /* ------------------------------- 拓扑分列 --------------------------------- */
@@ -516,7 +588,13 @@ export function tidy(
   // 吃掉一格。
   const up: Step = (value) =>
     grid > 0 ? Math.ceil(value / grid - 1e-9) * grid : value;
-  const clusters = treeClusters(byId, unitLinks, used, up);
+  const clusters = treeClusters(
+    byId,
+    unitLinks,
+    used,
+    up,
+    options.direction ?? DEFAULT_LAYOUT_DIRECTION,
+  );
 
   const restUnits = units.filter((unit) => !used.has(unit.id));
   const restLinks = unitLinks.filter(

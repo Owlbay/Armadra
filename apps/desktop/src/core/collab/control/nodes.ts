@@ -2,6 +2,12 @@ import { statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 
 import {
+  PLACEMENT_COLUMN_GAP,
+  PLACEMENT_ROW_GAP,
+  type LayoutDirection,
+} from "@armadra/shared";
+
+import {
   type PermissionMode,
   canResume,
   launchCommand,
@@ -13,6 +19,7 @@ import type {
   BoardDocument,
   CanvasEdge,
   CanvasNode,
+  Position,
 } from "../../canvas/document-types";
 import { getContextLinks } from "../../canvas/context-links";
 import { handlesFor } from "../../canvas/handles";
@@ -35,7 +42,17 @@ import {
   type DependencyCondition,
   MAX_TTL_MINUTES,
 } from "../../dependencies/store";
-import { asRefusal, cleanTitle, load, newNode, placement, save } from "./board";
+import {
+  ANCHOR_FALLBACK_WIDTH,
+  NODE_FALLBACK_HEIGHT,
+  asRefusal,
+  cleanTitle,
+  layoutDirection,
+  load,
+  newNode,
+  placement,
+  save,
+} from "./board";
 import {
   type WorktreeTarget,
   checkWorktreeSpec,
@@ -877,18 +894,22 @@ export async function team(
 
   let working = document;
   const created: CanvasNode[] = [];
+  const direction = layoutDirection();
   roster.forEach((role, index) => {
     const agent: Record<string, unknown> = { id: role.agentId };
     const mode = modes[index];
     if (mode !== undefined) agent.permissionMode = mode;
     if (role.model !== undefined) agent.model = role.model;
     if (inboxWake !== undefined) agent.inboxWake = inboxWake;
-    // 一列排在调用者右边：`placement` 撞上前一个成员就往下挪一格。
+    // 成员按布局方向排成一行（纵向）或一列（横向）：`placement` 撞上前一个
+    // 成员就沿这一行 / 列让一格（契约 §50）。汇总节点在成员那一行的下一行居中。
     let node = newNode(
       document.board.id,
       "terminal",
       role.title,
-      placement(working, caller.node.id),
+      (index === members.length
+        ? gatherPlacement(working, created, direction)
+        : undefined) ?? placement(working, caller.node.id, direction),
       { kind: "terminal", agent },
     );
     const target =
@@ -1243,4 +1264,49 @@ export function sticky(
     type: "sticky",
     title,
   });
+}
+
+/**
+ * `team --gather` 的汇总节点：成员那一行再下一行、居中于成员（纵向）；横向时
+ * 是成员那一列再右边一列、居中。成员有在分组里的（各自的 worktree Frame）或
+ * 落点压着别的节点时返回 `undefined`，由调用方退回普通的 `placement`。
+ */
+function gatherPlacement(
+  working: BoardDocument,
+  members: readonly CanvasNode[],
+  direction: LayoutDirection,
+): Position | undefined {
+  if (members.length === 0 || members.some((node) => node.parentId)) {
+    return undefined;
+  }
+  const width = (node: CanvasNode) => node.size?.width ?? ANCHOR_FALLBACK_WIDTH;
+  const height = (node: CanvasNode) =>
+    node.size?.height ?? NODE_FALLBACK_HEIGHT;
+  const left = Math.min(...members.map((node) => node.position.x));
+  const top = Math.min(...members.map((node) => node.position.y));
+  const right = Math.max(
+    ...members.map((node) => node.position.x + width(node)),
+  );
+  const bottom = Math.max(
+    ...members.map((node) => node.position.y + height(node)),
+  );
+  const at: Position =
+    direction === "vertical"
+      ? {
+          x: (left + right) / 2 - ANCHOR_FALLBACK_WIDTH / 2,
+          y: bottom + PLACEMENT_ROW_GAP,
+        }
+      : {
+          x: right + PLACEMENT_COLUMN_GAP,
+          y: (top + bottom) / 2 - NODE_FALLBACK_HEIGHT / 2,
+        };
+  const clash = working.nodes.some(
+    (node) =>
+      !node.parentId &&
+      node.position.x < at.x + ANCHOR_FALLBACK_WIDTH &&
+      at.x < node.position.x + width(node) &&
+      node.position.y < at.y + NODE_FALLBACK_HEIGHT &&
+      at.y < node.position.y + height(node),
+  );
+  return clash ? undefined : at;
 }

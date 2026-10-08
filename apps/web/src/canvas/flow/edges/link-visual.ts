@@ -36,6 +36,33 @@ export interface LinkView {
   arrowEnd: boolean;
 }
 
+/**
+ * 上下文线的颜色（`styles/tokens.css` 的 `--link-context`）。一个专用的品红：
+ * 色相与派发簇的五色（`family.ts` 的 `CLUSTER_PALETTE`）都隔开 60° 以上，
+ * 一眼分得出「读谁的上下文」与「谁派的」（`styles/tokens.test.ts` 守）。
+ */
+export const LINK_CONTEXT_COLOR = "var(--link-context)";
+
+/**
+ * 一条连线画什么颜色：选中与投递闪动用品牌色；派发线用主的簇色；上下文线用
+ * {@link LINK_CONTEXT_COLOR}。画布与小地图共用。
+ */
+export function linkColor({
+  supervises,
+  familyColor,
+  selected = false,
+  flashing = false,
+}: {
+  supervises: boolean;
+  familyColor?: string | undefined;
+  selected?: boolean;
+  flashing?: boolean;
+}): string {
+  if (flashing || selected) return "var(--brand)";
+  if (supervises) return familyColor ?? "var(--brand)";
+  return LINK_CONTEXT_COLOR;
+}
+
 /** 派发线只在选中时显示的那一个词。 */
 export const DISPATCH_LABEL_KEY = "edge.role.dispatch";
 

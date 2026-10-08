@@ -5,6 +5,7 @@ import {
   type CanvasNode,
   type CanvasNodeData,
   type CanvasNodeType,
+  type LayoutDirection,
   type Position,
   type Size,
   type Viewport,
@@ -225,6 +226,8 @@ export interface CanvasActions {
   arrangeNodes: (options?: {
     aspect?: number;
     only?: ReadonlySet<string> | null;
+    /** 主从树的方向（契约 §50）；缺省纵向。 */
+    direction?: LayoutDirection;
   }) => void;
 }
 

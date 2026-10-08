@@ -15,7 +15,7 @@ import {
 import { useT } from "@/app/preferences-store";
 import { commandKeysLabel } from "@/keybindings";
 import { useSshHosts } from "@/panels/settings/ssh-hosts";
-import { buildAddMenu, type AddMenuContext } from "./add-menu";
+import { buildAddMenu, buildSpawnItems, type AddMenuContext } from "./add-menu";
 import { useDefaultDriverSync } from "@/acp/driver";
 import { useSimpleMode, visibleAddMenu } from "@/acp/simple-mode";
 
@@ -28,6 +28,11 @@ import { useSimpleMode, visibleAddMenu } from "@/acp/simple-mode";
 export interface AddMenuContentProps {
   ctx: AddMenuContext;
   kind: "context" | "dropdown";
+  /**
+   * 「派发」形态（ui-wave2 §6.3）：从这个 Agent 节点的把手拖到空白处松手。
+   * 只列各 Agent，顶上一行「派发自 @名字」，选中即在 `ctx.position` 建从。
+   */
+  spawnFrom?: { nodeId: string; name: string; agentId?: string };
 }
 
 /**
@@ -45,7 +50,7 @@ export interface AddMenuContentProps {
  */
 export const ADD_MENU_CONTENT_CLASS = "w-auto min-w-60 max-w-80";
 
-export function AddMenuContent({ ctx, kind }: AddMenuContentProps) {
+export function AddMenuContent({ ctx, kind, spawnFrom }: AddMenuContentProps) {
   const t = useT();
   // `t` 按 locale 记忆化，所以切语言时菜单会重建，平时不会每帧重算。
   const hosts = useSshHosts();
@@ -54,10 +59,19 @@ export function AddMenuContent({ ctx, kind }: AddMenuContentProps) {
   const driver = useDefaultDriverSync();
   const simple = useSimpleMode();
   const items = React.useMemo(
-    // 简洁模式只在菜单上收起：快捷键与命令面板照旧能建终端。
-    () => visibleAddMenu(buildAddMenu(ctx.agents, t, hosts, browser), simple),
+    () =>
+      spawnFrom
+        ? buildSpawnItems(
+            ctx.agents,
+            t,
+            spawnFrom.nodeId,
+            spawnFrom.agentId,
+            ctx.position,
+          )
+        : // 简洁模式只在菜单上收起：快捷键与命令面板照旧能建终端。
+          visibleAddMenu(buildAddMenu(ctx.agents, t, hosts, browser), simple),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [ctx.agents, hosts, t, browser, driver, simple],
+    [ctx.agents, ctx.position, hosts, t, browser, driver, simple, spawnFrom],
   );
   const Item = kind === "context" ? ContextMenuItem : DropdownMenuItem;
   const Label = kind === "context" ? ContextMenuLabel : DropdownMenuLabel;
@@ -68,6 +82,11 @@ export function AddMenuContent({ ctx, kind }: AddMenuContentProps) {
 
   return (
     <>
+      {spawnFrom ? (
+        <Label className="px-2.5 pt-1.5 pb-1 text-xs font-medium text-muted-foreground">
+          {t("node.menu.spawnFrom", { name: spawnFrom.name })}
+        </Label>
+      ) : null}
       {items.map((item, index) => {
         const disabledReason = item.disabledReason?.(ctx) ?? null;
         const Icon = item.icon;
@@ -78,7 +97,7 @@ export function AddMenuContent({ ctx, kind }: AddMenuContentProps) {
         return (
           <React.Fragment key={item.id}>
             {newGroup && previous ? <Separator /> : null}
-            {newGroup && item.group !== "start" ? (
+            {newGroup && !spawnFrom ? (
               <Label className="px-2.5 pt-1.5 pb-1 text-xs font-medium text-muted-foreground">
                 {t(`add.group.${item.group}`)}
               </Label>

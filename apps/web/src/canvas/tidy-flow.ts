@@ -174,7 +174,11 @@ export function arrangeCanvas(
       kind: entry.kind,
     })),
     links(ids),
-    { aspect: options.aspect, grid: options.grid },
+    {
+      aspect: options.aspect,
+      grid: options.grid,
+      direction: options.direction,
+    },
   );
 
   // 排布结果的原点是 (0,0)；平移回原来那块内容的左上角，画布不会突然跳走。

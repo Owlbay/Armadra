@@ -292,7 +292,7 @@ function again(
 }
 
 describe("tidy · §6.4", () => {
-  it("(a) 一主三从：从在右列、顶对齐根、等距、x 相同", () => {
+  it("(a) 横向一主三从：从在右列、等距、x 相同，主 y 居中于子块", () => {
     const boxes = [
       placed("main", 900, 600, "agent", 300, 200),
       placed("s1", 0, 0, "agent"),
@@ -300,16 +300,68 @@ describe("tidy · §6.4", () => {
       placed("s3", 400, 1500, "agent"),
     ];
     const links = ["s1", "s2", "s3"].map((id) => supervises("main", id));
-    const at = tidy(boxes, links, { aspect: 100 });
+    const at = tidy(boxes, links, { aspect: 100, direction: "horizontal" });
 
-    expect(at.main).toEqual({ x: 0, y: 0 });
+    expect(at.main!.x).toBe(0);
     const xs = new Set(["s1", "s2", "s3"].map((id) => at[id]!.x));
     expect(xs.size).toBe(1);
     expect(at.s1!.x).toBeGreaterThan(at.main!.x + 300);
-    // 顶对齐根；子按原阅读顺序（s1 在最上，s2 同一行偏右，s3 最下）。
-    expect(at.s1!.y).toBe(at.main!.y);
+    // 子按原阅读顺序（s1 在最上，s2 同一行偏右，s3 最下），等距。
+    expect(at.s1!.y).toBe(0);
     expect(at.s2!.y - at.s1!.y).toBe(at.s3!.y - at.s2!.y);
     expect(at.s2!.y).toBeGreaterThan(at.s1!.y);
+    // 主的中线对齐子块的中线（差不超过一格网格）。
+    const blockMid = (at.s1!.y + at.s3!.y + 100) / 2;
+    expect(Math.abs(at.main!.y + 100 - blockMid)).toBeLessThanOrEqual(8);
+  });
+
+  it("(a') 纵向一主三从：从在下一行、等距、y 相同，主 x 居中于子块", () => {
+    const boxes = [
+      placed("main", 900, 600, "agent", 300, 200),
+      placed("s1", 0, 0, "agent"),
+      placed("s2", 2000, 50, "agent"),
+      placed("s3", 400, 1500, "agent"),
+    ];
+    const links = ["s1", "s2", "s3"].map((id) => supervises("main", id));
+    const at = tidy(boxes, links, { aspect: 100, direction: "vertical" });
+
+    expect(at.main!.y).toBe(0);
+    const ys = new Set(["s1", "s2", "s3"].map((id) => at[id]!.y));
+    expect(ys.size).toBe(1);
+    expect(at.s1!.y).toBeGreaterThanOrEqual(200 + ROW_GAP);
+    expect(at.s1!.x).toBe(0);
+    expect(at.s2!.x - at.s1!.x).toBe(at.s3!.x - at.s2!.x);
+    expect(at.s2!.x).toBeGreaterThan(at.s1!.x);
+    const blockMid = (at.s1!.x + at.s3!.x + 200) / 2;
+    expect(Math.abs(at.main!.x + 150 - blockMid)).toBeLessThanOrEqual(8);
+  });
+
+  it("缺省方向是纵向", () => {
+    const boxes = [placed("m", 0, 0, "agent"), placed("s", 900, 0, "agent")];
+    const at = tidy(boxes, [supervises("m", "s")], { aspect: 100 });
+    expect(at.s!.x).toBe(at.m!.x);
+    expect(at.s!.y).toBeGreaterThan(at.m!.y);
+  });
+
+  it("纵向三层：孙排在子下面一层，子居中于孙", () => {
+    const boxes = [
+      placed("r", 0, 0, "agent"),
+      placed("c", 0, 300, "agent"),
+      placed("g1", 0, 600, "agent"),
+      placed("g2", 300, 600, "agent"),
+    ];
+    const at = tidy(
+      boxes,
+      [supervises("r", "c"), supervises("c", "g1"), supervises("c", "g2")],
+      { aspect: 100, direction: "vertical", grid: 0 },
+    );
+    expect(at.g1!.y).toBe(at.g2!.y);
+    expect(at.g1!.y).toBe((100 + ROW_GAP) * 2);
+    expect(at.g2!.x).toBe(200 + COLUMN_GAP);
+    // 子块宽 460，子与根都居中于它。
+    expect(at.c!.x).toBe(130);
+    expect(at.r!.x).toBe(130);
+    expect(overlaps(boxes, at)).toEqual([]);
   });
 
   it("(b) 两棵树各自成簇，互不交错", () => {
@@ -320,12 +372,32 @@ describe("tidy · §6.4", () => {
       placed("b1", 3000, 400, "agent"),
     ];
     const links = [supervises("a", "a1"), supervises("b", "b1")];
-    const at = tidy(boxes, links, { aspect: 100 });
+    const at = tidy(boxes, links, { aspect: 100, direction: "horizontal" });
     // 同一行从左到右：a 树整个在 b 树左边。
     expect(at.a!.y).toBe(at.b!.y);
     expect(Math.max(at.a!.x, at.a1!.x) + 200).toBeLessThan(at.b!.x);
     expect(at.a1!.y).toBe(at.a!.y);
     expect(at.b1!.y).toBe(at.b!.y);
+  });
+
+  it("(b') 纵向两棵树也各自成簇、互不重叠", () => {
+    const boxes = [
+      placed("a", 0, 0, "agent"),
+      placed("a1", 0, 400, "agent"),
+      placed("a2", 300, 400, "agent"),
+      placed("b", 3000, 0, "agent"),
+      placed("b1", 3000, 400, "agent"),
+    ];
+    const links = [
+      supervises("a", "a1"),
+      supervises("a", "a2"),
+      supervises("b", "b1"),
+    ];
+    const at = tidy(boxes, links, { aspect: 100, direction: "vertical" });
+    expect(at.a!.y).toBe(at.b!.y);
+    expect(Math.max(at.a1!.x, at.a2!.x) + 200).toBeLessThan(at.b!.x);
+    expect(at.b1!.x).toBe(at.b!.x);
+    expect(overlaps(boxes, at)).toEqual([]);
   });
 
   it("(c) 附件（浏览器）落在所连 Agent 同列正下方", () => {
@@ -340,12 +412,32 @@ describe("tidy · §6.4", () => {
       supervises("main", "other"),
       { source: "sub", target: "web" },
     ];
-    const at = tidy(boxes, links, { aspect: 100 });
+    const at = tidy(boxes, links, { aspect: 100, direction: "horizontal" });
     expect(at.web!.x).toBe(at.sub!.x);
     expect(at.web!.y).toBeGreaterThan(at.sub!.y + 100);
     // 附件挤在 sub 与下一个兄弟之间，兄弟往下让。
     expect(at.other!.x).toBe(at.sub!.x);
     expect(at.other!.y).toBeGreaterThan(at.web!.y + 200);
+  });
+
+  it("(c') 纵向：附件落在所连 Agent 右侧同一行，下一个兄弟往右让", () => {
+    const boxes = [
+      placed("main", 0, 0, "agent"),
+      placed("sub", 500, 0, "agent"),
+      placed("web", 2000, 2000, "node", 300, 200),
+      placed("other", 600, 900, "agent"),
+    ];
+    const links = [
+      supervises("main", "sub"),
+      supervises("main", "other"),
+      { source: "sub", target: "web" },
+    ];
+    const at = tidy(boxes, links, { aspect: 100, direction: "vertical" });
+    expect(at.web!.y).toBe(at.sub!.y);
+    expect(at.web!.x).toBeGreaterThanOrEqual(at.sub!.x + 200 + COLUMN_GAP);
+    expect(at.other!.y).toBe(at.sub!.y);
+    expect(at.other!.x).toBeGreaterThanOrEqual(at.web!.x + 300 + COLUMN_GAP);
+    expect(overlaps(boxes, at)).toEqual([]);
   });
 
   it("(d) 白板孤岛整体平移，内部相对位置不变", () => {
@@ -385,10 +477,13 @@ describe("tidy · §6.4", () => {
       { source: "s2", target: "web" },
       { source: "note", target: "ed" },
     ];
-    const options = { aspect: 16 / 9 };
-    const first = tidy(boxes, links, options);
-    const second = again(boxes, links, first, options);
-    expect(second).toEqual(first);
+    for (const direction of ["vertical", "horizontal"] as const) {
+      const options = { aspect: 16 / 9, direction };
+      const first = tidy(boxes, links, options);
+      const second = again(boxes, links, first, options);
+      expect(second).toEqual(first);
+      expect(overlaps(boxes, first)).toEqual([]);
+    }
   });
 
   it("(f) 阅读顺序：原来在上面的仍在上面", () => {
@@ -437,6 +532,7 @@ describe("tidy · §6.4", () => {
     const at = tidy(boxes, [supervises("x", "y"), supervises("y", "x")], {
       aspect: 100,
       grid: 0,
+      direction: "horizontal",
     });
     expect(at.x).toEqual({ x: 0, y: 0 });
     expect(at.y).toEqual({ x: 200 + COLUMN_GAP, y: 0 });

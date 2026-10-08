@@ -411,7 +411,11 @@ const clusterFlowEdges: Edge[] = CLUSTER_EDGES.map((edge) => ({
 
 const noGlow = () => undefined;
 
-/** 两簇 + 独立 Agent + 便签，配一张同色的小地图（设计 ui-wave2 §5.4）。 */
+/**
+ * 两簇 + 独立 Agent + 便签，配一张同色的小地图（设计 ui-wave2 §5.4）。上下文线
+ * （便签 ↔ reviewer、reviewer ↔ worker）是专用的品红，派发线是各自的簇色，小地图里
+ * 两类线同样分色。
+ */
 function ClusterSpecimen({ scale }: { scale: number }) {
   const families = useFamilies();
   return (

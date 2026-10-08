@@ -213,7 +213,7 @@ export function CopyCommandButton({
       title={command}
       onClick={() => {
         void navigator.clipboard?.writeText(command).then(
-          () => toast.success(t("wizard.install.copied")),
+          () => toast.success(t("acp.message.copied")),
           () => undefined,
         );
       }}
@@ -362,7 +362,7 @@ export function WizardInstallButton({ agent }: { agent: AgentInfo }) {
       {t(
         install.running
           ? "integration.action.installing"
-          : "wizard.install.run",
+          : "integration.action.install",
       )}
     </Button>
   );

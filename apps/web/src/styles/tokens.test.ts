@@ -452,3 +452,80 @@ describe("安全区变量", () => {
     expect(tokensCss).toContain("--window-controls-top: 0px;");
   });
 });
+
+/* -------------------- 上下文线的专用色（ui-wave2 §3.2） -------------------- */
+
+function rgbOf(hex: string): [number, number, number] {
+  const value = Number.parseInt(hex.slice(1), 16);
+  return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
+}
+
+function hueOf(hex: string): number {
+  const [r, g, b] = rgbOf(hex).map((channel) => channel / 255) as [
+    number,
+    number,
+    number,
+  ];
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const delta = max - min;
+  if (delta === 0) return 0;
+  const raw =
+    max === r
+      ? ((g - b) / delta) % 6
+      : max === g
+        ? (b - r) / delta + 2
+        : (r - g) / delta + 4;
+  return (raw * 60 + 360) % 360;
+}
+
+function luminance(hex: string): number {
+  const [r, g, b] = rgbOf(hex).map((channel) => {
+    const c = channel / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  }) as [number, number, number];
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function contrast(a: string, b: string): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [
+    number,
+    number,
+  ];
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/** 派发簇用的节点色序号（`canvas/family.ts` 的 `CLUSTER_PALETTE`，family.test 守同一份）。 */
+const CLUSTER_SLOTS = [1, 2, 3, 6, 7];
+
+describe("--link-context", () => {
+  it.each([
+    ["深色", dark],
+    ["浅色", light],
+  ])("%s主题：是十六进制色，对画布底色 ≥ 3:1", (_name, theme) => {
+    const color = theme.get("--link-context")!;
+    expect(color).toMatch(/^#[0-9a-f]{6}$/);
+    expect(contrast(color, theme.get("--canvas-bg")!)).toBeGreaterThanOrEqual(
+      3,
+    );
+  });
+
+  it.each([
+    ["深色", dark],
+    ["浅色", light],
+  ])("%s主题：色相与每一种簇色都隔开 ≥ 60°", (_name, theme) => {
+    const hue = hueOf(theme.get("--link-context")!);
+    for (const slot of CLUSTER_SLOTS) {
+      const other = hueOf(dark.get(`--node-color-${slot}`)!);
+      const gap = Math.min(Math.abs(hue - other), 360 - Math.abs(hue - other));
+      expect(gap, `--node-color-${slot}`).toBeGreaterThanOrEqual(60);
+    }
+  });
+
+  it("也和选中色（品牌蓝）分得开", () => {
+    const gap = Math.abs(
+      hueOf(dark.get("--link-context")!) - hueOf(dark.get("--brand")!),
+    );
+    expect(Math.min(gap, 360 - gap)).toBeGreaterThanOrEqual(60);
+  });
+});

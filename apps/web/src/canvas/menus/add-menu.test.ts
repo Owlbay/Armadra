@@ -147,12 +147,13 @@ describe("buildAddMenu", () => {
     state.document = { nodes: [] };
   });
 
-  // ACP 设计 §8：「新建 Agent…」排在最前，自成一组（不带组标题）。
-  it("按 §3.2 的顺序分组：新建 Agent… → 终端 → Agent → 内容 → 画布动作", () => {
-    const groups = buildAddMenu([claude], t).map((item) => item.group);
-    expect(groups[0]).toBe("start");
-    expect(groups[1]).toBe("terminal");
-    expect(groups[2]).toBe("agent");
+  // ui-wave2 §6.1：向导已删，选哪家就直接建哪家。
+  it("按 §3.2 的顺序分组：终端 → Agent → 内容 → 画布动作，没有向导项", () => {
+    const menu = buildAddMenu([claude], t);
+    expect(menu.some((item) => item.id === "add.newAgent")).toBe(false);
+    const groups = menu.map((item) => item.group);
+    expect(groups[0]).toBe("terminal");
+    expect(groups[1]).toBe("agent");
     expect(groups.at(-1)).toBe("canvas");
     // 每个组只出现一段，不会被别的组打断（渲染时按 group 变化插分隔线）。
     expect(new Set(groups).size).toBe(

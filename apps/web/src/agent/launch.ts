@@ -43,6 +43,11 @@ export function setAgentRegistry(agents: readonly AgentInfo[]): void {
   registry = agents;
 }
 
+/** 当前快照（节点菜单的「派生」子菜单要逐家列出）。 */
+export function agentRegistry(): readonly AgentInfo[] {
+  return registry;
+}
+
 function registryEntry(id: string | undefined): AgentInfo | undefined {
   return id ? registry.find((agent) => agent.id === id) : undefined;
 }

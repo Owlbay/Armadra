@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { CanvasEdge, CanvasNode } from "@armadra/shared";
 
-import { currentFamilies, familyOf } from "./family";
+import {
+  CLUSTER_PALETTE,
+  clusterColor,
+  currentFamilies,
+  familyOf,
+} from "./family";
 import { makeEdge, makeNode } from "./test-support";
 
 /**
@@ -84,7 +89,15 @@ describe("familyOf", () => {
     expect(reversed.get(B)?.color).toBe("var(--node-color-2)");
   });
 
-  it("第八棵树起颜色循环", () => {
+  it("簇色五色循环，不含红与紫（与上下文线的品红分开）", () => {
+    expect(CLUSTER_PALETTE).toEqual([1, 2, 3, 6, 7]);
+    const colors = Array.from({ length: 5 }, (_, index) => clusterColor(index));
+    expect(colors).not.toContain("var(--node-color-4)");
+    expect(colors).not.toContain("var(--node-color-5)");
+    expect(clusterColor(5)).toBe(clusterColor(0));
+  });
+
+  it("第六棵树起颜色循环", () => {
     const many = Array.from({ length: 16 }, (_, index) =>
       agent(`0190b000-0000-7000-8000-${String(index).padStart(12, "0")}`),
     );
@@ -92,7 +105,8 @@ describe("familyOf", () => {
       supervises(many[index * 2]!.id, many[index * 2 + 1]!.id),
     );
     const families = familyOf({ nodes: many, edges: pairs });
-    expect(families.get(many[14]!.id)?.color).toBe("var(--node-color-1)");
+    expect(families.get(many[10]!.id)?.color).toBe("var(--node-color-1)");
+    expect(families.get(many[14]!.id)?.color).toBe("var(--node-color-3)");
   });
 
   it("一个节点两条上级边时先到的赢；环也不死循环", () => {

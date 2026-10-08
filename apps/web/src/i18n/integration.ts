@@ -58,7 +58,6 @@ export const integration: MessageModule = {
     "integration.reason.client_without_mcp": "客户端不带画布工具",
     "integration.revision": "第 {n} 版",
     "integration.migrated.notice": "已清理 {name} 的旧全局安装",
-    "integration.wizard.spawnTitle": "派生 Agent", // i18n-exempt
     "integration.regenerate": "重新生成",
     "integration.regenerated": "注入产物已重新生成",
     "integration.failed": "接入操作失败",
@@ -125,7 +124,6 @@ export const integration: MessageModule = {
     "integration.reason.client_without_mcp": "The client has no canvas tools",
     "integration.revision": "Revision {n}",
     "integration.migrated.notice": "Removed the old global install for {name}",
-    "integration.wizard.spawnTitle": "Spawn agent",
     "integration.regenerate": "Regenerate",
     "integration.regenerated": "Injection regenerated",
     "integration.failed": "Integration action failed",

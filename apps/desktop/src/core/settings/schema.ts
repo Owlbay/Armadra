@@ -18,6 +18,7 @@ import {
   COMPLETION_SETTINGS_DEFAULTS,
   GATEWAY_LISTEN_CHOICES,
   GATEWAY_TLS_SOURCES,
+  LAYOUT_DIRECTION_CHOICES,
   MAX_OAUTH_PROVIDERS,
   MFA_REQUIRE_CHOICES,
   OAUTH_PROVIDER_KINDS,
@@ -236,6 +237,13 @@ function normalizeCompletion(document: JsonObject): void {
   normalizePush(document);
   normalizeIdentity(document);
   normalizeCloud(document);
+  const canvas = section(document, "canvas");
+  canvas.layoutDirection = choice(
+    canvas.layoutDirection,
+    LAYOUT_DIRECTION_CHOICES,
+    COMPLETION_SETTINGS_DEFAULTS.canvas.layoutDirection,
+  );
+  document.canvas = canvas;
   const collab = section(document, "collab");
   collab.realtime =
     asBool(collab.realtime) ?? COMPLETION_SETTINGS_DEFAULTS.collab.realtime;
@@ -475,6 +483,7 @@ export function completionSettings(document: JsonValue): CompletionSettings {
         : COMPLETION_SETTINGS_DEFAULTS.agents
             .defaultDriver) as CompletionSettings["agents"]["defaultDriver"],
     },
+    canvas: normalized.canvas as unknown as CompletionSettings["canvas"],
     collab: normalized.collab as unknown as CompletionSettings["collab"],
     usage: {
       claudeUsage: usage.claudeUsage as boolean,
@@ -531,6 +540,9 @@ export interface CompletionSettings {
   };
   readonly agents: {
     readonly defaultDriver: Choice<typeof AGENT_DRIVER_CHOICES>;
+  };
+  readonly canvas: {
+    readonly layoutDirection: Choice<typeof LAYOUT_DIRECTION_CHOICES>;
   };
   readonly collab: { readonly realtime: boolean };
   readonly usage: {

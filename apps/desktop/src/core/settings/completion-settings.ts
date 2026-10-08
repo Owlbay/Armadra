@@ -33,6 +33,11 @@ export const MFA_REQUIRE_CHOICES = ["none", "members", "all"] as const;
 export const OAUTH_PROVIDER_KINDS = ["github", "oidc"] as const;
 /** `agents.defaultDriver`：新建 Agent 节点缺省走 ACP 会话视图还是终端。 */
 export const AGENT_DRIVER_CHOICES = ["acp", "terminal"] as const;
+/**
+ * `canvas.layoutDirection`（契约 §50）：派发树往哪个方向长。纵向 = 从排在主
+ * 下面一行，横向 = 从排在主右侧一列；整理与 core 的放置都按它。
+ */
+export const LAYOUT_DIRECTION_CHOICES = ["vertical", "horizontal"] as const;
 /** `updates.channel`（已有键，这里补一份共享的选项表）。 */
 export const UPDATE_CHANNEL_CHOICES = ["stable", "beta"] as const;
 
@@ -87,6 +92,7 @@ export const COMPLETION_SETTINGS_DEFAULTS = {
     oauth: { providers: [] },
   },
   agents: { defaultDriver: "acp" },
+  canvas: { layoutDirection: "vertical" },
   collab: { realtime: true },
   usage: {
     /** `api.anthropic.com/api/oauth/usage`，默认关（外部服务 §12.3）。 */

@@ -1,3 +1,10 @@
+import {
+  DEFAULT_LAYOUT_DIRECTION,
+  dispatchPlacement,
+  type LayoutDirection,
+  type PlacementBox,
+} from "@armadra/shared";
+
 import type { Board } from "../../canvas/boards";
 import type {
   BoardDocument,
@@ -5,6 +12,8 @@ import type {
   Position,
 } from "../../canvas/document-types";
 import { loadBoard, saveBoard } from "../../canvas/documents";
+import { settingsDomain } from "../../settings";
+import { completionSettings } from "../../settings/schema";
 import { DomainError, rfc3339, uuidV7 } from "../../workspaces/support";
 import type { Caller } from "../nodes";
 import { Refusal, collapseNewlines } from "../refusals";
@@ -164,32 +173,63 @@ export function newNode(
   };
 }
 
+/** Height assumed for a node that has never been resized (the terminal default). */
+export const NODE_FALLBACK_HEIGHT = 600;
+
 /**
- * To the right of the caller, same y — and pushed down if something is already
- * standing there, because two nodes at identical coordinates look like one.
+ * `canvas.layoutDirection`（契约 §50）。读不到设置（测试里没装设置域）按缺省
+ * 纵向。
  */
-export function placement(document: BoardDocument, callerId: string): Position {
+export function layoutDirection(): LayoutDirection {
+  const settings = settingsDomain()?.settings.snapshot();
+  return settings === undefined
+    ? DEFAULT_LAYOUT_DIRECTION
+    : completionSettings(settings).canvas.layoutDirection;
+}
+
+function boxOf(node: CanvasNode): PlacementBox {
+  return {
+    id: node.id,
+    x: node.position.x,
+    y: node.position.y,
+    width: node.size?.width ?? ANCHOR_FALLBACK_WIDTH,
+    height: node.size?.height ?? NODE_FALLBACK_HEIGHT,
+  };
+}
+
+/**
+ * Where a node the caller dispatches goes: the shared `dispatchPlacement` rule
+ * (契约 §50) — under the caller in a vertical layout, to its right in a
+ * horizontal one, after the subordinates it already has, stepping along the row
+ * (or column) while the spot overlaps something. Existing nodes never move.
+ *
+ * Sizes are not known here (see {@link PLACEMENT_STEP}); a node without one is
+ * taken to be a default terminal.
+ */
+export function placement(
+  document: BoardDocument,
+  callerId: string,
+  direction: LayoutDirection = layoutDirection(),
+): Position {
   const anchor = document.nodes.find((node) => node.id === callerId);
-  let x = PLACEMENT_GAP;
-  let y = PLACEMENT_GAP;
-  if (anchor !== undefined) {
-    const width = anchor.size?.width ?? ANCHOR_FALLBACK_WIDTH;
-    x = anchor.position.x + width + PLACEMENT_GAP;
-    y = anchor.position.y;
-  }
-  for (let attempt = 0; attempt < 64; attempt += 1) {
-    const taken = document.nodes.some(
-      (node) =>
-        Math.abs(node.position.x - x) < 24 &&
-        Math.abs(node.position.y - y) < 24,
-    );
-    if (!taken) break;
-    y += PLACEMENT_STEP;
-  }
-  if (!Number.isFinite(x) || !Number.isFinite(y)) {
-    return { x: PLACEMENT_GAP, y: PLACEMENT_GAP };
-  }
-  return { x, y };
+  if (anchor === undefined) return { x: PLACEMENT_GAP, y: PLACEMENT_GAP };
+  // Same coordinate space as the caller: a member of a frame only competes
+  // with the other members of that frame.
+  const boxes = document.nodes
+    .filter((node) => (node.parentId ?? null) === (anchor.parentId ?? null))
+    .map(boxOf);
+  const children = document.edges
+    .filter((edge) => edge.role === "supervises" && edge.source === callerId)
+    .map((edge) => edge.target);
+  return (
+    dispatchPlacement(
+      boxes,
+      callerId,
+      { width: ANCHOR_FALLBACK_WIDTH, height: NODE_FALLBACK_HEIGHT },
+      direction,
+      children,
+    ) ?? { x: PLACEMENT_GAP, y: PLACEMENT_GAP }
+  );
 }
 
 /**

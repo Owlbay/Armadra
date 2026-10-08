@@ -48,6 +48,7 @@ import {
 import { IconButton } from "@/ui/icon-button";
 import { runCanvasCommand } from "@/canvas/commands";
 import { tidySelection } from "@/canvas/tidy-flow";
+import { tidyInDirection } from "@/canvas/layout-direction";
 import { Separator } from "@/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui/tooltip";
 import { cn } from "@/lib/cn";
@@ -197,18 +198,7 @@ export function Dock() {
           <TooltipContent>{t("dock.redo")}</TooltipContent>
         </Tooltip>
 
-        <Tooltip delayDuration={500}>
-          <TooltipTrigger asChild>
-            <IconButton
-              size="dock"
-              label={tidyLabel}
-              onClick={() => runCanvasCommand("canvas.tidy")}
-            >
-              <LayoutGrid />
-            </IconButton>
-          </TooltipTrigger>
-          <TooltipContent>{tidyLabel}</TooltipContent>
-        </Tooltip>
+        <TidyButton label={tidyLabel} />
 
         {/* 白板工具组（§5）；画布没挂载时整组连同分隔线一起不渲染。 */}
         <DockTools />
@@ -221,6 +211,40 @@ export function Dock() {
         <ZoomControls zoom={zoom} />
       </div>
     </div>
+  );
+}
+
+/**
+ * 整理钮：单击按设置的布局方向整理；右键两项「纵向整理 / 横向整理」是一次性
+ * 覆盖，不写设置（ui-wave2 §4.2）。
+ */
+export function TidyButton({ label }: { label: string }) {
+  const t = useT();
+  return (
+    <ContextMenu>
+      <Tooltip delayDuration={500}>
+        <TooltipTrigger asChild>
+          <ContextMenuTrigger asChild>
+            <IconButton
+              size="dock"
+              label={label}
+              onClick={() => runCanvasCommand("canvas.tidy")}
+            >
+              <LayoutGrid />
+            </IconButton>
+          </ContextMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent>{label}</TooltipContent>
+      </Tooltip>
+      <ContextMenuContent className="z-[var(--z-menu)] w-auto min-w-32">
+        <ContextMenuItem onSelect={() => tidyInDirection("vertical")}>
+          {t("canvas.tidyVertical")}
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => tidyInDirection("horizontal")}>
+          {t("canvas.tidyHorizontal")}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 

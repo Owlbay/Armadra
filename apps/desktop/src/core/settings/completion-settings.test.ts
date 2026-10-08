@@ -125,6 +125,22 @@ describe("补全计划的设置键", () => {
     expect(settings.usage.claudeLocalWindow).toBe(false);
   });
 
+  it("canvas.layoutDirection（契约 §50）：缺省纵向，横向原样留下，坏值退回纵向", () => {
+    expect(normalize({}).canvas).toEqual({ layoutDirection: "vertical" });
+    expect(completionSettings({}).canvas.layoutDirection).toBe("vertical");
+    expect(
+      completionSettings({ canvas: { layoutDirection: "horizontal" } }).canvas
+        .layoutDirection,
+    ).toBe("horizontal");
+    expect(
+      completionSettings({ canvas: { layoutDirection: "diagonal" } }).canvas
+        .layoutDirection,
+    ).toBe("vertical");
+    expect(completionSettings({ canvas: 3 }).canvas.layoutDirection).toBe(
+      "vertical",
+    );
+  });
+
   it("cloud：隧道缺省开、不偏好节点，组织默认角色缺省不授予；坏值退回缺省", () => {
     expect(normalize({}).cloud).toEqual({
       relay: { enabled: true, preferredNode: "" },

@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import type { Box } from "../../geometry";
-import { arrowHead, linkView, ARROW_SIZE } from "./link-visual";
+import {
+  arrowHead,
+  linkColor,
+  linkView,
+  ARROW_SIZE,
+  LINK_CONTEXT_COLOR,
+} from "./link-visual";
 
 /**
  * 连线的画法（React Flow 计划 F06）。
@@ -103,5 +109,22 @@ describe("箭头几何", () => {
 
   it("两端重合时不画箭头（除以 0 的方向没有意义）", () => {
     expect(arrowHead({ x: 5, y: 5 }, { x: 5, y: 5 })).toBe("");
+  });
+});
+
+describe("连线颜色（上下文与派发分色）", () => {
+  it("上下文线用专用色；派发线用主的簇色；选中与投递闪动都是品牌色", () => {
+    expect(linkColor({ supervises: false })).toBe(LINK_CONTEXT_COLOR);
+    expect(LINK_CONTEXT_COLOR).toBe("var(--link-context)");
+    expect(
+      linkColor({ supervises: true, familyColor: "var(--node-color-2)" }),
+    ).toBe("var(--node-color-2)");
+    expect(linkColor({ supervises: true })).toBe("var(--brand)");
+    expect(linkColor({ supervises: false, selected: true })).toBe(
+      "var(--brand)",
+    );
+    expect(linkColor({ supervises: true, flashing: true })).toBe(
+      "var(--brand)",
+    );
   });
 });

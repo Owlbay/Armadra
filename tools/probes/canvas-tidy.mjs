@@ -8,7 +8,8 @@
 //   - 主从边条数不变；
 //   - 顶层对象两两不重叠（包围盒相交 = 0）；
 //   - 导入组、散落的旧导入、手画框线各自内部相对位置不变（没被拆开）；
-//   - 主 Agent 在左，三个子 Agent 在它右边同一列、顶对齐；
+//   - 纵向布局（缺省，契约 §50）：三个子 Agent 在主下面同一行、等距，主水平
+//     居中于它们；连着子 Agent 的浏览器挂在那个子右侧同一行；
 //   - 再整理一次位移为 0（幂等），撤销一次整块回到整理前。
 //
 // 跑的是整条真链路：临时数据目录里的 core、一个临时工作空间、Vite 开发服务器、
@@ -489,9 +490,11 @@ async function main() {
   // 等它可写再动手，否则改动会被冲掉。
   let writable = false;
   for (let attempt = 0; attempt < 120 && !writable; attempt += 1) {
+    // 实时连接是挂载后才起的：一开始 `realtime` 还是空的，不能当成「不走实时」。
+    // 起来了就等它可写；三秒还没起来才按非实时板处理。
     writable = await evaluate(`
       const realtime = store.getState().realtime;
-      return !realtime || realtime.writable === true;
+      return realtime ? realtime.writable === true : ${attempt >= 12};
     `);
     if (!writable) await sleep(250);
   }
@@ -633,10 +636,10 @@ async function main() {
   );
 
   const main = now.get(seeded.main.id);
-  // 子按原阅读顺序排：sub-2（最上）、sub-1、sub-3。
+  // 纵向布局：子在主下面一行，从左到右按原阅读顺序（sub-2 最上、sub-1、sub-3）。
   const subs = seeded.subs
     .map((sub) => now.get(sub.id))
-    .sort((a, b) => a.y - b.y);
+    .sort((a, b) => a.x - b.x);
   const order = seeded.subs
     .map((sub) => [sub.id, was.get(sub.id)])
     .sort((a, b) => a[1].y - b[1].y)
@@ -645,22 +648,28 @@ async function main() {
     "子 Agent 保持原阅读顺序",
     JSON.stringify(subs.map((sub) => sub.id)) === JSON.stringify(order),
   );
-  const xs = new Set(subs.map((sub) => sub.x));
+  const ys = new Set(subs.map((sub) => sub.y));
   check(
-    "子 Agent 在主右侧同一列",
-    xs.size === 1 && subs[0].x > main.x + main.w,
-    `主 x=${main.x}，子 x=${[...xs].join("/")}`,
-  );
-  check(
-    "子 Agent 顶对齐主、上下等距",
-    subs[0].y === main.y && subs[1].y - subs[0].y === subs[2].y - subs[1].y,
-    subs.map((sub) => sub.y).join(" / "),
+    "子 Agent 在主下面同一行",
+    ys.size === 1 && subs[0].y > main.y + main.h,
+    `主 y=${main.y}，子 y=${[...ys].join("/")}`,
   );
   const web = now.get(seeded.browser.id);
   const host = now.get(seeded.subs[2].id);
+  // 附件计入宿主的块（§4.3），所以子块的右边是浏览器的右边。
+  const blockMid =
+    (subs[0].x + Math.max(subs[2].x + subs[2].w, web.x + web.w)) / 2;
   check(
-    "浏览器挂在所连子 Agent 同列下方",
-    web.x === host.x && web.y > host.y,
+    "主水平居中于子块、子左右等距",
+    Math.abs(main.x + main.w / 2 - blockMid) <= 8 &&
+      subs[1].x - subs[0].x === subs[2].x - subs[1].x,
+    `主中线 ${main.x + main.w / 2}，子块中线 ${blockMid}；子 x ${subs
+      .map((sub) => sub.x)
+      .join(" / ")}`,
+  );
+  check(
+    "浏览器挂在所连子 Agent 右侧同一行",
+    web.y === host.y && web.x > host.x,
     `web (${web.x}, ${web.y})`,
   );
   const grid = [...after.nodes.filter((node) => !node.parentId)].every(

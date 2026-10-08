@@ -46,6 +46,21 @@ describe("completion settings schema", () => {
     expect((parsed as Record<string, unknown>).theme).toBe("dark");
   });
 
+  it("canvas.layoutDirection defaults to vertical and snaps back when broken", () => {
+    expect(completionSettingsSchema.parse({}).canvas.layoutDirection).toBe(
+      "vertical",
+    );
+    expect(
+      completionSettingsSchema.parse({
+        canvas: { layoutDirection: "horizontal" },
+      }).canvas.layoutDirection,
+    ).toBe("horizontal");
+    expect(
+      completionSettingsSchema.parse({ canvas: { layoutDirection: "up" } })
+        .canvas.layoutDirection,
+    ).toBe("vertical");
+  });
+
   it("drops a broken OAuth provider without losing the others", () => {
     const providers = completionSettingsSchema.parse({
       identity: {

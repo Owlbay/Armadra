@@ -12,7 +12,6 @@ import {
   Globe,
   LayoutGrid,
   Maximize,
-  MessageSquarePlus,
   Network,
   SquareDashedMousePointer,
   StickyNote,
@@ -21,13 +20,21 @@ import {
   Upload,
   Workflow,
 } from "lucide-react";
-import type { AgentInfo, Position, SshHost, Workspace } from "@armadra/shared";
+import {
+  dispatchPlacement,
+  type AgentInfo,
+  type CanvasNode,
+  type PermissionMode,
+  type Position,
+  type SshHost,
+  type Workspace,
+} from "@armadra/shared";
 import type { CommandId } from "../../keybindings";
 import type { CanvasActions } from "../../store/canvas-store";
 import { useCanvasStore } from "../../store/canvas-store";
 import type { Translate } from "../../app/preferences-store";
 import { runCanvasCommand, type CanvasCommandId } from "../commands";
-import { nodeDropPosition } from "../placement";
+import { centeredAt, nodeDropPosition } from "../placement";
 import { revealCreatedNode } from "../created-node";
 import { pickFilesForCanvas } from "../dnd/external-content";
 import { addItems, createItemId, select } from "../whiteboard/store";
@@ -37,7 +44,9 @@ import { openAutomationPanel } from "../../panels/automation/open";
 import { openWorkflowPanel } from "../../workflow/store";
 import { isDesktop } from "../../platform";
 import { preferredDriver } from "../../acp/driver";
-import { openNewAgentWizard } from "../../acp/wizard-open";
+import { defaultNodeSize } from "../../store/defaults";
+import { beginCoalesce, endCoalesce } from "../../store/canvas/history";
+import { layoutDirection } from "../layout-direction";
 
 /**
  * 新建菜单（§13.3）。
@@ -67,8 +76,7 @@ export interface AddMenuItem {
   id: string;
   label: string;
   icon: LucideIcon;
-  /** `start` 是第一项「新建 Agent…」自己一组，不带组标题。 */
-  group: "start" | "terminal" | "agent" | "ssh" | "content" | "canvas";
+  group: "terminal" | "agent" | "ssh" | "content" | "canvas";
   /** 右侧显示的快捷键；键位从 `keybindings.ts` 取，不在这里写死。 */
   shortcut?: CommandId;
   /** Agent 品牌色，渲染成图标右边的小色点。 */
@@ -152,9 +160,9 @@ export function sshMenuItems(hosts: SshHost[], t: Translate): AddMenuItem[] {
 }
 
 /**
- * 菜单项按 §3.2 的顺序（ACP 设计 §8 在最前面加了「新建 Agent…」）：
- * 新建 Agent… → 新建终端 → 各 Agent → 便签 → 文件管理器 → 打开文件… → 浏览器
- * → ─ → 全选 / 适应视图 / 整理画布。
+ * 菜单项按 §3.2 的顺序：新建终端 → 各 Agent → 便签 → 文件管理器 → 打开文件…
+ * → 浏览器 → ─ → 全选 / 适应视图 / 整理画布。选哪家就直接建哪家，没有向导
+ * （ui-wave2 §6.1）。
  */
 export function buildAddMenu(
   agents: AgentInfo[],
@@ -198,13 +206,6 @@ export function buildAddMenu(
   }));
 
   return [
-    {
-      id: "add.newAgent",
-      label: t("wizard.open"),
-      icon: MessageSquarePlus,
-      group: "start",
-      run: (context) => openNewAgentWizard(context.position),
-    },
     {
       id: "add.terminal",
       label: t("add.terminal"),
@@ -379,4 +380,137 @@ export function buildAddMenu(
       run: command("canvas.tidy"),
     },
   ];
+}
+
+/* ------------------------------ 派生（§6.2） ------------------------------ */
+
+/**
+ * 从的权限模式：跟父一样；这家不支持父的模式就不写（由它自己的缺省决定）。
+ */
+function inheritedPermission(
+  agent: AgentInfo,
+  parent: CanvasNode,
+): PermissionMode | undefined {
+  const mode =
+    parent.data.kind === "terminal"
+      ? parent.data.agent?.permissionMode
+      : undefined;
+  if (!mode || mode === "default") return undefined;
+  return supportedPermissionModes(agent.baseAgent ?? agent.id).includes(mode)
+    ? mode
+    : undefined;
+}
+
+/**
+ * 父节点的从放在哪：与 core 的 `open-agent` 同一条 `dispatchPlacement`（契约
+ * §50）。只和父在同一个坐标系里的节点比（父在分组里时就是同组的兄弟）。
+ */
+export function spawnPosition(
+  nodes: readonly CanvasNode[],
+  edges: readonly { source: string; target: string; role?: string }[],
+  parentId: string,
+): Position | null {
+  const parent = nodes.find((node) => node.id === parentId);
+  if (!parent) return null;
+  const frame = parent.parentId ?? null;
+  const boxes = nodes
+    .filter((node) => (node.parentId ?? null) === frame)
+    .map((node) => {
+      const size = node.size ?? defaultNodeSize(node.type);
+      return { id: node.id, ...node.position, ...size };
+    });
+  const children = edges
+    .filter((edge) => edge.role === "supervises" && edge.source === parentId)
+    .map((edge) => edge.target);
+  return dispatchPlacement(
+    boxes,
+    parentId,
+    defaultNodeSize("terminal"),
+    layoutDirection(),
+    children,
+  );
+}
+
+/**
+ * 「派生」：建一个 Agent 节点、从父连一条 `supervises` 边，一步完成、撤销一次
+ * 全回（ui-wave2 §6.2）。`anchor` 给了就以它为中心（拖线到空白处松手的落点），
+ * 否则按布局方向放（{@link spawnPosition}）。父在分组里时新节点进同一组。
+ * 链接文档由 `usePublishContextLinks` 跟着边推送，core 的投递授权随之成立。
+ */
+export function spawnSubordinate(
+  agent: AgentInfo,
+  parentId: string,
+  anchor?: Position,
+): string | null {
+  const state = useCanvasStore.getState();
+  const document = state.document;
+  const parent = document?.nodes.find((node) => node.id === parentId);
+  if (!document || !parent) return null;
+  const size = defaultNodeSize("terminal");
+  const position =
+    (anchor
+      ? centeredAt(anchor, size)
+      : spawnPosition(document.nodes, document.edges, parentId)) ??
+    nodeDropPosition("terminal", {});
+  const permissionMode = inheritedPermission(agent, parent);
+  beginCoalesce("canvas.spawn");
+  let id = "";
+  try {
+    id = state.addNode("terminal", {
+      position,
+      title: agent.label,
+      ...(parent.parentId && !anchor ? { parentId: parent.parentId } : {}),
+      data: {
+        kind: "terminal",
+        agent: {
+          id: agent.id,
+          ...(permissionMode ? { permissionMode } : {}),
+          driver: preferredDriver(agent),
+        },
+      },
+    });
+    if (id) {
+      const canvas = useCanvasStore.getState();
+      const edge = canvas.addEdge(parentId, id);
+      if (edge) canvas.setEdgeRole(edge, "supervises");
+    }
+  } finally {
+    endCoalesce();
+  }
+  if (!id) return null;
+  revealCreatedNode(id);
+  return id;
+}
+
+/** 派生项不需要新建菜单的上下文：落点与父都在建项时定好了。 */
+export type SpawnMenuItem = AddMenuItem & {
+  run: () => void;
+  disabledReason: () => string | null;
+};
+
+/**
+ * 「派生」子菜单的项：与新建菜单同一份 Agent 列表、同一套可用性与禁用原因；
+ * 与父同一家的排第一（§6.2）。
+ */
+export function buildSpawnItems(
+  agents: readonly AgentInfo[],
+  t: Translate,
+  parentId: string,
+  parentAgentId?: string,
+  anchor?: Position,
+): SpawnMenuItem[] {
+  const ordered = [...agents].sort(
+    (a, b) => Number(b.id === parentAgentId) - Number(a.id === parentAgentId),
+  );
+  return ordered.map((agent) => ({
+    id: `spawn.agent.${agent.id}`,
+    label: agent.label,
+    icon: Bot,
+    group: "agent",
+    color: agent.color,
+    run: () => {
+      spawnSubordinate(agent, parentId, anchor);
+    },
+    disabledReason: () => (agent.resolvedPath ? null : t("add.notInstalled")),
+  }));
 }

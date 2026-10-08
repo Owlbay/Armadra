@@ -3339,6 +3339,45 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - `nav.ts`：`SettingsScope`、`SettingsSection.scope / pinnedLocal`、`LEGACY_SECTION_IDS`、`canonicalSectionId`、`activeSectionId`；`pages/index.ts`：`SECTION_PAGES`（B 只改自己那些行）；`scope-badge.tsx`：`ScopeBadge`、`useScopeLabel`；`useRuntimeSettings({ enabled })`；`GeneralPage.tsx` 导出 `CrashReportGroup`；`AboutPage.tsx` 导出 `UpdateStatusRows / UpdateStatusNotes / loadThirdPartyNotices`；`fonts.ts`：`MONOSPACE_CANDIDATES`、`filterMonospace`、`detectMonospaceFonts`、`useMonospaceFonts`；偏好 `TERMINAL_LETTER_SPACING_RANGE`。
 - 文案：`settings.group.*`（8 组）、`settings.section.*`（21 页）、`settings.scope.*`（6 个）、`terminal.settings.{fontSystem,fontCustom,fontStack,letterSpacing,preview,previewSample,group.*}`。契约、协议号、数据库都不变。
 
+## 布局方向、删向导与派生直接建从、上下文线专用色（界面第二波 §4 §6，契约 §50，包 C2）
+
+用户报：画布只能横着排、主不居中于从；「新建 Agent…」向导多一步；「派生」还要再开向导；拖线到空白什么都不发生。另加一条硬性要求：上下文线与派发线作用不同，必须用明显不同的颜色。
+
+做了什么：
+
+- 设置键 `canvas.layoutDirection`（主机设置，`vertical | horizontal`，缺省纵向）：两份 `completion-settings.ts` 加 `LAYOUT_DIRECTION_CHOICES` 与缺省，shared zod schema 与 core `normalize` / `completionSettings` 同步（坏值退回纵向）。设置 → 画布加一行「布局方向」`Select`（`canvas/LayoutDirectionRow.tsx`，包 A 已合入，按设计只加这一行）。
+- 共享纯函数 `dispatchPlacement(boxes, parentId, size, direction, childIds)`（`packages/shared/src/domain/placement.ts`）：纵向从排在主下一行、接在已有从的右边；横向排在主右侧一列、接在已有从的下面；包围盒相交就沿行 / 列让一格，64 次后放到最下 / 最右。core `board.ts::placement(document, callerId, direction = 设置)` 改用它（只和同一分组里的兄弟比，未知尺寸按 960×600）；`team` 成员依次排成一行，`--gather` 汇总节点在下一行居中。
+- 整理：`tidy.ts` 的 `layoutTree` 改成主轴 / 交叉轴通用，自底向上算子树跨度，父块居中于子块（附件计入宿主块：纵向在右侧同一行、横向在正下方）；`TidyOptions.direction`，缺省纵向。`canvas.tidy` 读当前方向；Dock 整理钮右键「纵向整理 / 横向整理」一次性覆盖、不写设置（`tidyInDirection`）。
+- `canvas/layout-direction.ts`：小 store + `useLayoutDirectionSync()`（画布挂一次，从设置查询同步）+ `useLayoutDirection()` / `layoutDirection()`。`LinkEdge` 里 C1 留的 `const direction = "vertical"` 换成 hook。
+- 删向导：`add.newAgent` 项、`NewAgentWizard`（含测试）、`wizard-open.ts`、展示页 `wizard` 分区与夹具、`wizard.*` 文案；`WizardInstallButton` 改用 `integration.action.install` / `acp.message.copied`。简洁模式的新建菜单改留各 Agent（`add.agent.*`）+ 便签 / 文字 / 画框。
+- 派生直接建从：`add-menu.ts` 加 `spawnSubordinate(agent, parentId, anchor?)`（`beginCoalesce("canvas.spawn")` 里建节点 + `supervises` 边，按布局方向放或以落点为中心，继承父的权限模式（这家支持时）与分组，撤销一次全回）与 `buildSpawnItems`；节点右键「派生」变一层子菜单（`NodeMenuItem.children`，`node-menu.tsx` 渲染 `ContextMenuSub`），与父同一家排第一，没有可用 Agent 时整项置灰。
+- 拖线建从：`canvas/flow/use-connect-end.tsx`，从 Agent 节点把手拖到空白松手，在落点弹 `AddMenuContent` 的「派发」形态（顶上「派发自 @名字」，只列各 Agent），选中在落点建从；非 Agent 起笔、落到节点上、没有可用 Agent 时不弹。
+- 上下文线专用色（用户新增硬性要求）：新 token `--link-context`（深 `#ff5fb8` / 浅 `#c2187a`，色相约 326°，对画布底 6.3 / 5.7:1）；派发簇色从七色改为五色 `CLUSTER_PALETTE = [1, 2, 3, 6, 7]`（去掉红与紫，与品红至少隔 68°）。`link-visual.ts::linkColor` 画布与小地图共用；小地图现在画出连线（中心连中心、1.5px 不随缩放，上下文线品红、派发线簇色）。展示页簇色状态加一条跨簇上下文线。
+- 契约 §50（布局方向设置、放置规则、谁遵循、链接文档带 role 的行为说明）；设计系统 §5.3 改为「派生与拖线建从」（节号保留），§2 补 `--link-context`，§4 对等线、派发线、小地图三行更新并加「Dock 整理」一行。
+
+实测（macOS arm64，基于 main 019ad14d，合入 main 368d1bb9 后复跑）：
+
+- `pnpm libs:build && pnpm -r --if-present test` 全过（web 4107、desktop 5349 / 67 跳、shared 380、server 98 / 4 跳）；web typecheck、`pnpm check` 通过。
+- 新增 / 改动的测试：shared `domain-placement.test.ts`（两方向各三条含冲突）、`api-settings.test.ts`；desktop `completion-settings.test.ts`、`collab/control.test.ts`（open-terminal 纵向在下、横向在右、两节点同一行、`team` 成员同一行 x 递增 + 汇总下一行居中）；web `tidy.test.ts`（两方向一主三从居中、三层、两树、附件、两方向幂等）、`tidy-flow.test.ts`、`menus/spawn.test.ts`（建从 + 撤销、第二个接右边、横向、落点、继承权限）、`terminal-menu.test.ts`（子菜单项、置灰）、`use-connect-end.test.tsx`、`add-menu.test.ts`（无 `add.newAgent`）、`simple-mode.test.ts`、`Dock.test.tsx`（整理右键覆盖后复原）、`WhiteboardPage.test.tsx`、`link-visual / LinkEdge / Minimap / family / tokens.test.ts`（`--link-context` 两主题对比度 ≥ 3、与五个簇色及品牌蓝色相 ≥ 60°）。
+- `tools/probes/canvas-tidy.mjs`（真 core + Vite + 无头 Chrome，隔离数据目录与 HOME）全过：子在主下面同一行、主中线 1010 对子块中线 1004、浏览器在所连子右侧同一行、幂等、撤销。探针原先在实时连接起来之前就判「可写」，偶发把 `setEdgeRole` 冲掉，已改成等实时连接可写。
+- 临时探针（同样隔离，PATH 上放假 `claude` / `codex`）在真页面里用 CDP 鼠标验证：右键「派生」子菜单列出各家且父那家排第一，选 Codex 后多一个节点与一条派发边、放在主下方，撤销一次全回；从主把手拖到空白弹「派发自 @main」，选中后在落点建从。
+- `design-showcase.mjs --only=canvas` 深浅两主题过（对比度、减少动效、无控制台 error），截图里上下文线品红、派发线簇色，小地图同样分色。
+
+没做 / 偏离：
+
+- 边界外改动：`agent/launch.ts`（加 `agentRegistry()`，菜单工厂要同步拿 Agent 列表）、`canvas/menus/node-menu.tsx`（注册项支持一层 `children`）、`acp/simple-mode.ts`、`canvas/whiteboard/tools/ToolLayer.tsx` 与 `showcase/ShowcaseApp.tsx`（删向导的挂载点）、`acp/adapter-install.test.tsx`、`i18n/integration.ts`（删不再引用的 `integration.wizard.spawnTitle`）、`store/canvas/types.ts`（`arrangeNodes` 收 `direction`）、`apps/web/src/api/settings.ts`（PATCH 类型）、`tools/probes/canvas-tidy.mjs`；用户授权范围内改了 C1 的 `link-visual.ts`、`family.ts`、`tokens.css`，以及 `LinkEdge.tsx` 的颜色几行与 `Minimap.tsx`。
+- 协议号仍 1.23（契约 §50 写「自 1.24 起」，由最后合入的包统一改）；无数据库迁移。
+- 共享画布的成员读不了主机设置（`settings.get` 403），画布按缺省纵向、设置页不摆「布局方向」一行；core 侧放置照旧按主机设置。CI 的 `server-e2e`「成员打开共享画布没有任何 403」第一次就抓到了这一条，已修并本地复跑通过。
+- 浅色主题下黄色簇（`--node-color-3`）在白底上偏淡，是节点调色板本身的取值，本包没改。
+
+接口：
+
+- 共享：`LAYOUT_DIRECTION_CHOICES`、`LayoutDirection`、`DEFAULT_LAYOUT_DIRECTION`、`dispatchPlacement`、`PlacementBox`、`PLACEMENT_ROW_GAP / COLUMN_GAP / ATTEMPTS`；`CompletionSettings.canvas.layoutDirection`。
+- core：`placement(document, callerId, direction?)`、`layoutDirection()`、`NODE_FALLBACK_HEIGHT`。
+- 页面：`TidyOptions.direction`；`layoutDirection()`、`useLayoutDirection()`、`useLayoutDirectionSync()`、`tidyInDirection()`、`layoutDirectionOf()`；`spawnSubordinate`、`spawnPosition`、`buildSpawnItems`、`SpawnMenuItem`；`AddMenuContent` 的 `spawnFrom`；`NodeMenuItem.children / hint`；`useConnectEndSpawn`、`spawnSourceOf`；`linkColor`、`LINK_CONTEXT_COLOR`；`CLUSTER_PALETTE`；`minimapLinksFrom`、`MINIMAP_LINK_WIDTH`；`TidyButton`；`LayoutDirectionRow`。
+- 文案：`node.menu.spawn`、`node.menu.spawnFrom`（删 `node.menu.spawnAgent`、`wizard.*`、`integration.wizard.spawnTitle`）；`canvas.tidyVertical / tidyHorizontal`、`canvas.layoutDirection(.vertical / .horizontal)`。
+- token：`--link-context`。
+
 ## 注入只用 armadra 命名、清理不再认旧名（2026-10-09）
 
 用户要求：注入的 Hook 等一律用本产品独立的名称，不和别的工具混淆，也不兼容旧别名。

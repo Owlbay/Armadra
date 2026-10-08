@@ -17,20 +17,28 @@ import {
   type NodeMenuItem,
 } from "@/canvas/menus/node-menu";
 import { useCanvasStore } from "@/store/canvas-store";
-import { customAgentFor, permissionModeLabel } from "@/agent/launch";
-import { t } from "@/app/preferences-store";
+import {
+  agentRegistry,
+  customAgentFor,
+  permissionModeLabel,
+} from "@/agent/launch";
+import {
+  agentIsEnabled,
+  t,
+  usePreferencesStore,
+} from "@/app/preferences-store";
 import { openNodeAnnotation } from "@/meta/annotations";
 import { canUseAcp, driverOf, switchDriver } from "@/acp/driver";
 import { visibleNodeMenu } from "@/acp/simple-mode";
-import { openSpawnAgentWizard } from "@/acp/wizard-open";
+import { buildSpawnItems } from "@/canvas/menus/add-menu";
 import { openAgentSettings } from "./agent-settings";
 import { terminalHandle } from "./terminal-registry";
 
 /**
  * 终端节点的 Agent 专属右键菜单项（§3.2）。
  *
- * canvas 的注册表只支持平铺项（没有子菜单），所以「权限模式」摊成四条，
- * 当前模式那条置灰——这样一眼看得出现在是哪种模式，也不用再开一层。
+ * 「权限模式」摊成四条，当前模式那条置灰——这样一眼看得出现在是哪种模式；
+ * 「派生」是唯一的子菜单（注册表支持一层 `children`）。
  *
  * 切模式后必须重启：权限是启动行上的参数，改数据不改已经在跑的进程。
  */
@@ -62,14 +70,9 @@ export function registerTerminalNodeMenu(): () => void {
         icon: History,
         run: () => useCanvasStore.getState().setPanel("handoff", "drawer"),
       },
-      // 派生 Agent（ui-acp-refresh §2.3）：人替它做 `canvas open-agent --role
-      // supervises`——同一个向导，建好后连主从边、放在它右侧。
-      {
-        id: "agent.spawn",
-        label: t("node.menu.spawnAgent"),
-        icon: UserPlus,
-        run: () => openSpawnAgentWizard(node.id),
-      },
+      // 派生（ui-wave2 §6.2）：人替它做 `canvas open-agent`——选哪家就直接
+      // 建哪家的从，连主从边、按布局方向放，没有向导。
+      spawnItem(node.id, agent.id),
       // Agent 设置（设计 §10）：收件箱唤醒、从的投递、转录读取三项的唯一入口。
       {
         id: "agent.settings",
@@ -134,6 +137,41 @@ export function registerTerminalNodeMenu(): () => void {
     return visibleNodeMenu(items);
   });
   return dispose;
+}
+
+/** 「派生」：一层子菜单；一家可用的 Agent 都没有时整项置灰。 */
+function spawnItem(parentId: string, parentAgentId: string): NodeMenuItem {
+  const children = spawnChildren(parentId, parentAgentId);
+  return {
+    id: "agent.spawn",
+    label: t("node.menu.spawn"),
+    icon: UserPlus,
+    disabled: children.length === 0,
+    run: () => undefined,
+    children,
+  };
+}
+
+/** 「派生」子菜单：新建菜单里同一批 Agent，与父同一家的排第一。 */
+function spawnChildren(
+  parentId: string,
+  parentAgentId: string,
+): NodeMenuItem[] {
+  const modes = usePreferencesStore.getState().agentModes;
+  const agents = agentRegistry().filter((entry) =>
+    agentIsEnabled(modes[entry.id], entry.installed),
+  );
+  return buildSpawnItems(agents, t, parentId, parentAgentId).map((item) => {
+    const reason = item.disabledReason();
+    return {
+      id: item.id,
+      label: item.label,
+      icon: item.icon,
+      disabled: reason !== null,
+      ...(reason ? { hint: reason } : {}),
+      run: item.run,
+    };
+  });
 }
 
 /** 模块加载即注册一次；`TerminalNode` 以副作用方式引入本文件。 */
