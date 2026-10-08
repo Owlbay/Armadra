@@ -129,5 +129,6 @@ describe("currentFamilies", () => {
     expect(currentFamilies({ nodes, edges })).toBe(first);
     expect(currentFamilies({ nodes, edges: [] })).not.toBe(first);
     expect(currentFamilies(null).size).toBe(0);
+    expect(currentFamilies(null)).toBe(currentFamilies(undefined));
   });
 });

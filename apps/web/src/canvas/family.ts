@@ -118,6 +118,7 @@ export function familyOf(
 let lastNodes: readonly CanvasNode[] | undefined;
 let lastEdges: BoardDocument["edges"] | undefined;
 let lastFamilies = new Map<string, Family>();
+const NO_FAMILIES: Map<string, Family> = new Map();
 
 /**
  * 当前画布的 `familyOf`，按 `nodes` / `edges` 引用缓存：小地图与每一条派发线
@@ -126,7 +127,8 @@ let lastFamilies = new Map<string, Family>();
 export function currentFamilies(
   document: Pick<BoardDocument, "nodes" | "edges"> | null | undefined,
 ): Map<string, Family> {
-  if (!document) return new Map();
+  // 同一个空表：选择器每次返回新对象会让订阅者无限重渲。
+  if (!document) return NO_FAMILIES;
   if (document.nodes !== lastNodes || document.edges !== lastEdges) {
     lastNodes = document.nodes;
     lastEdges = document.edges;
