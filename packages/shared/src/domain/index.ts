@@ -15,3 +15,4 @@ export * from "./nodes.js";
 export * from "./boards.js";
 export * from "./workspaces.js";
 export * from "./agent-status.js";
+export * from "./placement.js";

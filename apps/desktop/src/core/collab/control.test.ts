@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type AgentFixture, agentFixture, callerFor } from "../agent/fixture";
 import { loadBoard } from "../canvas/documents";
+import { placement } from "./control/board";
 import { getContextLinks } from "../canvas/context-links";
 import { handleForNode } from "../canvas/handles";
 import { dependenciesOf } from "../dependencies/store";
@@ -131,7 +132,7 @@ describe("list", () => {
 });
 
 describe("the verbs that add a node", () => {
-  it("creates a terminal node to the right of the caller", async () => {
+  it("creates a terminal node under the caller (vertical layout by default)", async () => {
     const body = ok(await run(me, "open-terminal", { title: "Logs" }));
     const created = (body.result as { id: string }).id;
     const document = loadBoard(
@@ -139,10 +140,25 @@ describe("the verbs that add a node", () => {
       fixture.workspaceId,
       fixture.boardId,
     );
+    const caller = document.nodes.find((entry) => entry.id === me)!;
     const node = document.nodes.find((entry) => entry.id === created);
     expect(node?.type).toBe("terminal");
     expect(node?.title).toBe("Logs");
-    expect(node?.position.x).toBeGreaterThan(0);
+    // 契约 §50：纵向布局下放在调用者下面一行、左对齐。
+    expect(node?.position.x).toBe(caller.position.x);
+    expect(node?.position.y).toBeGreaterThan(caller.position.y);
+  });
+
+  it("places to the right of the caller in a horizontal layout", () => {
+    const document = loadBoard(
+      fixture.database,
+      fixture.workspaceId,
+      fixture.boardId,
+    );
+    const caller = document.nodes.find((entry) => entry.id === me)!;
+    const at = placement(document, me, "horizontal");
+    expect(at.y).toBe(caller.position.y);
+    expect(at.x).toBeGreaterThan(caller.position.x);
   });
 
   /**
@@ -169,8 +185,9 @@ describe("the verbs that add a node", () => {
     );
     const a = document.nodes.find((entry) => entry.id === first)!;
     const b = document.nodes.find((entry) => entry.id === second)!;
-    expect(a.position.x).toBe(b.position.x);
-    expect(Math.abs(b.position.y - a.position.y)).toBeGreaterThanOrEqual(600);
+    // 同一行依次排开（纵向布局），包围盒不相交。
+    expect(a.position.y).toBe(b.position.y);
+    expect(Math.abs(b.position.x - a.position.x)).toBeGreaterThanOrEqual(960);
   });
 
   /**
@@ -415,13 +432,13 @@ describe("team", () => {
       getContextLinks(fixture.database, summary).links.map((link) => link.id),
     ).toEqual(expect.arrayContaining([me, build, review]));
 
-    // 一列排开，不叠在一起。
-    const positions = [build, review, summary].map(
-      (id) => document.nodes.find((node) => node.id === id)?.position,
-    );
-    expect(
-      new Set(positions.map((point) => `${point?.x},${point?.y}`)).size,
-    ).toBe(3);
+    // 纵向布局（契约 §50）：成员同一行、x 递增；汇总在下一行、居中于成员。
+    const at = (id: string) =>
+      document.nodes.find((node) => node.id === id)!.position;
+    expect(at(build).y).toBe(at(review).y);
+    expect(at(review).x).toBeGreaterThan(at(build).x);
+    expect(at(summary).y).toBeGreaterThan(at(build).y);
+    expect(at(summary).x).toBe((at(build).x + at(review).x) / 2);
   });
 
   it("chains members so each waits for the one before it", async () => {
