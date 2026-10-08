@@ -17,6 +17,7 @@ import { commandKeysLabel } from "@/keybindings";
 import { useSshHosts } from "@/panels/settings/ssh-hosts";
 import { buildAddMenu, buildSpawnItems, type AddMenuContext } from "./add-menu";
 import { useDefaultDriverSync } from "@/acp/driver";
+import { usePrestartOnOpen } from "@/acp/api";
 import { useSimpleMode, visibleAddMenu } from "@/acp/simple-mode";
 
 /**
@@ -58,6 +59,7 @@ export function AddMenuContent({ ctx, kind, spawnFrom }: AddMenuContentProps) {
   // 两样都影响菜单：缺省驱动决定 Agent 项写什么，简洁模式决定留哪几项。
   const driver = useDefaultDriverSync();
   const simple = useSimpleMode();
+  usePrestartOnOpen(ctx.agents);
   const items = React.useMemo(
     () =>
       spawnFrom
