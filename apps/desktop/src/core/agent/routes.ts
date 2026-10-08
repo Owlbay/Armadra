@@ -18,9 +18,24 @@ import {
   historyTitle,
   DEFAULT_LIMIT,
 } from "../conversations";
-import { definition, baseAgent } from "./registry";
+import {
+  definition,
+  baseAgent,
+  customAgent,
+  stateSourceIsReported,
+  validAgentId,
+} from "./registry";
+import {
+  type LaunchVerdict,
+  configDirFor,
+  launchGate,
+  watchLaunch,
+} from "./launch-gate";
+import { failLaunch } from "../collab/send-queue";
+import { collab as assembledCollab } from "./index";
+import { writeReceipts } from "../collab/receipts";
 import { listAgents } from "./list";
-import { historyHint, loadSession } from "../collab/nodes";
+import { historyHint, loadNode, loadSession } from "../collab/nodes";
 import { listContextReads } from "../collab/context-reads";
 import {
   type ConfirmRequest,
@@ -38,6 +53,7 @@ import {
   jsonObject,
   notFound,
   optionalString,
+  requiredString,
 } from "../workspaces/support";
 import { answerApproval } from "./approvals";
 import { AmaCredentials, installAmaCredentialRoutes } from "./ama-credentials";
@@ -189,6 +205,30 @@ export function installRoutes(deps: AgentRouteDeps): void {
     "GET",
     "/api/agents",
     answered(() => ({ status: 200, body: operations.list() })),
+  );
+
+  /* ------------------------------ launch gate ----------------------------- */
+
+  // 启动闸门（契约 §52）。页面敲启动行之前申请一个位置，敲完之后问这一次起没
+  // 起来；两条都是长轮询。往别人起的节点里敲与往别人的终端里写同一档。
+  const launch = launchOperations(collab);
+  server.router.handle(
+    "POST",
+    "/api/agents/launch-slot",
+    answeredAsync(async (_match, request) => ({
+      status: 200,
+      body: await launch.slot(jsonObject(request.body)),
+    })),
+    { scope: "terminal:drive" },
+  );
+  server.router.handle(
+    "POST",
+    "/api/agents/launch-result",
+    answeredAsync(async (_match, request) => ({
+      status: 200,
+      body: await launch.result(jsonObject(request.body)),
+    })),
+    { scope: "terminal:drive" },
   );
 
   /* ------------------------------ agent status ---------------------------- */
@@ -618,6 +658,103 @@ function agentOperations(collab: CollabContext) {
           ? Math.min(count, MAX_CONTEXT_READS)
           : DEFAULT_CONTEXT_READS,
       );
+    },
+  };
+}
+
+/* ------------------------------- launch gate ------------------------------ */
+
+/** 节点在体里写的工作空间上（还没落库的新节点认不出在哪，不算越界）。 */
+function launchTarget(
+  collab: CollabContext,
+  body: Record<string, unknown>,
+): { nodeId: string; agentId: string } {
+  const workspaceId = requiredString(body, "workspaceId");
+  const nodeId = requiredString(body, "nodeId");
+  const agentId = requiredString(body, "agentId");
+  if (!validAgentId(agentId)) throw badRequest("agentId is not an agent");
+  const node = loadNode(collab.database, nodeId);
+  if (node !== undefined && node.workspaceId !== workspaceId) {
+    throw notFound("This node is not in that workspace");
+  }
+  return { nodeId, agentId };
+}
+
+/**
+ * `launch-slot` 与 `launch-result`（界面第二波 §8.2–§8.3）。
+ *
+ * 结果只看两样：shell 下面还有没有进程、节点报没报过状态。屏幕正文不读，答复里
+ * 也没有任何终端输出。
+ */
+export function launchOperations(
+  collab: CollabContext,
+  options: {
+    readonly watch?: Partial<Parameters<typeof watchLaunch>[0]>;
+    /**
+     * 终端桥：装配时还没有（终端域后装），每次现取。缺省读运行中的协作上下文，
+     * 再退回 `collab` 自己带的那个。
+     */
+    readonly terminals?: () => CollabContext["terminals"];
+  } = {},
+) {
+  const terminalsNow =
+    options.terminals ??
+    (() => assembledCollab()?.terminals ?? collab.terminals);
+  const database = collab.database;
+  const keyOf = (agentId: string) => {
+    const base = baseAgent(collab.settings, agentId);
+    const env = customAgent(collab.settings, agentId)?.env ?? {};
+    return {
+      agentId: base,
+      configDir: configDirFor(base, { ...process.env, ...env }),
+    };
+  };
+  return {
+    slot: async (body: Record<string, unknown>) => {
+      const { nodeId, agentId } = launchTarget(collab, body);
+      return launchGate().acquire({ ...keyOf(agentId), nodeId });
+    },
+
+    result: async (
+      body: Record<string, unknown>,
+    ): Promise<{ verdict: LaunchVerdict; settled: number }> => {
+      const { nodeId } = launchTarget(collab, body);
+      const attempt = body.attempt === undefined ? 1 : Number(body.attempt);
+      if (!Number.isInteger(attempt) || attempt < 1 || attempt > 9) {
+        throw badRequest("attempt must be a small positive integer");
+      }
+      const since = Date.now();
+      const reported = () => {
+        const status = getAgentStatus(database, nodeId);
+        if (status === undefined || status.restored === true) return false;
+        if (!stateSourceIsReported(status.stateSource)) return false;
+        const at = Date.parse(status.lastEventAt ?? "");
+        return Number.isFinite(at) && at >= since - 1_000;
+      };
+      const verdict = await watchLaunch({
+        probe: async () => {
+          const terminals = terminalsNow();
+          const session = loadSession(database, nodeId);
+          if (terminals === undefined || session === undefined)
+            return undefined;
+          const foreground = await terminals.foreground(session.sessionId);
+          // 答不出前台命令的后端（会话宿主）也答不出子进程：不猜。
+          if (foreground?.command === undefined) return undefined;
+          return (foreground.children ?? []).length > 0 ? "busy" : "idle";
+        },
+        reported,
+        ...options.watch,
+      });
+      let settled = 0;
+      if (verdict === "failed") {
+        launchGate().release(nodeId);
+        // 自动重试过一次还是没起来：排在它前面的不再等满五分钟。
+        if (attempt >= 2) {
+          settled = failLaunch(database, nodeId);
+          if (settled > 0) writeReceipts(collab, nowSeconds(collab));
+        }
+      }
+      return { verdict, settled };
     },
   };
 }

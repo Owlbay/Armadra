@@ -924,24 +924,21 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
-  {
-    path: "/api/agents/{agentId}/integration/install",
-    methods: ["POST"],
-    surface: "runtime",
-    implemented: true,
-  },
-  {
-    path: "/api/agents/{agentId}/integration/uninstall",
-    methods: ["POST"],
-    surface: "runtime",
-    implemented: true,
-  },
-  {
-    path: "/api/agents/{agentId}/integration/repair",
-    methods: ["POST"],
-    surface: "runtime",
-    implemented: true,
-  },
+  // 集成的三个动作与启动闸门（契约 §52）：都只收 POST。
+  ...[
+    "/api/agents/{agentId}/integration/install",
+    "/api/agents/{agentId}/integration/uninstall",
+    "/api/agents/{agentId}/integration/repair",
+    "/api/agents/launch-slot",
+    "/api/agents/launch-result",
+  ].map(
+    (path): RouteEntry => ({
+      path,
+      methods: ["POST"],
+      surface: "runtime",
+      implemented: true,
+    }),
+  ),
   {
     path: "/api/agent-status/{nodeId}/read",
     methods: ["POST"],

@@ -382,3 +382,49 @@ export type AmaCredentialStatus = z.infer<typeof amaCredentialStatusSchema>;
 export const amaCredentialRequestSchema = z.object({
   apiKey: z.string().min(1),
 });
+
+/* ------------------------------- launch gate ------------------------------ */
+
+/**
+ * `POST /api/agents/launch-slot` 与 `POST /api/agents/launch-result` 的入参
+ * （契约 §52）：节点在哪块画布、要起哪家。
+ */
+export const launchSlotRequestSchema = z.object({
+  workspaceId: z.string().min(1),
+  nodeId: z.string().min(1),
+  agentId: z.string().min(1),
+});
+export type LaunchSlotRequest = z.infer<typeof launchSlotRequestSchema>;
+
+/**
+ * 长轮询 ≤ 30 s。`granted: false` 是等满上限没轮到（或被同一节点的新申请顶掉）：
+ * 闸门只是减速带，页面照常敲启动行。
+ */
+export const launchSlotResponseSchema = z.object({
+  granted: z.boolean(),
+  waitedMs: z.number(),
+});
+export type LaunchSlotResponse = z.infer<typeof launchSlotResponseSchema>;
+
+export const launchResultRequestSchema = launchSlotRequestSchema.extend({
+  /** 第几次敲（自动重试那一次是 2）。第二次仍失败时 core 结算排给它的队列。 */
+  attempt: z.number().int().min(1).max(9),
+});
+export type LaunchResultRequest = z.infer<typeof launchResultRequestSchema>;
+
+export const LAUNCH_VERDICTS = ["started", "failed", "unknown"] as const;
+export type LaunchVerdict = (typeof LAUNCH_VERDICTS)[number];
+
+/**
+ * 长轮询 ≤ 30 s：`started` 报过状态或看满窗口仍在跑；`failed` 窗口内 CLI 退出
+ * 且一条状态都没报；`unknown` 这个终端后端答不出前台。`settled` 是这次结算掉
+ * 的排队条数（原因 `launch_failed`）。
+ */
+export const launchResultResponseSchema = z.object({
+  verdict: z.enum(LAUNCH_VERDICTS),
+  settled: z.number(),
+});
+export type LaunchResultResponse = z.infer<typeof launchResultResponseSchema>;
+
+/** `wait --task` 在成员启动失败时答的 `reason`（契约 §52）。 */
+export const LAUNCH_FAILED_REASON = "launch_failed";

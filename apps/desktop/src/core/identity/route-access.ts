@@ -117,6 +117,8 @@ const ACP_SESSION = /^\/api\/acp\/sessions\/([^/]+)\/[^/]+$/;
 /** 驱动切换：按节点查画布。 */
 const ACP_DRIVER = /^\/api\/acp\/nodes\/([^/]+)\/driver$/;
 const CONFIRM = /^\/api\/control\/confirm\/([^/]+)$/;
+/** 启动闸门（契约 §52）：体里的工作空间与节点。 */
+const LAUNCH_GATE = /^\/api\/agents\/launch-(slot|result)$/;
 /** 工作流（契约 §15.2–§15.3）：路径里没有工作空间，按草案 / 运行 / 画板查。 */
 const WORKFLOW_TEMPLATES = /^\/api\/workflows\/templates(\/[^/]+)?$/;
 const WORKFLOW_DRAFTS = /^\/api\/workflows\/drafts$/;
@@ -382,6 +384,19 @@ export function createRouteGuard(options: RouteAccessOptions): RouteGuard {
         lookups.nodeOwner(nodeId),
         "terminal:drive",
         lookups.nodeWorkspace(nodeId),
+      );
+    }
+
+    // 启动闸门（契约 §52）：只是给即将敲进节点终端的那一行排个队。自己的节点
+    // operator 就够，别人的与往别人的终端里写同一档（`terminal:drive`）。
+    if (LAUNCH_GATE.test(path) && method === "POST") {
+      const workspaceId = bodyWorkspace(request);
+      if (workspaceId === "" || foreignNode(request, workspaceId)) return DENY;
+      return ownOrOthers(
+        subject,
+        lookups.nodeOwner(bodyString(request, "nodeId")),
+        "terminal:drive",
+        workspaceId,
       );
     }
 
