@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("../../../api/client", () => ({ runtimeApi: {} }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
-import { parseHostForm } from "./SshPage";
-import { parseAgentForm, parseEnvText } from "./AgentPage";
+import { parseHostForm } from "./MachinesPage";
+import { parseAgentForm, parseEnvText } from "./CustomAgentsPage";
 
 describe("parseHostForm", () => {
   const empty = {

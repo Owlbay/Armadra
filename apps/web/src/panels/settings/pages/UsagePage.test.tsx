@@ -37,7 +37,7 @@ vi.mock("../../../api/client", () => ({
 
 import { TestProviders, installDomPolyfills } from "../../../app/test-harness";
 import { usePreferencesStore } from "../../../app/preferences-store";
-import { AccountPage } from "./AccountPage";
+import { UsagePage } from "./UsagePage";
 
 installDomPolyfills();
 afterEach(cleanup);
@@ -56,7 +56,7 @@ const builtInCatalog = {
   models: [],
 };
 
-describe("AccountPage usage controls", () => {
+describe("UsagePage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     usePreferencesStore.setState({ locale: "zh-CN" });
@@ -73,7 +73,7 @@ describe("AccountPage usage controls", () => {
   it("暂停查询时不会把空快照显示成凭据丢失", async () => {
     render(
       <TestProviders>
-        <AccountPage />
+        <UsagePage />
       </TestProviders>,
     );
     await screen.findByText("已暂停用量查询");
@@ -94,7 +94,7 @@ describe("AccountPage usage controls", () => {
     );
     render(
       <TestProviders>
-        <AccountPage />
+        <UsagePage />
       </TestProviders>,
     );
     await screen.findByText("已暂停用量查询");
@@ -116,7 +116,7 @@ describe("AccountPage usage controls", () => {
     });
     render(
       <TestProviders>
-        <AccountPage />
+        <UsagePage />
       </TestProviders>,
     );
     const codex = await screen.findByRole("switch", { name: "Codex" });
@@ -148,7 +148,7 @@ describe("AccountPage usage controls", () => {
     updateSettings.mockResolvedValue({ usage: { claudeUsage: true } });
     render(
       <TestProviders>
-        <AccountPage />
+        <UsagePage />
       </TestProviders>,
     );
     const claude = await screen.findByRole("switch", { name: "Claude" });
@@ -163,11 +163,8 @@ describe("AccountPage usage controls", () => {
     ).toBe("false");
     expect(screen.getByText(/可能违反 Anthropic 条款/)).toBeTruthy();
     expect(screen.getByText(/可能违反 Copilot 条款/)).toBeTruthy();
-    // 政策关着时不能开始 Copilot 登录。
-    expect(
-      (screen.getByRole("button", { name: "登录" }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(true);
+    // Copilot 登录在「凭据与密钥」，这一页不再有。
+    expect(screen.queryByRole("button", { name: "登录" })).toBeNull();
     fireEvent.click(claude);
     await waitFor(() =>
       expect(updateSettings).toHaveBeenCalledWith({
@@ -183,7 +180,7 @@ describe("AccountPage usage controls", () => {
     updateSettings.mockResolvedValue({ usage: { claudeUsage: false } });
     render(
       <TestProviders>
-        <AccountPage />
+        <UsagePage />
       </TestProviders>,
     );
     const claude = await screen.findByRole("switch", { name: "Claude" });
@@ -206,7 +203,7 @@ describe("AccountPage usage controls", () => {
     updateSettings.mockResolvedValue({});
     render(
       <TestProviders>
-        <AccountPage />
+        <UsagePage />
       </TestProviders>,
     );
     const badges = await screen.findByRole("switch", { name: "服务状态徽标" });
@@ -236,7 +233,7 @@ describe("AccountPage usage controls", () => {
     updateSettings.mockResolvedValue({});
     render(
       <TestProviders>
-        <AccountPage />
+        <UsagePage />
       </TestProviders>,
     );
     const toggle = await screen.findByRole("switch", {
@@ -265,7 +262,7 @@ describe("AccountPage usage controls", () => {
     usePreferencesStore.setState({ locale: "en" });
     render(
       <TestProviders>
-        <AccountPage />
+        <UsagePage />
       </TestProviders>,
     );
     const toggle = await screen.findByRole("switch", {
@@ -298,7 +295,7 @@ describe("AccountPage usage controls", () => {
     });
     render(
       <TestProviders>
-        <AccountPage />
+        <UsagePage />
       </TestProviders>,
     );
     await screen.findByText(
@@ -317,79 +314,13 @@ describe("AccountPage usage controls", () => {
     updateSettings.mockResolvedValue({ usage: { refreshMinutes: 0 } });
     render(
       <TestProviders>
-        <AccountPage />
+        <UsagePage />
       </TestProviders>,
     );
     // Radix Select 在 jsdom 里不好驱动，所以直接断言它读到的当前值，
-    // 保存路径由下面的 Copilot 用例覆盖同一条 `save.mutate`。
+    // 保存路径与其他开关是同一条 `save.mutate`。
     await screen.findByText("每 5 分钟");
     expect(screen.getByText("刷新节奏")).toBeTruthy();
-  });
-
-  it("Copilot 登录显示用户码，且不显示任何 device code", async () => {
-    getSettings.mockResolvedValue({
-      usage: { enabled: true, copilotUsage: true },
-    });
-    copilotLogin.mockResolvedValue({
-      signedIn: false,
-      backend: "keychain",
-      pending: {
-        userCode: "WDJB-MJHT",
-        verificationUri: "https://github.com/login/device",
-        intervalSeconds: 5,
-        expiresAt: "2099-01-01T00:00:00Z",
-      },
-    });
-    render(
-      <TestProviders>
-        <AccountPage />
-      </TestProviders>,
-    );
-    const signIn = await screen.findByRole("button", { name: "登录" });
-    await waitFor(() =>
-      expect((signIn as HTMLButtonElement).disabled).toBe(false),
-    );
-    fireEvent.click(signIn);
-    await screen.findByText("WDJB-MJHT");
-    expect(screen.getByText(/github\.com\/login\/device/)).toBeTruthy();
-    // 登录进行中按钮变成登出的前提是已登录；这里还没有。
-    expect(screen.queryByRole("button", { name: "登出" })).toBeNull();
-  });
-
-  it("Copilot 一行只说令牌存在哪儿", async () => {
-    getSettings.mockResolvedValue({ usage: { enabled: true } });
-    copilotAuth.mockResolvedValue({ signedIn: true, backend: "dpapi" });
-    render(
-      <TestProviders>
-        <AccountPage />
-      </TestProviders>,
-    );
-    await screen.findByText("令牌经 Windows DPAPI 加密保存。");
-    expect(
-      screen.queryByText(
-        "本平台没有可用的钥匙串，令牌存在权限 0600 的文件里。",
-      ),
-    ).toBeNull();
-  });
-
-  it("已登录时提供登出，文件后端会说明这是降级", async () => {
-    getSettings.mockResolvedValue({ usage: { enabled: true } });
-    copilotAuth.mockResolvedValue({ signedIn: true, backend: "file" });
-    copilotLogout.mockResolvedValue({ signedIn: false, backend: "file" });
-    render(
-      <TestProviders>
-        <AccountPage />
-      </TestProviders>,
-    );
-    const signOut = await screen.findByRole("button", { name: "登出" });
-    await waitFor(() =>
-      expect((signOut as HTMLButtonElement).disabled).toBe(false),
-    );
-    fireEvent.click(signOut);
-    await waitFor(() => expect(copilotLogout).toHaveBeenCalledTimes(1));
-    expect(
-      screen.getByText("本平台没有可用的钥匙串，令牌存在权限 0600 的文件里。"),
-    ).toBeTruthy();
   });
 
   it("价格来源写明是谁的价格，更新失败也不换掉正在用的那份", async () => {
@@ -404,7 +335,7 @@ describe("AccountPage usage controls", () => {
     });
     render(
       <TestProviders>
-        <AccountPage />
+        <UsagePage />
       </TestProviders>,
     );
     await screen.findByText("models.dev（本地缓存）");

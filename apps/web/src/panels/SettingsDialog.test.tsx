@@ -366,38 +366,48 @@ describe("SettingsDialog", () => {
     expect(page().dataset.section).toBe("about");
   });
 
-  it("Agent 三态写进偏好", async () => {
+  it("Agent CLI 一家一行，三态写进偏好", async () => {
     open();
-    fireEvent.click(navItem(zh("settings.section.customAgents")));
-    const group = await screen.findByRole("radiogroup", {
-      name: "Claude Code",
+    fireEvent.click(navItem(zh("settings.section.agents")));
+    const trigger = await screen.findByRole("combobox", {
+      name: `Claude Code ${zh("agents.row.mode")}`,
     });
-
-    fireEvent.click(
-      within(group).getByRole("radio", {
-        name: zh("settings.agentMode.disabled"),
-      }),
-    );
+    const choose = (option: string) => {
+      fireEvent.pointerDown(
+        screen.getByRole("combobox", {
+          name: `Claude Code ${zh("agents.row.mode")}`,
+        }),
+        { button: 0, ctrlKey: false, pointerType: "mouse" },
+      );
+      fireEvent.click(screen.getByRole("option", { name: option }));
+    };
+    expect(trigger).toBeTruthy();
+    choose(zh("settings.agentMode.disabled"));
     expect(usePreferencesStore.getState().agentModes.claude).toBe("disabled");
+    // 禁用时行上一枚「已禁用」，动作仍是三态，好改回来。
+    expect(await screen.findByText(zh("agents.state.disabled"))).toBeTruthy();
 
     // 回到「默认」不落键：将来改默认策略时老配置跟着走。
-    fireEvent.click(
-      within(group).getByRole("radio", {
-        name: zh("settings.agentMode.default"),
-      }),
-    );
+    choose(zh("settings.agentMode.default"));
     expect(usePreferencesStore.getState().agentModes.claude).toBeUndefined();
   });
 
   /**
-   * 集成页（ui-acp-refresh §1）：一家一张分组，画布注入一行说清哪一半没生成；
-   * 旧残留收在「修复 N」里，看过清单再修。没有「安装 / 卸载」，只有「重新生成」。
+   * Agent CLI 子页（§2.5）：画布注入一行说清哪一半没生成；本产品旧版本的残留
+   * 收在「清理旧版 N」里，看过清单再清。没有「安装 / 卸载」，只有「重新生成」。
    */
-  it("集成页一家一张分组：注入缺哪一半、旧残留与重新生成", async () => {
+  it("Agent CLI 子页：注入缺哪一半、旧残留与重新生成", async () => {
     open();
     fireEvent.click(navItem(zh("settings.section.agents")));
-    // 「修复 N」也是「Runtime 真的答了这一组」的证据：`GET /api/agents` 那份
-    // 兜底报不出残留，所以等它出现就等于等接口落地。
+    // 技能没生成：主表这一行是「需更新」，动作是「更新」。
+    expect(
+      await screen.findByText(zh("agents.state.updateNeeded")),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Claude Code/ }));
+    expect(screen.getByTestId("settings-heading").textContent).toBe(
+      "Claude Code",
+    );
+    expect(usePreferencesStore.getState().settingsSubpage).toBe("cli:claude");
     fireEvent.click(
       await screen.findByRole("button", {
         name: zh("integration.action.repair").replace("{count}", "1"),
@@ -415,9 +425,22 @@ describe("SettingsDialog", () => {
     expect(uninstallAgentIntegration).not.toHaveBeenCalled();
   });
 
-  it("「修复」按 found / removed / kept / backup 报结果", async () => {
+  it("主表的「更新」就是重新生成注入产物", async () => {
     open();
     fireEvent.click(navItem(zh("settings.section.agents")));
+    fireEvent.click(
+      await screen.findByRole("button", { name: zh("agents.action.update") }),
+    );
+    await waitFor(() =>
+      expect(installAgentIntegration).toHaveBeenCalledWith("claude"),
+    );
+  });
+
+  it("「清理」按 found / removed / kept / backup 报结果", async () => {
+    usePreferencesStore.setState({ settingsSubpage: null });
+    open();
+    fireEvent.click(navItem(zh("settings.section.agents")));
+    fireEvent.click(await screen.findByRole("button", { name: /Claude Code/ }));
     fireEvent.click(
       await screen.findByRole("button", {
         name: zh("integration.action.repair").replace("{count}", "1"),
@@ -431,13 +454,14 @@ describe("SettingsDialog", () => {
     );
   });
 
-  it("本机服务页带着数据目录、大小与对话数", async () => {
+  it("本机服务页带着数据目录与大小，会话页带着条数", async () => {
     open();
     fireEvent.click(navItem(zh("settings.section.service")));
     expect(await screen.findByText("/tmp/armadra")).toBeTruthy();
     expect(screen.getByText("2 KB")).toBeTruthy();
+    fireEvent.click(navItem(zh("settings.section.sessions")));
     expect(
-      screen.getByText(
+      await screen.findByText(
         zh("settings.conversationCount").replace("{value}", "12"),
       ),
     ).toBeTruthy();
