@@ -9,7 +9,7 @@
 //   3. 第三个上下文（同样只信 CA、Cookie 不共享）兑换邀请注册成员，读得到被
 //      共享的画布、写被拒、`/api/gateway` 403；
 //   4. 「从页面开关」（G2-7）：无头 Chrome 打开网页配对链接，页面自己配对成
-//      owner；后台服务页里有 CA 安装引导、对外服务开着、二维码里是同一个来源、
+//      owner；设备与会话页里有 CA 安装引导与已配对设备，远程访问页里局域网直连开着、二维码里是同一个来源、
 //      已配对设备表里有这台；在页面上点开关关掉 Gateway，回环上读到已关，
 //      再从回环打开继续后面的步骤；
 //   4b. 「手机页输入配对码」（契约 §24）：设置页的配对卡上有 8 位配对码；独立
@@ -455,23 +455,32 @@ async function fromThePage(base, origin) {
     guide,
   );
 
-  const qr = await page.waitFor(
-    `return document.querySelector('[role="switch"][aria-label="对外服务"]')
-       ?.getAttribute("aria-checked") === "true"
-       && document.querySelector("svg[data-qr-text]")?.getAttribute("data-qr-text");`,
-    { what: "对外服务开着、二维码出来" },
-  );
-  check(
-    typeof qr === "string" && qr.startsWith(`${origin}/#pair=`),
-    "页面上的二维码是这个 Gateway 的配对链接",
-    String(qr).slice(0, 48),
-  );
+  // 配对链接打开到「设备与会话」：这台设备的登录与已配对设备在这一页。
   await page.waitFor(
     `return [...document.querySelectorAll("table td")]
        .some((cell) => cell.innerText.includes("Gateway 配对"));`,
     { what: "已配对设备表里有这台" },
   );
   step("已配对设备表里有这台");
+  await page.evaluate(
+    `document.querySelector("table")?.scrollIntoView({ block: "center" }); return true;`,
+  );
+  await sleep(300);
+  await page.capture("gateway-page-devices");
+
+  // 开关与配对码在「远程访问 → 局域网直连」。
+  await page.click('nav button[aria-label="远程访问"]');
+  const qr = await page.waitFor(
+    `return document.querySelector('[role="switch"][aria-label="局域网直连"]')
+       ?.getAttribute("aria-checked") === "true"
+       && document.querySelector("svg[data-qr-text]")?.getAttribute("data-qr-text");`,
+    { what: "局域网直连开着、二维码出来" },
+  );
+  check(
+    typeof qr === "string" && qr.startsWith(`${origin}/#pair=`),
+    "页面上的二维码是这个 Gateway 的配对链接",
+    String(qr).slice(0, 48),
+  );
   const shownCode = await page.waitFor(
     `return document.querySelector("[data-pairing-code]")?.textContent ?? null;`,
     { what: "配对卡上的配对码" },
@@ -482,13 +491,8 @@ async function fromThePage(base, origin) {
     String(shownCode),
   );
   await page.capture("gateway-page-on");
-  await page.evaluate(
-    `document.querySelector("table")?.scrollIntoView({ block: "center" }); return true;`,
-  );
-  await sleep(300);
-  await page.capture("gateway-page-devices");
 
-  await page.click('[role="switch"][aria-label="对外服务"]');
+  await page.click('[role="switch"][aria-label="局域网直连"]');
   let after = null;
   for (let attempt = 0; attempt < 50; attempt += 1) {
     after = JSON.parse((await local(base, "GET", "/api/gateway")).body);
@@ -497,7 +501,7 @@ async function fromThePage(base, origin) {
   }
   check(
     after && !after.enabled && !after.running,
-    "在页面上点开关关掉对外服务（PUT 经 Gateway 自己）",
+    "在页面上点开关关掉局域网直连（PUT 经 Gateway 自己）",
   );
   report.page = "ok";
 

@@ -654,18 +654,18 @@ try {
     await settingsNav("远程访问");
     await page.until(
       `return document.querySelector('[role="dialog"]')?.innerText.includes("本页经此连接")`,
-      "远程服务页标出页面正走的中继",
+      "远程访问页标出页面正走的中继",
       { timeout: 30_000 },
     );
   };
   await openRemoteSettings();
   const shareSwitch = await page.evaluate(
-    `const s = document.querySelector('[role="dialog"] [role="switch"][aria-label="分享本机"]');
+    `const s = document.querySelector('[role="dialog"] [role="switch"][aria-label="经中转"]');
      return s ? { on: s.getAttribute("aria-checked"), disabled: s.disabled } : null;`,
   );
   run.check(
     shareSwitch?.on === "true" && shareSwitch.disabled === true,
-    "远程服务页：正走的中继标「本页经此连接」，分享本机开着且不给停",
+    "远程访问页：正走的中继标「本页经此连接」，经中转开着且不给停",
     shareSwitch,
   );
   await run.shot(page, "06-settings-remote-1440-light");
@@ -695,7 +695,7 @@ try {
   await sleep(1_000);
   await page.until(
     `return document.querySelector('[role="dialog"]')?.innerText.includes("本页经此连接")`,
-    "窄屏远程服务页",
+    "窄屏远程访问页",
     { timeout: 15_000 },
   );
   await run.shot(page, "06-settings-remote-390-dark");

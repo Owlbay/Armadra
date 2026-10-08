@@ -327,7 +327,7 @@ import { Toaster } from "./ui/sonner";
 import { useCanvasStore } from "./store/canvas-store";
 import { useGithubSession } from "./host/github-session";
 import { GithubDrawer } from "./panels/github/GithubDrawer";
-import { GithubPage } from "./panels/settings/pages/GithubPage";
+import { ForgePage } from "./panels/settings/pages/ForgePage";
 
 const [summary] = await runtimeApi.listWorkspaces();
 const workspace = await runtimeApi.openWorkspace(summary!.id);
@@ -354,7 +354,7 @@ createRoot(document.getElementById("root")!).render(
       <div className="h-screen bg-background text-foreground">
         {view === "settings" ? (
           <div className="mx-auto flex max-w-2xl flex-col gap-4 p-6">
-            <GithubPage />
+            <ForgePage />
           </div>
         ) : (
           <GithubDrawer />

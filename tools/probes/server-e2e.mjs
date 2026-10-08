@@ -353,14 +353,14 @@ await h.run(async () => {
     await admin.settle();
     const paired = await admin
       .waitFor(`return document.body.innerText.includes("服务所有者");`, {
-        what: "配对完成（后台服务页出现「服务所有者」）",
+        what: "配对完成（设备与会话页出现「服务所有者」）",
         timeout: 30_000,
       })
       .then(
         () => true,
         async (error) => {
           // 留下页面、接口应答与服务器输出，看得出是没连上、配对被拒，还是
-          // 页面没走到后台服务页。
+          // 页面没走到设备与会话页。
           await admin
             .capture(`01-admin-pairing-failed-${attempt}`)
             .catch(() => undefined);

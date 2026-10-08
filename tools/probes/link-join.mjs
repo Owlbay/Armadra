@@ -3,7 +3,7 @@
 // owner 在桌面页面（真 Electron）里生成链接，第二个浏览器上下文（另一台「设备」：独立
 // profile、Cookie 不共享）打开 `/j/<id>#…`，加入后看见画布。量步数与耗时。
 //
-//   owner（桌面页面）：设置 → 远程访问 → 行下的分享区：打开「分享本机」→ 新建链接 → 选
+//   owner（桌面页面）：设置 → 远程访问 → 经中转：打开开关 → 新建链接 → 选
 //                      工作空间 → 新建，从二维码对话框读出地址；每一次点击都计数；
 //                      之后在列表里再复制、再开二维码（契约 §33.9：整条链接存在本机）；
 //   访客（浏览器）：    打开链接（一次导航）→ 落地页点「加入」→ 进画布、看见节点；
@@ -147,7 +147,7 @@ try {
     (boardId) => [sticky(boardId)],
   );
   const stickyId = seeded.nodes[0].id;
-  // 远程服务的卡片是「分享本机」的入口；添加（口令、指纹核对）不在计步范围内。
+  // 中转账号是「经中转」分享本机的前提；添加（口令、指纹核对）不在计步范围内。
   await core.rpc("sources.remoteAdd", {
     kind: "personal",
     issuer: relay.issuer,
@@ -172,10 +172,10 @@ try {
     "远程访问",
     "button, a, [role=tab], [role=link]",
   );
-  // 分享区在远程服务行下直接展开：开关「分享本机」。
+  // 远程访问页首「让别的设备访问本机 → 经中转」：开关就是分享本机。
   await ownerClick(
-    ["分享本机", "Share this machine"],
-    "分享本机开关",
+    ["经中转", "Via relay"],
+    "经中转开关",
     'button[role="switch"]',
   );
   await win.until(
