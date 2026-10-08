@@ -204,7 +204,11 @@ export function TerminalNode({ id, node, selected, collapsed }: NodeBodyProps) {
   }, [id, driver]);
 
   // 胶囊 / 光晕的映射表在 status-store：会话侧栏与子代理卡片读同一张表。
-  const header = agent ? agentHeaderState(agentStatus) : {};
+  // 启动失败（契约 §52：自动重试一次之后仍没起来）压过上报的状态：此时节点上
+  // 没有在跑的 CLI，任何上报都是上一代的。
+  const launchFailed =
+    Boolean(agent) && driver === "terminal" && surface.launch === "failed";
+  const header = agent && !launchFailed ? agentHeaderState(agentStatus) : {};
 
   // 审批答复是替 Agent 代答（设计 S5）：服务器壳上这块画布的 driver、以及
   // 终端是自己起的 operator 答得了（契约 §23），别人看得见「在等审批」，但不
@@ -374,6 +378,14 @@ export function TerminalNode({ id, node, selected, collapsed }: NodeBodyProps) {
         ["idle", "exited", "failed"].includes(surface.connection) && (
           <ManualRunButton nodeId={id} />
         )}
+      {launchFailed && !exited && (
+        <IconButton
+          label={t("agent.launch.retry")}
+          onClick={() => surfaceRef.current?.restart()}
+        >
+          <RotateCw />
+        </IconButton>
+      )}
       {(exited || surface.hibernation === "failed") && (
         <IconButton
           label={t("terminal.rerun")}
@@ -546,14 +558,16 @@ export function TerminalNode({ id, node, selected, collapsed }: NodeBodyProps) {
       <NodeShell
         node={node}
         selected={selected}
-        {...(header.pill
-          ? {
-              status: {
-                tone: header.pill.tone,
-                label: t(header.pill.labelKey),
-              },
-            }
-          : {})}
+        {...(launchFailed
+          ? { status: { tone: "failed", label: t("agent.launch.failed") } }
+          : header.pill
+            ? {
+                status: {
+                  tone: header.pill.tone,
+                  label: t(header.pill.labelKey),
+                },
+              }
+            : {})}
         {...(header.glow ? { glow: header.glow } : {})}
         {...(approval ? { approval } : {})}
         {...(agent && !exited && !simple

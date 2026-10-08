@@ -12,6 +12,20 @@ export const LAUNCH_QUIET_MS = 400;
 export const LAUNCH_COLD_MS = 3_000;
 export const LAUNCH_PROMPT_MS = 600;
 
+/**
+ * 启动闸门与失败重试（契约 §52、界面第二波 §8.3）。
+ *
+ *  - 敲启动行前向 core 申请位置，最多等 SLOT_WAIT_MS（core 自己 30 s 就答）；
+ *  - 敲完问结果，失败就在 RETRY_MIN–RETRY_MAX 之间随机退避后再敲一次；
+ *  - 第二次仍失败：节点头显示「启动失败」与重试按钮，不再自动重敲。
+ */
+export const LAUNCH_SLOT_WAIT_MS = 32_000;
+export const LAUNCH_RESULT_WAIT_MS = 35_000;
+export const LAUNCH_RETRY_MIN_MS = 2_000;
+export const LAUNCH_RETRY_MAX_MS = 5_000;
+/** 自动重试之后的总次数。 */
+export const LAUNCH_ATTEMPTS = 2;
+
 /** 尺寸去抖（§15.7 / §18.2 规则 2）。 */
 export const RESIZE_DEBOUNCE_MS = 80;
 

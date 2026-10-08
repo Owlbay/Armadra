@@ -25,6 +25,12 @@ import {
   importAssetRequestSchema,
   integrationRepairReportSchema,
   integrationStateSchema,
+  launchResultRequestSchema,
+  launchResultResponseSchema,
+  launchSlotRequestSchema,
+  launchSlotResponseSchema,
+  type LaunchResultRequest,
+  type LaunchSlotRequest,
   suggestTitleResponseSchema,
   agentTranscriptSchema,
   uploadAssetRequestSchema,
@@ -59,7 +65,24 @@ export const agentsApiFor = (rpc: (source?: Source) => ArmadraClient) => ({
       ManualRunResponseSchema,
       { method: "POST", ...json(body) },
     ),
-  /* --------------------------------- Agent 协作 -------------------------- */
+  /* --------------------------------- 启动闸门 ---------------------------- */
+  /**
+   * 敲启动行之前排队（契约 §52）。长轮询 ≤ 30 s；`granted: false` 或请求失败时
+   * 页面照常敲。
+   */
+  launchSlot: (body: LaunchSlotRequest, signal?: AbortSignal) =>
+    request("/api/agents/launch-slot", launchSlotResponseSchema, {
+      method: "POST",
+      ...json(launchSlotRequestSchema.parse(body)),
+      ...(signal ? { signal } : {}),
+    }),
+  /** 敲完之后问这一次起没起来（契约 §52）。长轮询 ≤ 30 s。 */
+  launchResult: (body: LaunchResultRequest, signal?: AbortSignal) =>
+    request("/api/agents/launch-result", launchResultResponseSchema, {
+      method: "POST",
+      ...json(launchResultRequestSchema.parse(body)),
+      ...(signal ? { signal } : {}),
+    }),
 
   /* --------------------------------- Agent 协作 -------------------------- */
   /** 投递记录（§5.7 第 10 条）。只有元数据，正文从来不落盘。 */

@@ -24,6 +24,11 @@ export interface TerminalSurfaceStatus {
    */
   hibernation?: "hibernated" | "resuming" | "failed" | null;
   /**
+   * 启动行敲出去之后 CLI 没起来，自动重试一次也没起来（契约 §52）。节点头据此
+   * 显示「启动失败」与重试按钮；下一次启动时清掉。
+   */
+  launch?: "failed" | null;
+  /**
    * 视图状态（终端宿主设计 §7.1）。与 `connection` 正交：它只说这个终端此刻
    * 以什么强度渲染，进程的死活仍然只看 `connection`。
    */
