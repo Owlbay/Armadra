@@ -23,14 +23,14 @@ import {
   migrateGlobalInstalls,
   readMigration,
 } from "./migrate";
-import { type LegacyFinding, scanIn } from "./repair";
+import { type LegacyFinding, OWN_SKILL_DIRS, scanIn } from "./repair";
 import {
   type ClientEnvironment,
   InstallError,
   configHome,
   describe,
 } from "./shared";
-import { revisionOf } from "./skills";
+import { SKILLS_ROOT, revisionOf } from "./skills";
 import { type AcpCanvasTools, acpAdapter } from "../../acp/adapters";
 import { acpClientFeatures } from "../../acp/client";
 import { definition, resolveCommand } from "../../agent/registry";
@@ -233,8 +233,8 @@ function migrationFor(
   const trust = agentId === "codex" ? record.sessionTrust : undefined;
   return {
     migratedAt: record.migratedAt,
-    removed: entry.removed,
-    backups: entry.backups,
+    removed: entry.removed.filter(isOwnRecordEntry),
+    backups: entry.backups.filter(isOwnRecordEntry),
     ...(entry.error === undefined ? {} : { error: entry.error }),
     ...(trust === undefined
       ? {}
@@ -247,6 +247,18 @@ function migrationFor(
           },
         }),
   };
+}
+
+/**
+ * Whether a line of an earlier build's migration record is about something of
+ * ours. Those builds also removed skill directories under names other tools
+ * use; their paths are not ours to show.
+ */
+function isOwnRecordEntry(entry: string): boolean {
+  const segments = entry.split(/[\\/]/);
+  const at = segments.lastIndexOf(SKILLS_ROOT);
+  if (at < 0 || at + 1 >= segments.length) return true;
+  return OWN_SKILL_DIRS.includes(segments[at + 1] as string);
 }
 
 function isPresent(path: string | undefined): boolean {
@@ -383,7 +395,6 @@ export function prepareAtStartup(options: IntegrationOptions): StartupReport {
   const migration = global
     ? migrateGlobalInstalls({
         dataDir: options.dataDir,
-        env,
         ...(options.now === undefined ? {} : { now: options.now }),
       })
     : undefined;

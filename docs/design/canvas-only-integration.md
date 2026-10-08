@@ -62,6 +62,8 @@ Codex 只执行它信任的 Hook，而且**静默**：没有信任，Hook 就不
 
 ## 5. 升级迁移与集成页
 
+> 2026-10-08 更新：启动迁移不再改用户 HOME 下的任何文件，只清数据目录里旧安装器的标记（记录 `version: 3`）；下面「识别 / 备份 / 删除」的动作改由集成页「清理旧版」在用户点击后执行（`repair.ts`，只认带本产品签名的条目，见 [Agent 集成](./agent-integration.md) §4）。以下保留为当时的设计记录。
+
 `core/hook/install/migrate.ts`，core 启动时（技能正文注册之后）跑一次：
 
 - 识别旧的全局安装：Claude `settings.json` 里我们的 Hook 与旧状态行；Codex `hooks.json` 里的条目与它们在 `config.toml` 的信任记录；Copilot `hooks/armadra.json`；OpenCode / Pi / OMP 扫描目录里的 `armadra-status` 模块；六个 CLI 的 `skills/armadra`（只认带修订号尾注的那份）与更早的技能目录名。

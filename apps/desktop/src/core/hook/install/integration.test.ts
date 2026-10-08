@@ -1,5 +1,11 @@
-import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { delimiter, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { forgetProbes, rememberProbe } from "../../agent/probe";
 import { installCollaborationSkill } from "../../collab/skill";
@@ -179,16 +185,122 @@ describe("start-up", () => {
     // Codex has a config home here, and still nothing is written into it:
     // its hooks are trusted by the launcher's flag.
     expect(existsSync(codexConfigPath(join(root, "codex")))).toBe(false);
-    // The migration's second step is reported on Codex's state.
-    expect(state("codex", options("codex")).migration?.sessionTrust).toEqual({
-      at: report.migration?.sessionTrust?.at,
-      removed: [],
-    });
+    // Nothing outside the data directory was migrated, so nothing is shown.
+    expect(report.migration?.version).toBe(3);
+    expect(state("codex", options("codex")).migration).toBeUndefined();
     for (const agentId of INJECTED_AGENTS) {
       expect(state(agentId, options(agentId)).hook.installed, agentId).toBe(
         true,
       );
     }
+  });
+
+  /**
+   * A machine carrying both an install of ours from before canvas-only
+   * integration and another tool's hooks, skills and instruction blocks:
+   * start-up changes none of it, and the page lists only what is ours.
+   */
+  it("leaves every CLI file alone and lists only our residue", () => {
+    const dataDir = join(root, "data");
+    const files: Record<string, string> = {
+      [join(root, "claude", "settings.json")]: JSON.stringify({
+        hooks: {
+          Stop: [
+            { hooks: [{ type: "command", command: `${hookBin} claude` }] },
+            {
+              hooks: [
+                {
+                  type: "command",
+                  command: "sh '/Users/dev/.othertool/agent-hooks/claude.sh'",
+                },
+              ],
+            },
+          ],
+        },
+      }),
+      [join(root, "claude", "skills", "armadra", "SKILL.md")]:
+        "---\nname: armadra\n---\n<!-- armadra:skill-revision 9 -->\n",
+      [join(root, "claude", "skills", "othertool-canvas", "SKILL.md")]:
+        "---\nname: othertool-canvas\n---\n",
+      [join(root, "codex", "AGENTS.md")]:
+        "<!-- othertool:manage-canvas:start -->\nx\n<!-- othertool:manage-canvas:end -->\n",
+      [join(root, "copilot", "hooks", "othertool-status.json")]: JSON.stringify(
+        {
+          version: 1,
+          hooks: {
+            sessionStart: [
+              {
+                type: "command",
+                bash: "sh ~/.othertool/agent-hooks/copilot.sh",
+              },
+            ],
+          },
+        },
+      ),
+    };
+    for (const [path, body] of Object.entries(files)) {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, body, "utf8");
+    }
+
+    prepareAtStartup({ dataDir, env: env() });
+    for (const [path, body] of Object.entries(files)) {
+      expect(readFileSync(path, "utf8"), path).toBe(body);
+    }
+
+    const claude = state("claude", {
+      ...options("claude"),
+      home: join(root, "claude"),
+    });
+    expect(claude.legacy.found.map((one) => one.kind).sort()).toEqual([
+      "hook_entry",
+      "skill_dir",
+    ]);
+    expect(JSON.stringify(claude)).not.toContain("othertool");
+    for (const agentId of ["codex", "copilot"]) {
+      const answer = state(agentId, {
+        ...options(agentId),
+        home: join(root, agentId),
+      });
+      expect(answer.legacy.found, agentId).toEqual([]);
+      expect(JSON.stringify(answer), agentId).not.toContain("othertool");
+    }
+  });
+
+  it("does not show another tool's paths from an earlier build's record", () => {
+    const dataDir = join(root, "data");
+    const skills = join(root, "claude", "skills");
+    mkdirSync(join(dataDir, "integration"), { recursive: true });
+    writeFileSync(
+      join(dataDir, "integration", "global-migration.json"),
+      JSON.stringify({
+        version: 2,
+        migratedAt: "2026-09-26T00:00:00.000Z",
+        agents: {
+          claude: {
+            removed: [
+              join(skills, "armadra", "SKILL.md"),
+              join(skills, "othertool-canvas", "SKILL.md"),
+            ],
+            backups: [
+              join(
+                dataDir,
+                "integration",
+                "global-backup-1",
+                "claude",
+                "skills",
+                "othertool-canvas",
+                "SKILL.md",
+              ),
+            ],
+          },
+        },
+      }),
+      "utf8",
+    );
+    const migration = state("claude", options("claude")).migration;
+    expect(migration?.removed).toEqual([join(skills, "armadra", "SKILL.md")]);
+    expect(migration?.backups).toEqual([]);
   });
 
   it("creates no Codex home on a machine that never ran Codex", () => {
