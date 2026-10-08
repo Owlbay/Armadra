@@ -168,12 +168,12 @@ describe("IntegrationPage", () => {
           {
             kind: "hook_entry",
             path: "~/.claude/settings.json",
-            detail: "target/debug/aicc-hook",
+            detail: "target/debug/armadra-hook",
           },
           {
             kind: "skill_dir",
-            path: "~/.claude/skills/aicc-canvas",
-            detail: "aicc-canvas",
+            path: "~/.claude/skills/armadra-canvas",
+            detail: "armadra-canvas",
           },
         ],
       },
@@ -197,8 +197,8 @@ describe("IntegrationPage", () => {
         name: zh("integration.action.repair").replace("{count}", "2"),
       }),
     );
-    expect(await screen.findByText(/aicc-hook/)).toBeTruthy();
-    expect(screen.getAllByText(/aicc-canvas/).length).toBeGreaterThan(0);
+    expect(await screen.findByText(/armadra-hook/)).toBeTruthy();
+    expect(screen.getAllByText(/armadra-canvas/).length).toBeGreaterThan(0);
     fireEvent.click(
       screen.getByRole("button", { name: zh("integration.repair") }),
     );
@@ -210,7 +210,7 @@ describe("IntegrationPage", () => {
    * 次数，主目录写成 `~`。整段命令拼进脚注曾把这一行撑到几屏高。
    */
   it("groups repeated leftovers by file with a count", async () => {
-    const command = "/Users/dev/Applications/Old Build/aicc-hook claude";
+    const command = "/Users/dev/Applications/Old Build/armadra-hook claude";
     mock.integration.mockResolvedValue({
       ...healthy,
       legacy: {
@@ -223,14 +223,14 @@ describe("IntegrationPage", () => {
     });
     view();
     expect(await screen.findByText("Claude Code")).toBeTruthy();
-    expect(screen.queryByText(/aicc-hook claude/)).toBeNull();
+    expect(screen.queryByText(/armadra-hook claude/)).toBeNull();
     fireEvent.click(
       await screen.findByRole("button", {
         name: zh("integration.action.repair").replace("{count}", "11"),
       }),
     );
     expect(await screen.findByText("~/.claude/settings.json")).toBeTruthy();
-    const entries = screen.getAllByText(/aicc-hook claude/);
+    const entries = screen.getAllByText(/armadra-hook claude/);
     expect(entries).toHaveLength(1);
     expect(entries[0]?.textContent).toContain("~/Applications/Old Build");
     expect(screen.getByText("×11")).toBeTruthy();

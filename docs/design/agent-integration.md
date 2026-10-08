@@ -47,7 +47,7 @@
 
 `hook/install/repair.ts`，只在设置页按钮被点击时改动；集成状态里列出（只读）。
 
-- 识别（2026-10-08 收紧为只认本产品签名）：程序是我们的 Hook 客户端（`armadra-hook` 或改名前的 `aicc-hook`，含 `.exe` / `.cmd` 与开发构建路径）的 Hook 条目与状态行；调用它的状态模块；技能目录 `armadra`、`armadra-canvas`、`armadra-linked-context`、`aicc-canvas`、`aicc-linked-context`，且 `SKILL.md` 带修订号尾注或调用我们的客户端；全局 `AGENTS.md` / `CLAUDE.md` 里恰为 `armadra:skills` / `aicc:skills` 的标记块；与我们的条目同在时 Codex `hooks.json` 顶层的 `version`。按名字相似、宽泛路径（如任意 `target/debug/`）或通用技能名的匹配全部取消。
+- 识别（2026-10-08 收紧为只认本产品签名，2026-10-09 起只认 armadra 命名）：程序是 `armadra-hook`（含 `.exe` / `.cmd` 与开发构建路径）的 Hook 条目与状态行；调用它的状态模块 `armadra-status.ts` / `armadra-status.js`；Copilot 的 `hooks/armadra.json`；技能目录 `armadra`、`armadra-canvas`、`armadra-linked-context`，且 `SKILL.md` 带修订号尾注或调用我们的客户端；全局 `AGENTS.md` / `CLAUDE.md` 里恰为 `armadra:skills` 的标记块；与我们的条目同在时 Codex `hooks.json` 顶层的 `version`。按名字相似、宽泛路径（如任意 `target/debug/`）、通用技能名或改名前旧名的匹配全部取消：与旧名同名的条目按其他工具的对待。
 - 动作：列出 → 备份为 `<file>.armadra-backup-<时间戳>` → 删条目 / 目录 → 按现行写法重写；只动我们的条目。其他工具写进同一批文件的 Hook、技能、指令块不列出、不报告、不改不删。
 - 报告：每种 CLI 一份 `{found, removed, kept, backup}`。
 
@@ -64,7 +64,7 @@
 ## 7. 验收
 
 - 六种 CLI：`pnpm agent:smoke` 覆盖「安装一次 → Hook 事件到达 + 技能文件在位 + `armadra-hook canvas` 动词可用 → 卸载后两者都不在」。
-- 用户机器的旧残留样本（`aicc-hook`、`aicc-canvas`、Codex `version`）作为测试夹具，`repair` 后各 CLI 正常启动。
+- 旧残留样本（`armadra-hook` 的 Hook、`armadra-canvas` 技能、Codex `version`）作为测试夹具，`repair` 后各 CLI 正常启动；与改名前旧名同名的条目作为其他工具的夹具，断言不列、不改、不删。
 - 设置页「集成」在打包版可用。
 
 ## 8. 实施记录：偏离与未竟
