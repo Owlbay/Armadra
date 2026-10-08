@@ -6,8 +6,8 @@ import { linkCurve, pointOnCurve, sampleCurve } from "./link-path";
 /**
  * 连线的几何（用户 2026-09-04 的反馈：「为什么是直线？应该在边框上往外连」）。
  *
- * 三条不变量：从**相对的边的中点**出发、只走左右两侧、中间是一条水平切线的
- * 贝塞尔（不是直线）。
+ * 三条不变量：从**相对的边的中点**出发、按锚点取边（缺省就近边）、切线垂直
+ * 于边框的贝塞尔（不是直线）。
  */
 
 const box = (x: number, y: number, width = 240, height = 200): Box => ({
@@ -38,12 +38,28 @@ describe("linkCurve", () => {
     expect([curve.targetX, curve.targetY]).toEqual([240, 100]);
   });
 
-  it("上下摆放也只走左右两侧（`horizontal` 锚，不从头部上面绕）", () => {
-    const curve = linkCurve(box(0, 0), box(20, 600));
+  it("`horizontal` 锚：上下摆放也只走左右两侧", () => {
+    const curve = linkCurve(box(0, 0), box(20, 600), "horizontal");
     expect(curve.sourceSide).toBe("right");
     expect(curve.targetSide).toBe("left");
     expect(curve.sourceY).toBe(100);
     expect(curve.targetY).toBe(700);
+  });
+
+  it("缺省（对等线）走就近边：上下摆放时底边出、顶边入", () => {
+    const curve = linkCurve(box(0, 0), box(20, 600));
+    expect(curve.sourceSide).toBe("bottom");
+    expect(curve.targetSide).toBe("top");
+    expect([curve.sourceX, curve.sourceY]).toEqual([120, 200]);
+    expect([curve.targetX, curve.targetY]).toEqual([140, 600]);
+  });
+
+  it("`vertical` 锚（纵向派发）：子在右侧也走底 → 顶", () => {
+    const curve = linkCurve(box(0, 0), box(900, 300), "vertical");
+    expect(curve.sourceSide).toBe("bottom");
+    expect(curve.targetSide).toBe("top");
+    expect(curve.c1.x).toBe(curve.sourceX);
+    expect(curve.c1.y).toBeGreaterThan(curve.sourceY);
   });
 
   it("控制点是水平的：切线离开边框时垂直于边框", () => {

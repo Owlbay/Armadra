@@ -49,22 +49,29 @@ export function anchorPoint(box: Box, side: Side): Position {
 }
 
 /**
- * 两个矩形互相「面对」的边。
+ * 连线锚点的取边规则。
  *
- * `horizontal` 是上下文链接的默认锚（§3.3）：两端只走左右，
- * 免得贝塞尔从头部上方绕过去挡住标题。
+ * - `horizontal`：只走左右（横向布局的派发线：主右 → 子左）；
+ * - `vertical`：只走上下（纵向布局的派发线：主底 → 子顶）；
+ * - `free`：按两端中心连线的主方向选最近的边（对等的上下文线）。
  */
+export type LinkAnchor = "horizontal" | "vertical" | "free";
+
+/** 两个矩形互相「面对」的边。 */
 export function facingSides(
   source: Box,
   target: Box,
-  anchor: "horizontal" | "free" = "horizontal",
+  anchor: LinkAnchor = "horizontal",
 ): { source: Side; target: Side } {
   const from = centerOf(source);
   const to = centerOf(target);
   const dx = to.x - from.x;
   const dy = to.y - from.y;
 
-  if (anchor === "horizontal" || Math.abs(dx) >= Math.abs(dy)) {
+  if (
+    anchor === "horizontal" ||
+    (anchor === "free" && Math.abs(dx) >= Math.abs(dy))
+  ) {
     return dx >= 0
       ? { source: "right", target: "left" }
       : { source: "left", target: "right" };
@@ -87,7 +94,7 @@ export interface EdgeGeometry {
 export function edgeGeometry(
   source: Box,
   target: Box,
-  anchor: "horizontal" | "free" = "horizontal",
+  anchor: LinkAnchor = "horizontal",
 ): EdgeGeometry {
   const sides = facingSides(source, target, anchor);
   const from = anchorPoint(source, sides.source);
