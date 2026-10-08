@@ -348,6 +348,12 @@ export const contextLinkSchema = z.object({
    * (docs/design/canvas-react-flow.md §2.5).
    */
   kind: z.string().max(40),
+  /**
+   * What the other end is to this node: `sub` when this node supervises it,
+   * `main` when it supervises this node, `peer` otherwise. Omitted = keep the
+   * stored value (core `putContextLinks`).
+   */
+  role: z.enum(["peer", "main", "sub"]).optional(),
   content: contextLinkContentSchema.optional(),
 });
 

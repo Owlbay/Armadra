@@ -37,7 +37,9 @@ function node(id: string, type: CanvasNode["type"], title: string): CanvasNode {
   } as CanvasNode;
 }
 
-function document(edges: { source: string; target: string }[]): BoardDocument {
+function document(
+  edges: { source: string; target: string; role?: "peer" | "supervises" }[],
+): BoardDocument {
   return {
     board: {} as BoardDocument["board"],
     nodes: [
@@ -73,7 +75,7 @@ describe("buildLinkDocuments", () => {
     ]);
     // 无向：从终端拖出去的边，对端也要能读回来。
     expect(documents.codex).toEqual([
-      { id: "claude", title: "Claude", kind: "terminal" },
+      { id: "claude", title: "Claude", kind: "terminal", role: "peer" },
     ]);
   });
 
@@ -93,6 +95,55 @@ describe("buildLinkDocuments", () => {
       ]),
     );
     expect(documents.claude).toHaveLength(1);
+  });
+});
+
+describe("buildLinkDocuments · 主从", () => {
+  it("派发边：主那一侧看见 sub，从那一侧看见 main", () => {
+    const documents = buildLinkDocuments(
+      document([{ source: "claude", target: "codex", role: "supervises" }]),
+    );
+    expect(documents.claude).toEqual([
+      { id: "codex", title: "Codex", kind: "terminal", role: "sub" },
+    ]);
+    expect(documents.codex).toEqual([
+      { id: "claude", title: "Claude", kind: "terminal", role: "main" },
+    ]);
+  });
+
+  it("对等边与缺省 role 都推 peer", () => {
+    const documents = buildLinkDocuments(
+      document([
+        { source: "claude", target: "codex", role: "peer" },
+        { source: "note", target: "claude" },
+      ]),
+    );
+    expect(documents.claude?.map((link) => link.role)).toEqual([
+      "peer",
+      "peer",
+    ]);
+    expect(documents.codex?.[0]?.role).toBe("peer");
+  });
+
+  it("改主从（掉头或设为对等）后文档变了，需要重推", () => {
+    const before = buildLinkDocuments(
+      document([{ source: "claude", target: "codex", role: "supervises" }]),
+    );
+    const reversed = buildLinkDocuments(
+      document([{ source: "codex", target: "claude", role: "supervises" }]),
+    );
+    const flattened = buildLinkDocuments(
+      document([{ source: "claude", target: "codex", role: "peer" }]),
+    );
+    expect(changedDocuments(before, reversed).sort()).toEqual([
+      "claude",
+      "codex",
+    ]);
+    expect(changedDocuments(before, flattened).sort()).toEqual([
+      "claude",
+      "codex",
+    ]);
+    expect(changedDocuments(before, before)).toEqual([]);
   });
 });
 
@@ -141,7 +192,7 @@ describe("连线 → edges → 链接文档", () => {
       ],
     };
     expect(buildLinkDocuments(board)[TERM]).toEqual([
-      { id: NOTE, title: "结论", kind: "sticky" },
+      { id: NOTE, title: "结论", kind: "sticky", role: "peer" },
     ]);
   });
 });
@@ -167,7 +218,7 @@ describe("buildLinkDocuments · 内容链接", () => {
       { claude: [shapeLink] },
     );
     expect(documents.claude).toEqual([
-      { id: "note", title: "结论", kind: "sticky" },
+      { id: "note", title: "结论", kind: "sticky", role: "peer" },
       shapeLink,
     ]);
     // 没有内容链接的终端不受影响。

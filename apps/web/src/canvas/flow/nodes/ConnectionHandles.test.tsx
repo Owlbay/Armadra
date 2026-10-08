@@ -37,10 +37,15 @@ function handles(container: HTMLElement) {
 }
 
 describe("起笔把手", () => {
-  it("左右各一个 source 把手，命中区样式来自 `styles/nodes.css`", () => {
+  it("四边各一个 source 把手，命中区样式来自 `styles/nodes.css`", () => {
     const { container } = renderFlow(<ConnectionHandles />);
     const { sources } = handles(container);
-    expect(sources.map((node) => node.dataset.side)).toEqual(["left", "right"]);
+    expect(sources.map((node) => node.dataset.side)).toEqual([
+      "top",
+      "right",
+      "bottom",
+      "left",
+    ]);
     for (const handle of sources) {
       expect(handle.classList.contains("node-connection-handle")).toBe(true);
       expect(handle.classList.contains("source")).toBe(true);
@@ -55,12 +60,12 @@ describe("起笔把手", () => {
     }
   });
 
-  it("两个把手都有无障碍名字（键盘与读屏能分清进 / 出）", () => {
+  it("四个把手都有无障碍名字；不分进出，都叫「连线」", () => {
     const { container } = renderFlow(<ConnectionHandles />);
     const labels = handles(container).sources.map((handle) =>
       handle.getAttribute("aria-label"),
     );
-    expect(labels).toEqual(["接收上下文", "发出上下文"]);
+    expect(labels).toEqual(["连线", "连线", "连线", "连线"]);
   });
 });
 
@@ -88,7 +93,7 @@ describe("落点", () => {
 });
 
 describe("分组（只有落点）", () => {
-  it("不画左右圆点，但仍然可以作为一条连线的落点", () => {
+  it("不画起笔圆点，但仍然可以作为一条连线的落点", () => {
     const { container } = renderFlow(<ConnectionHandles dropOnly />);
     const { sources, drop } = handles(container);
     expect(sources).toHaveLength(0);

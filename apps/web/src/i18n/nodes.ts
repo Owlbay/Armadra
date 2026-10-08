@@ -42,8 +42,7 @@ const zh = {
   "node.allow": "允许",
   "node.awaitingDriver": "等待接管",
   "node.deny": "拒绝",
-  "node.linkIn": "接收上下文",
-  "node.linkOut": "发出上下文",
+  "node.linkHandle": "连线",
 
   /* 便签 */
   "sticky.placeholder": "写点什么…",
@@ -166,8 +165,7 @@ const en: Record<keyof typeof zh, string> = {
   "node.allow": "Allow",
   "node.awaitingDriver": "Waiting for a driver",
   "node.deny": "Deny",
-  "node.linkIn": "Context in",
-  "node.linkOut": "Context out",
+  "node.linkHandle": "Link",
 
   "sticky.placeholder": "Write something…",
 

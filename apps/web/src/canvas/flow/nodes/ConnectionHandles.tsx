@@ -14,7 +14,7 @@ import { useT } from "@/app/preferences-store";
  *
  * 两件事：
  *
- *  1. **起笔**：左右两侧各一个 `type="source"` 的把手，尺寸与命中区沿用
+ *  1. **起笔**：四边中点各一个 `type="source"` 的把手，尺寸与命中区沿用
  *     平台设计 §4.1（圆点 14 / 命中 34，触屏 16 / 36），样式仍在
  *     `styles/nodes.css` 的 `.node-connection-handle`。只有把手能起笔，
  *     节点体不能——否则在终端里划一下选文字就会拉出一条线。
@@ -35,6 +35,17 @@ import { useT } from "@/app/preferences-store";
  * 可能在 300px 开外。RF 的命中判定优先看指针正下方的 `.react-flow__handle`
  * （`XYHandle.isValid` 的 `elementFromPoint`），铺满节点的落点正好吃这一条。
  */
+
+/**
+ * 四边中点各一个起笔把手（ui-wave2 §3.3）。四个把手不分进出：线怎么走由
+ * 两端的相对位置与边的角色决定（`link-path.ts`），不读把手坐标。
+ */
+const SIDES = [
+  ["top", Position.Top],
+  ["right", Position.Right],
+  ["bottom", Position.Bottom],
+  ["left", Position.Left],
+] as const;
 
 /** 起笔的把手一律不当落点：线要落在节点体上，不是落在 6px 的圆点上。 */
 const SOURCE_ONLY = { isConnectableStart: true, isConnectableEnd: false };
@@ -61,7 +72,7 @@ const BODY_HANDLE: CSSProperties = {
 export interface ConnectionHandlesProps {
   /**
    * 只给落点，不给起笔的把手（分组与白板对象用）。分组自己有标题与色带，
-   * 白板对象是一笔墨迹或一个形状，左右挂两个圆点既没地方放也没意义，但它们
+   * 白板对象是一笔墨迹或一个形状，四边挂圆点既没地方放也没意义，但它们
    * 仍然可以是一条连线 / 一条内容引用的一端。
    */
   dropOnly?: boolean;
@@ -82,30 +93,21 @@ export function ConnectionHandles({
 
   return (
     <>
-      {dropOnly ? null : (
-        <>
-          <Handle
-            type="source"
-            id="left"
-            position={Position.Left}
-            aria-label={t("node.linkIn")}
-            className="node-connection-handle"
-            data-slot="connection-handle"
-            data-side="left"
-            {...SOURCE_ONLY}
-          />
-          <Handle
-            type="source"
-            id="right"
-            position={Position.Right}
-            aria-label={t("node.linkOut")}
-            className="node-connection-handle"
-            data-slot="connection-handle"
-            data-side="right"
-            {...SOURCE_ONLY}
-          />
-        </>
-      )}
+      {dropOnly
+        ? null
+        : SIDES.map(([side, position]) => (
+            <Handle
+              key={side}
+              type="source"
+              id={side}
+              position={position}
+              aria-label={t("node.linkHandle")}
+              className="node-connection-handle"
+              data-slot="connection-handle"
+              data-side={side}
+              {...SOURCE_ONLY}
+            />
+          ))}
       <Handle
         type="target"
         id="body"

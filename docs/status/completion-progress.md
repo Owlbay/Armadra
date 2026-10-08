@@ -3239,3 +3239,36 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 
 - 契约 §39.1 写明 `repairIntegration` 只认本产品签名；§13.3 记录 `version: 3`；§13.4 Worker 不再写执行主机。形状不变。
 - core：`isOwnCommand(command)`、`isOwnSkill(body)`、`OWN_SKILL_DIRS`；`MigrationOptions` 去掉 `env` / `homes`；`MIGRATION_VERSION = 3`；`integration-worker.sync(stateDir, args)` 去掉 `env`；删除 `clearCodexSessionTrust`、`clearSessionTrustOnce`、`CODEX_SESSION_KEY_PREFIX`。
+
+## 连线按 role 渲染、四边把手、簇色小地图与 Dock 缩放（界面第二波 §3 §5，包 C1）
+
+用户报：主从线也写「上下文」、只能从左右两侧连、小地图分不清谁派的谁、Dock 没有 −/+；另疑在画布上改主从后投递授权不跟随。
+
+做了什么：
+
+- 修投递授权不跟随（先写测试复现）：页面推的链接文档不带 `role`，而 `@armadra/shared` 的 `contextLinkSchema` 也没有这个字段，`contextLinksRequestSchema.parse` 会把它剥掉；core `putContextLinks` 对缺省 `role` 保留旧值，于是「设为主→从」「掉头」「设为对等」后授权停在旧方向。现在 `buildLinkDocuments` 每项带 `role`（派发边主那侧 `sub`、从那侧 `main`，对等 `peer`），`sameLinks` 比 `role`，schema 收 `peer / main / sub`。core 不改。
+- 连线按 role 渲染：`geometry.ts` 的锚点加 `"vertical"`（`LinkAnchor = horizontal | vertical | free`）；`linkCurve(source, target, anchor = "free")`；`linkView(…, role, anchor)`；`edgeLabelKey(…, role)` 对 `supervises` 返回 `null`。对等线就近边、中性色、按端点类型标签（`edge.context` 去掉 `⇄`，「上下文」/ "Context"）；派发线按布局方向走主底→子顶（C1 先写常量 `"vertical"`，在 `LinkEdge.tsx` 的 `const direction` 一行，C2 换成 hook）、簇色、只在子端画箭头、无常驻标签，选中时写「派发」并换 `--brand`。拖线预览（`ConnectionLine`）跟着 `linkCurve` 的缺省走就近边。
+- 四边把手：`ConnectionHandles` 非 `dropOnly` 时挂 `top / right / bottom / left` 四个 source 把手，`aria-label` 统一 `node.linkHandle`「连线」/ "Link"（删 `node.linkIn / linkOut`）；`nodes.css` 补上下定位，命中区往节点外偏。
+- 簇色：新模块 `canvas/family.ts`，`familyOf(document)` 只取 `supervises` 边按「先到的赢」建森林，根按 id 排序取 `--node-color-${i % 7 + 1}`，树上全员同色；不在树上的 Agent 用 `agentColorVar`；其余按类型 `--mm-*`（新 token，两套主题，`tokens.css` / `tokens.test.ts`）。`currentFamilies` 按 `nodes / edges` 引用缓存，`useFamilyColor(nodeId)` / `useFamilies()` 给 LinkEdge 与小地图共用。
+- 小地图：填充按家族色 55%（选中 80%、分组 35%）；描边仍是三种状态色，派发簇成员无状态时描边用簇色。
+- Dock：缩放段改 `[−] [NN%] [+]`（`ZoomControls`），−/+ 调 `zoomByStep(∓1)`，Tooltip 带当前键位，到 `MIN_ZOOM / MAX_ZOOM` 禁用；百分比钮单击适应、右键档位扩到 25 / 50 / 75 / 100 / 150 / 200%。
+- 设计系统 §4 连线两行改为对等 / 派发、把手改四边、加小地图与 Dock 缩放两行；§2 补 `--mm-*` 表。展示页画布分区加「两簇 + 独立 Agent + 便签」固定状态与同色小地图。
+
+实测（macOS arm64，基于 main 20248839）：
+
+- web：`context-links.test.ts`（三种边的 role、改主从后需重推）、`family.test.ts`、`Minimap.test.tsx`、`LinkEdge.test.tsx`（派发无标签、选中「派发」、簇色、纵向底→顶）、`link-visual / link-path / geometry.test.ts`、`ConnectionHandles.test.tsx`（四个 `data-side`）、`Dock.test.tsx`（−/+ 调 `zoomByStep`、边界禁用）、`tokens.test.ts`、`client.agents.test.ts`（`role` 穿过客户端）；shared `api-agents.test.ts`（schema 收 / 拒 role）；desktop `collab/roles.test.ts` 加「页面推 main/sub 后 `send` 的 `UPWARD_SEND_REFUSED` 跟着变、推回 peer 后放行」。
+- `design-showcase.mjs --only=canvas` 深浅两主题 × 三宽全过（对比度、减少动效静止、无控制台 error）。
+- `pnpm libs:build && pnpm -r --if-present test` 全过（web 4053、desktop 5344 / 74 跳、shared 372、server 98 / 4 跳）；web typecheck、`pnpm check` 通过。另改了 `context-link-publication.test.ts` 三处期望：节点链接现在带 `role: "peer"`，属行为变化本身。
+
+没做 / 偏离：
+
+- 动了边界外的四处：`packages/shared/src/api/agents.ts`（`contextLinkSchema.role`，不加它页面带上的 role 会在客户端被剥掉，修复不成立；契约 §39.4 早已写 `role?: string`，`contract:check` 无变化）与它的测试、`api/client.agents.test.ts`、`nodes/NodeShell.test.tsx`（把手数 2 → 4）、`showcase/{fixtures,sections}/canvas.*`（§5.4 要求的固定状态）。
+- 契约不改：§50 的「页面推送链接文档带 role」行为说明按预分配由 C2 写。
+- 布局方向仍是常量 `vertical`；横向锚、方向设置与放置在 C2。
+
+接口：
+
+- 页面：`familyOf(document) → Map<nodeId, { kind: "cluster" | "agent" | "type", rootId?, color }>`、`currentFamilies`、`useFamilyColor(nodeId)`、`useFamilies()`、`clusterColor(i)`；`LinkAnchor`；`linkCurve(source, target, anchor?)`；`linkView(source, target, sourceType?, targetType?, role?, anchor?)`，`LinkView.labelKey: string | null`；`edgeLabelKey(sourceType?, targetType?, role?) → string | null`；`DISPATCH_LABEL_KEY`；`minimapItemOf(node, glowOf, families?)`，`MinimapItem.color? / cluster?`；`ZoomControls`、`ZOOM_STEPS`。
+- 共享：`ContextLink.role?: "peer" | "main" | "sub"`。协议号、数据库不变。
+- 文案：`edge.role.dispatch`、`node.linkHandle`（删 `node.linkIn / node.linkOut`），`edge.context` 改「上下文」/ "Context"。
+- token：`--mm-sticky / editor / files / browser / diff / automation / group`。

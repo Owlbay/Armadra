@@ -254,6 +254,40 @@ describe("a writer that has never heard of roles", () => {
   });
 });
 
+describe("a page that pushes roles", () => {
+  it("moves the delivery direction with the documents it pushes", async () => {
+    ok(await run(main, "link", { from: main, to: sub, role: "supervises" }));
+    const mainSession = fixture.session(main, "claude");
+    live(main, mainSession);
+    fixture.terminal.foreground = { command: "claude" };
+    // 用户在画布上把线掉头：页面推的两份文档里 main / sub 互换。
+    putContextLinks(fixture.database, fixture.workspaceId, main, [
+      { id: sub, title: "Codex", kind: "terminal", role: "main" },
+    ]);
+    putContextLinks(fixture.database, fixture.workspaceId, sub, [
+      { id: main, title: "Planner", kind: "terminal", role: "sub" },
+    ]);
+    const upward = await run(main, "send", { to: sub, body: "做这件事" });
+    expect(upward.ok === false && upward.code).toBe("UPWARD_SEND_REFUSED");
+    expect(
+      ok(await run(sub, "send", { to: main, body: "做这件事" })),
+    ).toMatchObject({ outcome: "delivered" });
+
+    // 再设回对等：两个方向都放行。
+    putContextLinks(fixture.database, fixture.workspaceId, main, [
+      { id: sub, title: "Codex", kind: "terminal", role: "peer" },
+    ]);
+    putContextLinks(fixture.database, fixture.workspaceId, sub, [
+      { id: main, title: "Planner", kind: "terminal", role: "peer" },
+    ]);
+    resetSendLimits();
+    fixture.terminal.foreground = { command: "codex" };
+    expect(
+      ok(await run(main, "send", { to: sub, body: "对等" })),
+    ).toMatchObject({ outcome: "delivered" });
+  });
+});
+
 describe("when the main goes away", () => {
   it("leaves the sub running, with the edge gone and nobody above it", async () => {
     ok(await run(main, "link", { from: main, to: sub, role: "supervises" }));

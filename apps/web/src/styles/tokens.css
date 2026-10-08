@@ -172,6 +172,16 @@
   --member-7: var(--node-color-7);
   --member-8: #f272a8;
 
+  /* ── 小地图类型色（ui-wave2 §5.1；只做图形，不要求 4.5:1） ───────────
+     非 Agent 节点按类型着色；派发簇用 `--node-color-n`，独立 Agent 用标识色。 */
+  --mm-sticky: #e3c35a;
+  --mm-editor: #8e8e93;
+  --mm-files: #7f9bb3;
+  --mm-browser: #5ac8fa;
+  --mm-diff: #c8a2ff;
+  --mm-automation: #b0b86a;
+  --mm-group: transparent;
+
   /* ── 圆角 ────────────────────────────────────────────────────────── */
   /* `--r-*` 是原始值，`--radius*` 是 §4.3 与 shadcn 组件都要读的名字。
      分两层是因为 Tailwind 的 `@theme` 也会写 `--radius-sm` 这类名字，
@@ -430,6 +440,15 @@
   --member-6: #2b8fa8;
   --member-7: #a35a00;
   --member-8: #c14d84;
+
+  /* 小地图类型色：深色值各压暗 20%，浅底上才看得出来。 */
+  --mm-sticky: #b69c48;
+  --mm-editor: #727276;
+  --mm-files: #667c8f;
+  --mm-browser: #48a0c8;
+  --mm-diff: #a082cc;
+  --mm-automation: #8d9355;
+  --mm-group: transparent;
 
   /* 浅色下阴影减半（§24.2 最后一行） */
   --shadow-node: 0 1px 2px rgb(0 0 0 / 10%), 0 8px 24px rgb(0 0 0 / 9%);

@@ -1,6 +1,6 @@
-import type { Position } from "@armadra/shared";
+import type { CanvasEdgeRole, Position } from "@armadra/shared";
 
-import type { Box } from "../../geometry";
+import type { Box, LinkAnchor } from "../../geometry";
 import { edgeArrowheads, edgeLabelKey } from "../../sync/project";
 import { linkCurve, type LinkCurve } from "./link-path";
 
@@ -30,28 +30,43 @@ export const LABEL_MIN_ZOOM = 0.5;
 
 export interface LinkView {
   curve: LinkCurve;
-  labelKey: string;
+  /** 常驻标签的 i18n 键；派发线没有常驻标签（`null`）。 */
+  labelKey: string | null;
   arrowStart: boolean;
   arrowEnd: boolean;
 }
 
+/** 派发线只在选中时显示的那一个词。 */
+export const DISPATCH_LABEL_KEY = "edge.role.dispatch";
+
 /**
- * 两端的矩形与节点类型 → 画一条线需要的全部信息。
+ * 两端的矩形、节点类型与边的角色 → 画一条线需要的全部信息（ui-wave2 §3.2）。
  *
- * 箭头与标签只看**类型**，不看用户从哪一头拖出来（§21）：内容 → 终端单向，
- * 终端 ↔ 终端双向，内容 ↔ 内容无箭头。分组的类型是 `"group"`，落在
- * 「内容」那一类里。
+ * 对等线：箭头与标签只看**类型**，不看用户从哪一头拖出来（§21）——内容 →
+ * 终端单向，终端 ↔ 终端双向，内容 ↔ 内容无箭头；分组的类型是 `"group"`，
+ * 落在「内容」那一类里。
+ *
+ * 派发线（`supervises`）：只在子那一端画箭头，没有常驻标签。
+ *
+ * `anchor` 决定走哪条边：对等线 `free`（就近边），派发线按布局方向。
  */
 export function linkView(
   source: Box,
   target: Box,
   sourceType?: string,
   targetType?: string,
+  role?: CanvasEdgeRole,
+  anchor: LinkAnchor = "free",
 ): LinkView {
+  const curve = linkCurve(source, target, anchor);
+  const labelKey = edgeLabelKey(sourceType, targetType, role);
+  if (role === "supervises") {
+    return { curve, labelKey, arrowStart: false, arrowEnd: true };
+  }
   const heads = edgeArrowheads(sourceType, targetType);
   return {
-    curve: linkCurve(source, target),
-    labelKey: edgeLabelKey(sourceType, targetType),
+    curve,
+    labelKey,
     arrowStart: heads.start === "arrow",
     arrowEnd: heads.end === "arrow",
   };

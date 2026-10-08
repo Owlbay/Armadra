@@ -17,10 +17,15 @@ import {
   type NodeHandle,
   type NodeTypes,
 } from "@xyflow/react";
-import type { CanvasNode, WorkspaceEvent } from "@armadra/shared";
+import type {
+  BoardDocument,
+  CanvasNode,
+  WorkspaceEvent,
+} from "@armadra/shared";
 
 import { installDomPolyfills } from "@/app/test-harness";
-import { makeNode } from "@/canvas/test-support";
+import { makeEdge, makeNode } from "@/canvas/test-support";
+import { useCanvasStore } from "@/store/canvas-store";
 import { dispatchWorkspaceEvent } from "@/api/events";
 import { DELIVERY_FLASH_MS, useDeliveryStore } from "@/agent/delivery-store";
 import { edgeTypes } from "./edge-types";
@@ -148,6 +153,13 @@ describe("LinkEdge", () => {
     expect(edgeGroup(container).querySelectorAll("path")).toHaveLength(2);
   });
 
+  it("终端 ↔ 终端的标签是「上下文」", () => {
+    const { container } = renderEdge("terminal", "terminal");
+    expect(edgeGroup(container).querySelector("text")?.textContent).toBe(
+      "上下文",
+    );
+  });
+
   it("中点标签按被读取的那一端的类型翻译", () => {
     const { container } = renderEdge("sticky", "terminal");
     expect(edgeGroup(container).querySelector("text")?.textContent).toBe(
@@ -209,25 +221,71 @@ describe("LinkEdge", () => {
   });
 
   /**
-   * 主从边（连线角色）。它是画布上唯一一条有方向的关系，所以方向不能只写在
-   * 悬停提示里：一个箭头指向从，颜色用品牌色。
+   * 派发边（ui-wave2 §3.2）。方向不能只写在悬停提示里：一个箭头指向从，
+   * 颜色是这一簇的簇色，没有常驻标签。
    */
-  it("主从边只画一个指向从的箭头并用品牌色", () => {
-    const peer = renderEdge("terminal", "terminal");
-    // 对等的终端 ↔ 终端是两个箭头，颜色中性。
-    expect(edgeGroup(peer.container).querySelectorAll("path")).toHaveLength(4);
-    expect(edgeGroup(peer.container).dataset.role).toBeUndefined();
-    cleanup();
+  describe("派发边", () => {
+    beforeEach(() => {
+      const agent = (id: string) =>
+        makeNode("terminal", {
+          id,
+          data: { kind: "terminal", agent: { id: "claude" } },
+        } as Partial<CanvasNode>);
+      useCanvasStore.setState({
+        document: {
+          board: {} as BoardDocument["board"],
+          nodes: [agent(A), agent(B)],
+          edges: [{ ...makeEdge(A, B), role: "supervises" }],
+        },
+      });
+    });
+    afterEach(() => {
+      useCanvasStore.setState({ document: null });
+    });
 
-    const lead = renderEdge("terminal", "terminal", { role: "supervises" });
-    const group = edgeGroup(lead.container);
-    expect(group.dataset.role).toBe("supervises");
-    expect(group.style.color).toBe("var(--brand)");
-    // 主路径 + 命中路径 + 一个箭头。
-    expect(group.querySelectorAll("path")).toHaveLength(3);
-    expect(group.querySelector("title")?.textContent).toContain(
-      "主 @planner → 从 @codex-1",
-    );
+    it("只画一个指向从的箭头，颜色是簇色", () => {
+      const peer = renderEdge("terminal", "terminal");
+      // 对等的终端 ↔ 终端是两个箭头，颜色中性。
+      expect(edgeGroup(peer.container).querySelectorAll("path")).toHaveLength(
+        4,
+      );
+      expect(edgeGroup(peer.container).dataset.role).toBeUndefined();
+      cleanup();
+
+      const lead = renderEdge("terminal", "terminal", { role: "supervises" });
+      const group = edgeGroup(lead.container);
+      expect(group.dataset.role).toBe("supervises");
+      expect(group.style.color).toBe("var(--node-color-1)");
+      // 主路径 + 命中路径 + 一个箭头。
+      expect(group.querySelectorAll("path")).toHaveLength(3);
+      expect(group.querySelector("title")?.textContent).toContain(
+        "主 @planner → 从 @codex-1",
+      );
+    });
+
+    it("没有常驻标签；选中时写「派发」并换成品牌色", () => {
+      const lead = renderEdge("terminal", "terminal", { role: "supervises" });
+      expect(edgeGroup(lead.container).querySelector("text")).toBeNull();
+      cleanup();
+
+      const picked = renderEdge("terminal", "terminal", {
+        role: "supervises",
+        selected: true,
+      });
+      const group = edgeGroup(picked.container);
+      expect(group.querySelector("text")?.textContent).toBe("派发");
+      expect(group.style.color).toBe("var(--brand)");
+    });
+
+    it("纵向布局时从主的底边中点出发、落在子的顶边中点", () => {
+      const lead = renderEdge("terminal", "terminal", { role: "supervises" });
+      const path = edgeGroup(lead.container).querySelector(
+        ".react-flow__edge-path",
+      ) as SVGPathElement;
+      // 主在 (0,0) 100×100，子在 (300,0)：底边中点 (50,100)，顶边中点 (350,0)。
+      expect(path.getAttribute("d")).toMatch(/^M 50,100 C /u);
+      expect(path.getAttribute("d")).toMatch(/ 350,0$/u);
+    });
   });
 
   it("悬停提示说最近一次的结果与时刻，被拒的多说一句为什么", () => {

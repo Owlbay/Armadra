@@ -5,14 +5,16 @@ import {
   edgeGeometry,
   type Box,
   type EdgeGeometry,
+  type LinkAnchor,
 } from "../../geometry";
 
 /**
  * 上下文链接那条曲线（纯函数，`flow/edges/LinkEdge.tsx` 与单测共用）。
  *
  * 曲线本身仍然是 `canvas/geometry.ts` 的那一条：两个矩形**相对的边的中点**
- * 之间的三次贝塞尔，`anchor: "horizontal"` 时只走左右两侧（免得从头部上面
- * 绕过去挡住标题）。这里只是把它包成三种形态：
+ * 之间的三次贝塞尔。取哪条边看 `anchor`（ui-wave2 §3.2）：对等的上下文线
+ * `free`（就近边，缺省），派发线按布局方向 `vertical` / `horizontal`。
+ * 这里只是把它包成三种形态：
  *
  *  1. `d`：给 `<path>` 用的字符串；
  *  2. `points`：采样出来的折线，命中测试与标签定位用；
@@ -34,8 +36,12 @@ export interface LinkCurve extends EdgeGeometry {
   labelY: number;
 }
 
-export function linkCurve(source: Box, target: Box): LinkCurve {
-  const geometry = edgeGeometry(source, target, "horizontal");
+export function linkCurve(
+  source: Box,
+  target: Box,
+  anchor: LinkAnchor = "free",
+): LinkCurve {
+  const geometry = edgeGeometry(source, target, anchor);
   const { c1, c2 } = bezierControls(geometry);
   const start = { x: geometry.sourceX, y: geometry.sourceY };
   const end = { x: geometry.targetX, y: geometry.targetY };

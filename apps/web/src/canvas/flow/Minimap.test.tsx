@@ -58,10 +58,29 @@ describe("状态描边", () => {
     expect(minimapStrokeWidth(MINIMAP_COLORS.plain)).toBe(2);
   });
 
-  it("选中的节点填得实一点，白板对象最淡", () => {
-    expect(minimapFill({ selected: true })).toContain("55%");
-    expect(minimapFill({})).toContain("28%");
-    expect(minimapFill({ plain: true })).toContain("35%");
+  it("填充按家族色取 55%，选中 80%，分组与白板对象 35%（ui-wave2 §5.2）", () => {
+    expect(minimapFill({ color: "var(--node-color-2)" })).toBe(
+      "color-mix(in srgb, var(--node-color-2) 55%, transparent)",
+    );
+    expect(
+      minimapFill({ color: "var(--node-color-2)", selected: true }),
+    ).toContain("80%");
+    expect(minimapFill({ plain: true })).toBe(
+      "color-mix(in srgb, var(--muted-foreground) 35%, transparent)",
+    );
+  });
+
+  it("派发簇成员无状态时描边用簇色，有状态时仍是状态色", () => {
+    const member = { cluster: true, color: "var(--node-color-3)" };
+    expect(minimapStroke(member)).toBe("var(--node-color-3)");
+    expect(minimapStroke({ ...member, glow: "working" })).toBe(
+      MINIMAP_COLORS.working,
+    );
+    // 独立 Agent 与类型色只改填充，不改描边。
+    expect(minimapStroke({ color: "var(--agent-codex)" })).toBe(
+      MINIMAP_COLORS.plain,
+    );
+    expect(minimapStrokeWidth("var(--node-color-3)")).toBe(2);
   });
 });
 
@@ -80,6 +99,39 @@ describe("节点 → 上色输入", () => {
     expect(
       minimapItemOf(flowNode(toItemId("i1"), "wb.text"), glowOf("working")),
     ).toEqual({ plain: true, selected: false });
+  });
+
+  it("家族色从 familyOf 的表里取，簇成员带 cluster", () => {
+    const families = new Map([
+      [
+        "n1",
+        {
+          kind: "cluster" as const,
+          rootId: "n1",
+          color: "var(--node-color-1)",
+        },
+      ],
+      ["n2", { kind: "agent" as const, color: "var(--agent-claude)" }],
+      ["g1", { kind: "type" as const, color: "var(--mm-group)" }],
+    ]);
+    const member = minimapItemOf(flowNode("n1", "armadra"), noGlow, families);
+    expect(member).toEqual({
+      plain: false,
+      selected: false,
+      color: "var(--node-color-1)",
+      cluster: true,
+    });
+    expect(minimapFill(member)).toBe(
+      "color-mix(in srgb, var(--node-color-1) 55%, transparent)",
+    );
+    expect(minimapItemOf(flowNode("n2", "armadra"), noGlow, families)).toEqual({
+      plain: false,
+      selected: false,
+      color: "var(--agent-claude)",
+    });
+    expect(minimapItemOf(flowNode("g1", "group"), noGlow, families).color).toBe(
+      "var(--mm-group)",
+    );
   });
 
   it("选中态原样带过去", () => {

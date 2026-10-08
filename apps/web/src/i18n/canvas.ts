@@ -138,7 +138,7 @@ const zh = {
   "node.delete": "删除",
 
   /* 连线（§3.3；标签按被读取的那一端的类型，§21） */
-  "edge.context": "⇄ 上下文",
+  "edge.context": "上下文",
   "edge.sticky": "🗒 便签",
   "edge.file": "文件",
   "edge.dir": "目录",
@@ -159,6 +159,7 @@ const zh = {
   "edge.role.supervisorBadge": "主 · {count} 从",
   "edge.role.subordinateBadge": "从 @{name}",
   "edge.role.orphanBadge": "主已离开",
+  "edge.role.dispatch": "派发",
 
   /* 白板超过上限时的保存失败提示（React Flow 计划 F34） */
   "canvas.whiteboardTooLarge": "白板内容超出上限，未保存",
@@ -356,7 +357,7 @@ const en: Record<keyof typeof zh, string> = {
   "node.duplicate": "Duplicate",
   "node.delete": "Delete",
 
-  "edge.context": "⇄ Context",
+  "edge.context": "Context",
   "edge.sticky": "🗒 Sticky",
   "edge.file": "File",
   "edge.dir": "Folder",
@@ -376,6 +377,7 @@ const en: Record<keyof typeof zh, string> = {
   "edge.role.supervisorBadge": "Lead · {count} reports",
   "edge.role.subordinateBadge": "Reports to @{name}",
   "edge.role.orphanBadge": "Lead is gone",
+  "edge.role.dispatch": "Dispatch",
 
   "canvas.whiteboardTooLarge": "Whiteboard is too large to save",
 

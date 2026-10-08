@@ -269,6 +269,24 @@ describe("tokens.css", () => {
     }
   });
 
+  it("小地图类型色两套主题都有，浅色与深色不同值（ui-wave2 §5.1）", () => {
+    for (const type of [
+      "sticky",
+      "editor",
+      "files",
+      "browser",
+      "diff",
+      "automation",
+    ]) {
+      const name = `--mm-${type}`;
+      expect(dark.get(name)).toMatch(/^#[0-9a-f]{6}$/);
+      expect(light.get(name)).toMatch(/^#[0-9a-f]{6}$/);
+      expect(light.get(name)).not.toBe(dark.get(name));
+    }
+    expect(dark.get("--mm-group")).toBe("transparent");
+    expect(light.get("--mm-group")).toBe("transparent");
+  });
+
   it("节点调色板是 §3.4 的 7 色", () => {
     const palette = Array.from({ length: 7 }, (_, index) =>
       dark.get(`--node-color-${index + 1}`),
