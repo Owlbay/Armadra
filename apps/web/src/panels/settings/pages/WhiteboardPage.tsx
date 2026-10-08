@@ -26,6 +26,7 @@ import {
   SelectValue,
 } from "@/ui/select";
 import { Switch } from "@/ui/switch";
+import { LayoutDirectionRow } from "@/canvas/LayoutDirectionRow";
 
 /**
  * 设置 → 白板（2026-09-04 用户反馈：白板配置要能在系统里自主配置；
@@ -110,6 +111,7 @@ export function WhiteboardPage() {
       </SettingsGroup>
 
       <SettingsGroup>
+        <LayoutDirectionRow />
         <SettingsRow label={t("settings.whiteboard.snap")}>
           <Switch
             checked={whiteboard.snap}
