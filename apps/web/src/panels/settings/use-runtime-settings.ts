@@ -13,14 +13,20 @@ import { settingsGateway } from "../../settings";
  * 回来的整份文档塞回缓存。
  *
  * 读写都经 `settingsGateway`，调用点只认它那两个方法。
+ *
+ * `enabled: false`：成员读不到设置文档（403），同一页里对成员开放的那部分
+ * 用它免掉这次请求。
  */
-export function useRuntimeSettings() {
+export function useRuntimeSettings({
+  enabled = true,
+}: { enabled?: boolean } = {}) {
   const t = useT();
   const queryClient = useQueryClient();
   const settings = useQuery({
     queryKey: ["settings"],
     queryFn: () => settingsGateway.load(),
     retry: false,
+    enabled,
   });
   const save = useMutation({
     mutationFn: (patch: RuntimeSettingsPatch) => settingsGateway.patch(patch),

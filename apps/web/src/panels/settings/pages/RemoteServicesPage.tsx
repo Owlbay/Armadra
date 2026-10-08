@@ -92,7 +92,7 @@ import { checkAddress } from "./remote-address";
 export const SOURCES_QUERY_KEY = ["sources", "list"] as const;
 
 /** 设置导航里的分区 id（`nav.ts`）。 */
-export const REMOTE_SECTION = "remote";
+export const REMOTE_SECTION = "remoteAccess";
 
 /** 地址的主机部分（显示用）；不是合法地址就原样。 */
 function hostOf(issuer: string): string {

@@ -185,27 +185,30 @@ describe("设置 → 账号与共享", () => {
     const ids = (member: boolean) =>
       visibleSettingsSections(true, member).map((section) => section.id);
     for (const id of [
-      "agent",
-      "integration",
-      "terminal",
+      "agents",
+      "customAgents",
+      "sessions",
+      "credentials",
+      "usage",
       "workspace",
-      "github",
-      "ssh",
-      "executionHosts",
-      "data",
-      "account",
-      "keybindings",
-      "updates",
+      "machines",
+      "forge",
+      "remoteAccess",
     ]) {
       expect(ids(false)).toContain(id);
       expect(ids(true)).not.toContain(id);
     }
-    // 只动本机偏好与自己账号的几页照旧。
+    // 只动本机偏好与自己账号的几页照旧；快捷键的本设备层对成员开放。
     expect(ids(true)).toEqual(
       expect.arrayContaining([
+        "defaults",
         "general",
         "notifications",
         "whiteboard",
+        "terminalLook",
+        "keybindings",
+        "devices",
+        "security",
         "accounts",
         "about",
       ]),

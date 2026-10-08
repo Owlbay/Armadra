@@ -2,7 +2,9 @@ import * as React from "react";
 import { Ellipsis, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
+import type { RuntimeSettingsPatch } from "../../../api/client";
 import { useT } from "../../../app/preferences-store";
+import { useAccess } from "../../../app/use-access";
 import {
   COMMANDS,
   COMMAND_BY_ID,
@@ -122,7 +124,20 @@ interface Recording {
  */
 export function KeybindingsPage() {
   const t = useT();
-  const { settings, save } = useRuntimeSettings();
+  // 本设备那一层存在 localStorage，谁都能改；全局那一层（档、用户覆盖）写的
+  // 是主机设置，只有 owner 读得到也写得进（§2.1）。成员只看见本设备层。
+  const { member } = useAccess();
+  const { settings, save: runtimeSave } = useRuntimeSettings({
+    enabled: !member,
+  });
+  const save = React.useMemo(
+    () => ({
+      mutate: (patch: RuntimeSettingsPatch) => {
+        if (!member) runtimeSave.mutate(patch);
+      },
+    }),
+    [member, runtimeSave],
+  );
   const device = useDeviceKeymapStore((state) => state.keymap);
   const setDeviceChord = useDeviceKeymapStore((state) => state.setChord);
   const clearDeviceChord = useDeviceKeymapStore((state) => state.clearChord);
@@ -138,7 +153,8 @@ export function KeybindingsPage() {
   const global = React.useMemo(() => mergeLayers(preset, user), [preset, user]);
   const here = currentPlatform();
   const [platform, setPlatform] = React.useState<PlatformName>(here);
-  const [layer, setLayer] = React.useState<WriteLayer>("global");
+  const [chosenLayer, setLayer] = React.useState<WriteLayer>("global");
+  const layer: WriteLayer = member ? "device" : chosenLayer;
   const [recording, setRecording] = React.useState<Recording | null>(null);
   const [editingWhen, setEditingWhen] = React.useState<{
     id: CommandId;
@@ -320,79 +336,83 @@ export function KeybindingsPage() {
         )}
       </p>
       <SettingsGroup>
-        <SettingsRow
-          label={t("settings.shortcut.profile")}
-          footnote={t("settings.shortcut.profile.note")}
-        >
-          <Select value={profile} onValueChange={chooseProfile}>
-            <SelectTrigger
-              aria-label={t("settings.shortcut.profile")}
-              size="sm"
-              className="w-40"
+        {member ? null : (
+          <>
+            <SettingsRow
+              label={t("settings.shortcut.profile")}
+              footnote={t("settings.shortcut.profile.note")}
             >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="z-[var(--z-dialog)]">
-              {Object.keys(profiles)
-                .sort(
-                  (left, right) =>
-                    Number(!isBuiltinProfile(left)) -
-                      Number(!isBuiltinProfile(right)) ||
-                    left.localeCompare(right),
-                )
-                .map((id) => (
-                  <SelectItem key={id} value={id}>
-                    {isBuiltinProfile(id)
-                      ? t(`settings.shortcut.profile.${id}`)
-                      : id}
+              <Select value={profile} onValueChange={chooseProfile}>
+                <SelectTrigger
+                  aria-label={t("settings.shortcut.profile")}
+                  size="sm"
+                  className="w-40"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="z-[var(--z-dialog)]">
+                  {Object.keys(profiles)
+                    .sort(
+                      (left, right) =>
+                        Number(!isBuiltinProfile(left)) -
+                          Number(!isBuiltinProfile(right)) ||
+                        left.localeCompare(right),
+                    )
+                    .map((id) => (
+                      <SelectItem key={id} value={id}>
+                        {isBuiltinProfile(id)
+                          ? t(`settings.shortcut.profile.${id}`)
+                          : id}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={t("settings.shortcut.profile.create")}
+                onClick={() => setNaming("")}
+              >
+                <Plus className="size-4" />
+              </Button>
+              {!isBuiltinProfile(profile) && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={t("settings.shortcut.profile.delete")}
+                  onClick={removeProfile}
+                >
+                  <Trash2 className="size-4" />
+                </Button>
+              )}
+            </SettingsRow>
+            <SettingsRow
+              label={t("settings.shortcut.layer")}
+              footnote={t("settings.shortcut.layer.note")}
+            >
+              <Select
+                value={layer}
+                onValueChange={(value) => setLayer(value as WriteLayer)}
+              >
+                <SelectTrigger
+                  aria-label={t("settings.shortcut.layer")}
+                  size="sm"
+                  className="w-40"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="z-[var(--z-dialog)]">
+                  <SelectItem value="global">
+                    {t("settings.shortcut.source.global")}
                   </SelectItem>
-                ))}
-            </SelectContent>
-          </Select>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={t("settings.shortcut.profile.create")}
-            onClick={() => setNaming("")}
-          >
-            <Plus className="size-4" />
-          </Button>
-          {!isBuiltinProfile(profile) && (
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={t("settings.shortcut.profile.delete")}
-              onClick={removeProfile}
-            >
-              <Trash2 className="size-4" />
-            </Button>
-          )}
-        </SettingsRow>
-        <SettingsRow
-          label={t("settings.shortcut.layer")}
-          footnote={t("settings.shortcut.layer.note")}
-        >
-          <Select
-            value={layer}
-            onValueChange={(value) => setLayer(value as WriteLayer)}
-          >
-            <SelectTrigger
-              aria-label={t("settings.shortcut.layer")}
-              size="sm"
-              className="w-40"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="z-[var(--z-dialog)]">
-              <SelectItem value="global">
-                {t("settings.shortcut.source.global")}
-              </SelectItem>
-              <SelectItem value="device">
-                {t("settings.shortcut.source.device")}
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        </SettingsRow>
+                  <SelectItem value="device">
+                    {t("settings.shortcut.source.device")}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </SettingsRow>
+          </>
+        )}
         <SettingsRow
           label={t("settings.shortcut.platform")}
           footnote={

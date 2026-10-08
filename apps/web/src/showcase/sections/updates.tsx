@@ -3,7 +3,7 @@ import { SettingsRow } from "@/panels/settings/SettingsRow";
 import {
   UpdateStatusNotes,
   UpdateStatusRows,
-} from "@/panels/settings/pages/UpdatesPage";
+} from "@/panels/settings/pages/AboutPage";
 import { useT } from "@/app/preferences-store";
 import { mergeUpdatesState } from "@/updates/state";
 import { INSTALLED, UPDATE_STATES } from "../fixtures/updates";

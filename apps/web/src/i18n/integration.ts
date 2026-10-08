@@ -9,7 +9,6 @@ import type { MessageModule } from "./index";
  */
 export const integration: MessageModule = {
   "zh-CN": {
-    "integration.nav": "集成",
     "integration.empty": "没有可接入的 CLI",
     "integration.row.cli": "CLI", // i18n-exempt
     "integration.row.acp": "ACP", // i18n-exempt
@@ -77,7 +76,6 @@ export const integration: MessageModule = {
     "integration.resyncFailed": "重新同步失败",
   },
   en: {
-    "integration.nav": "Integration",
     "integration.empty": "No CLI to integrate",
     "integration.row.cli": "CLI",
     "integration.row.acp": "ACP",

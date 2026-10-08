@@ -121,10 +121,10 @@ describe("这一页什么时候出现", () => {
     ).toBe(false);
   });
 
-  it("壳在时和终端排在同一组里", () => {
+  it("壳在时和终端外观排在同一组里", () => {
     (window as unknown as Record<string, unknown>).armadra = {};
     const ids = visibleSettingsSections().map((section) => section.id);
     expect(ids).toContain("browser");
-    expect(ids.indexOf("browser")).toBe(ids.indexOf("terminal") + 1);
+    expect(ids.indexOf("browser")).toBe(ids.indexOf("terminalLook") + 1);
   });
 });

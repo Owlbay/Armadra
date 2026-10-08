@@ -78,7 +78,7 @@ describe("额度读取改为默认关的一次性提示", () => {
     expect(message).toBe("Claude、Copilot 的额度读取现已默认关闭");
     expect(options.action.label).toBe("打开设置");
     options.action.onClick();
-    expect(usePreferencesStore.getState().lastSettingsSection).toBe("account");
+    expect(usePreferencesStore.getState().lastSettingsSection).toBe("usage");
     expect(useCanvasStore.getState().panels.settings).toBe(true);
 
     cleanup();

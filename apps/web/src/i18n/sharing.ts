@@ -7,7 +7,6 @@ import type { MessageModule } from "./index";
  */
 export const sharing: MessageModule = {
   "zh-CN": {
-    "sharing.nav": "账号与共享",
     "sharing.accountId": "账号标识",
     "sharing.password": "口令",
     "sharing.me": "我的账号",
@@ -67,7 +66,6 @@ export const sharing: MessageModule = {
     "sharing.members.mfaNone": "这个人没有开两步验证",
   },
   en: {
-    "sharing.nav": "Accounts & sharing",
     "sharing.accountId": "Account ID",
     "sharing.password": "Password",
     "sharing.me": "My account",

@@ -6,8 +6,6 @@ import type { MessageModule } from "./index";
  */
 export const security: MessageModule = {
   "zh-CN": {
-    "security.nav": "安全",
-
     "auth.title": "登录",
     "auth.account": "账号标识",
     "auth.continue": "继续",
@@ -225,8 +223,6 @@ export const security: MessageModule = {
     "auth.forgot.hint": "请联系管理员为你签发重置链接",
   },
   en: {
-    "security.nav": "Security",
-
     "auth.title": "Sign in",
     "auth.account": "Account ID",
     "auth.continue": "Continue",
