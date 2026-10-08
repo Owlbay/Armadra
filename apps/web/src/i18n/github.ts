@@ -24,15 +24,15 @@ const zh = {
   /* 不可用状态（§9：不出现伪按钮） */
   "github.blocked.noWorkspace": "先打开一个工作空间",
   "github.blocked.nativeSession":
-    "桌面壳未能建立本机会话，原因见「设置 → 连接 → 后台服务与对外服务」",
+    "桌面壳未能建立本机会话，原因见「设置 → 设备与会话」",
   "github.blocked.disconnected": "连不上 Host",
   "github.blocked.unsupported": "这个 Host 没有 GitHub 服务",
   "github.blocked.noSession": "这个 Host 不支持浏览器会话",
   "github.blocked.signedOut": "这台设备还没有与 Host 配对",
   "github.blocked.noPermission": "这台设备没有该工作空间的 GitHub 权限",
   "github.blocked.noCredential": "Host 现在拿不到可用的 GitHub 凭据",
-  "github.blocked.action": "前往设置 → 连接",
-  "github.blocked.credentialAction": "前往设置 → Git 托管",
+  "github.blocked.action": "前往设置",
+  "github.blocked.credentialAction": "前往设置 → 代码托管",
 
   /* 仓库与筛选 */
   "github.repository": "仓库",
@@ -396,7 +396,7 @@ const en: Record<keyof typeof zh, string> = {
 
   "github.blocked.noWorkspace": "Open a workspace first",
   "github.blocked.nativeSession":
-    "The desktop shell could not open a local session; see Settings → Connections → Background and external services",
+    "The desktop shell could not open a local session; see Settings → Devices & sessions",
   "github.blocked.disconnected": "Cannot reach the Host",
   "github.blocked.unsupported": "This Host has no GitHub service",
   "github.blocked.noSession": "This Host does not support browser sessions",
@@ -405,8 +405,8 @@ const en: Record<keyof typeof zh, string> = {
     "This device has no GitHub permission for this workspace",
   "github.blocked.noCredential":
     "The Host cannot produce a usable GitHub credential",
-  "github.blocked.action": "Go to Settings → Connections",
-  "github.blocked.credentialAction": "Go to Settings → Git hosting",
+  "github.blocked.action": "Open Settings",
+  "github.blocked.credentialAction": "Go to Settings → Code hosting",
 
   "github.repository": "Repository",
   "github.remoteUrl": "Remote URL",

@@ -25,6 +25,7 @@ import {
   revokeIdentityDevice,
 } from "../../../../api/security";
 import { GatewayDevices, type GatewayDevice } from "./GatewayDevices";
+import { SettingsGroup } from "../../SettingsGroup";
 import { GatewayPanel } from "./GatewayPanel";
 
 const DEVICES_QUERY_KEY = [...GATEWAY_QUERY_KEY, "devices"] as const;
@@ -40,14 +41,11 @@ export interface GatewayIdentity {
 }
 
 /**
- * 对外服务这一块的数据面：状态、配置、配对票、已配对设备。
- *
- * `GET /api/gateway` 只有 owner 答（契约 §17），成员 403——读不到时配置与
- * 配对整块不出现，设备表照样在。设备列表要一条身份会话；没有会话时（还没
- * 配对的浏览器）列表不出现，配置照常。这一页只有这一份设备表（G3-11 把
- * 「设备登录」里的那份并了进来）。
+ * 已配对设备（设备与会话页）。设备列表要一条身份会话；没有会话时（还没配对的
+ * 浏览器）整块不出现。配对成功那一刻会话换了，还在路上的那一次带的是旧凭据，
+ * 先取消再重取。
  */
-export function GatewaySection({
+export function GatewayDevicesSection({
   identity = null,
   onCurrentRevoked,
 }: {
@@ -57,16 +55,7 @@ export function GatewaySection({
 } = {}) {
   const t = useT();
   const client = useQueryClient();
-  // 服务器壳上的成员连问都不问：必然 403 的请求不该发（会话没取回来时也按
-  // 成员算，晚一拍出现）。
   const owner = !useAccess().member;
-  const status = useQuery({
-    queryKey: GATEWAY_QUERY_KEY,
-    queryFn: ({ signal }) => gatewayApi.status(signal),
-    refetchInterval: GATEWAY_POLL_MS,
-    retry: false,
-    enabled: owner,
-  });
   const devices = useInfiniteQuery({
     queryKey: DEVICES_QUERY_KEY,
     // 带着 `signal`：配对成功时作废重取要能打断还没答的那一次（它可能在会话
@@ -80,8 +69,7 @@ export function GatewaySection({
   React.useEffect(
     () =>
       onIdentitySessionChange(() => {
-        // 会话变了（配对成功的那一刻）：还在路上的那一次带的是旧凭据，先取消
-        // 再重取——只作废的话，还没有数据的查询会沿用那一次的答案（401）。
+        // 只作废的话，还没有数据的查询会沿用那一次的答案（401）。
         void client
           .cancelQueries({ queryKey: DEVICES_QUERY_KEY })
           .then(() =>
@@ -90,6 +78,60 @@ export function GatewaySection({
       }),
     [client],
   );
+
+  const [revoking, setRevoking] = React.useState<string | null>(null);
+  async function revoke(device: GatewayDevice) {
+    setRevoking(device.deviceId);
+    try {
+      await revokeIdentityDevice(device.deviceId, device.epoch);
+      if (device.deviceId === identity?.deviceId) onCurrentRevoked?.();
+    } catch {
+      toast.error(t("gateway.devices.revokeFailed"));
+    } finally {
+      setRevoking(null);
+      void client.invalidateQueries({ queryKey: DEVICES_QUERY_KEY });
+    }
+  }
+
+  const list = devices.data?.pages.flatMap((page) => page.devices) ?? null;
+  if (!list) return null;
+  return (
+    <GatewayDevices
+      devices={list}
+      revoking={revoking}
+      onRevoke={(device) => void revoke(device)}
+      currentDeviceId={identity?.deviceId ?? null}
+      // owner 一定能撤销；成员要会话里带管理权。
+      canRevoke={owner || Boolean(identity?.canManage)}
+      hasMore={devices.hasNextPage}
+      loadingMore={devices.isFetchingNextPage}
+      onMore={() => void devices.fetchNextPage()}
+    />
+  );
+}
+
+/**
+ * 局域网直连（远程访问页）：对外服务的状态、配置与配对票。
+ *
+ * `GET /api/gateway` 只有 owner 答（契约 §17），成员 403——读不到时整块不出现。
+ * 服务器壳上的成员连问都不问。
+ */
+export function GatewayConfigSection({
+  extra,
+}: {
+  /** 同一张卡里接在开关后面的行；读不到对外服务时这几行自成一张卡。 */
+  extra?: React.ReactNode;
+} = {}) {
+  const t = useT();
+  const client = useQueryClient();
+  const owner = !useAccess().member;
+  const status = useQuery({
+    queryKey: GATEWAY_QUERY_KEY,
+    queryFn: ({ signal }) => gatewayApi.status(signal),
+    refetchInterval: GATEWAY_POLL_MS,
+    retry: false,
+    enabled: owner,
+  });
 
   const configure = useMutation({
     mutationFn: (patch: GatewayConfigPatch) => gatewayApi.configure(patch),
@@ -109,20 +151,6 @@ export function GatewaySection({
     onError: () => toast.error(t("gateway.pair.failed")),
   });
 
-  const [revoking, setRevoking] = React.useState<string | null>(null);
-  async function revoke(device: GatewayDevice) {
-    setRevoking(device.deviceId);
-    try {
-      await revokeIdentityDevice(device.deviceId, device.epoch);
-      if (device.deviceId === identity?.deviceId) onCurrentRevoked?.();
-    } catch {
-      toast.error(t("gateway.devices.revokeFailed"));
-    } finally {
-      setRevoking(null);
-      void client.invalidateQueries({ queryKey: DEVICES_QUERY_KEY });
-    }
-  }
-
   const running = Boolean(status.data?.enabled && status.data.running);
   const origin = status.data?.origin ?? null;
   const fingerprint = status.data?.tls.fingerprint ?? null;
@@ -134,36 +162,17 @@ export function GatewaySection({
     if (running) mint(undefined);
   }, [running, origin, fingerprint, mint]);
 
-  const list = devices.data?.pages.flatMap((page) => page.devices) ?? null;
-  const deviceOptions = {
-    currentDeviceId: identity?.deviceId ?? null,
-    // owner 一定能撤销；成员要会话里带管理权。
-    canRevoke: owner || Boolean(identity?.canManage),
-    hasMore: devices.hasNextPage,
-    loadingMore: devices.isFetchingNextPage,
-    onMore: () => void devices.fetchNextPage(),
-  };
   if (!owner || !status.data)
-    return list ? (
-      <GatewayDevices
-        devices={list}
-        revoking={revoking}
-        onRevoke={(device) => void revoke(device)}
-        {...deviceOptions}
-      />
-    ) : null;
+    return extra ? <SettingsGroup>{extra}</SettingsGroup> : null;
   return (
     <GatewayPanel
+      extra={extra}
       status={status.data}
       saving={configure.isPending}
       onConfigure={(patch) => configure.mutate(patch)}
       pairing={pairing}
       pairingBusy={pair.isPending}
       onNewPairing={(next) => pair.mutate(next)}
-      devices={list}
-      revoking={revoking}
-      onRevoke={(device) => void revoke(device)}
-      deviceOptions={deviceOptions}
     />
   );
 }

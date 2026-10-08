@@ -111,6 +111,7 @@ vi.mock("@/api/client", () => ({
 
 import { runtimeApi } from "@/api/client";
 import { RuntimeRequestError } from "@/api/request";
+import { usePreferencesStore } from "@/app/preferences-store";
 import { GithubDrawer } from "./GithubDrawer";
 import { openGithubPanel, useGithubFocus } from "./open";
 import { referenceTarget } from "./references";
@@ -367,8 +368,9 @@ describe("GitHub page availability", () => {
     expect(screen.queryByText("解析仓库")).toBeNull();
     expect(screen.queryByText("移动到…")).toBeNull();
     expect(screen.queryByText("新建 Issue")).toBeNull();
-    fireEvent.click(screen.getByText("前往设置 → 连接"));
+    fireEvent.click(screen.getByText("前往设置"));
     expect(store.setPanel).toHaveBeenCalledWith("settings", true);
+    expect(usePreferencesStore.getState().lastSettingsSection).toBe("devices");
   });
 
   it("sends a missing credential to the GitHub settings section, not to Host", async () => {
@@ -377,8 +379,8 @@ describe("GitHub page availability", () => {
     expect(
       await screen.findByText("Host 现在拿不到可用的 GitHub 凭据"),
     ).toBeTruthy();
-    // 设置页改名「Git 托管」（G5-15）：按钮文案跟着改，去的仍是同一节。
-    fireEvent.click(screen.getByText("前往设置 → Git 托管"));
+    // 设置页改名「代码托管」：按钮文案跟着改，去的仍是同一节。
+    fireEvent.click(screen.getByText("前往设置 → 代码托管"));
     expect(store.setPanel).toHaveBeenCalledWith("settings", true);
   });
 
@@ -1301,7 +1303,7 @@ describe("Gitea and GitLab remotes (§29)", () => {
     renderDrawer();
     await resolveRemote("https://code.example.test/acme/app.git");
     expect(await screen.findByText("这个远端没有识别出托管平台")).toBeTruthy();
-    fireEvent.click(screen.getByText("前往设置 → Git 托管"));
+    fireEvent.click(screen.getByText("前往设置 → 代码托管"));
     expect(store.setPanel).toHaveBeenCalledWith("settings", true);
     expect(forgeApi.forgePulls).not.toHaveBeenCalled();
   });

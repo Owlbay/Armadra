@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Ellipsis } from "lucide-react";
+import { Ellipsis } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -44,6 +44,7 @@ import {
   RemoteShareSection,
   relayPendingReason,
 } from "../RemoteShare";
+import { GatewayConfigSection } from "./gateway/GatewaySection";
 import { groupFingerprint } from "./gateway/PairingCard";
 import {
   ResponsiveAlertDialog,
@@ -61,11 +62,6 @@ import {
 } from "@/panels/ResponsiveDialog";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/ui/collapsible";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -123,18 +119,18 @@ function useSourceTableChanged() {
 }
 
 /**
- * 设置 → 远程服务（客户端包 §3.1）。两段：
+ * 设置 → 远程访问（§2.7，客户端包 §3.1）。固定操作本机 core，三段：
  *
- * - **远程服务**：个人中转（地址、账号、口令，首次核对证书指纹）；每行登录 /
- *   登出、移除；用账号登录着的行可展开「分享」区（`RemoteShare.tsx`：分享本机
- *   的开关与分享链接）。SaaS 服务端就绪前不出现入口
- *   （总计划 §12）。
- * - **已挂载的源**：本机一行不可删；自托管直连（配对链接或地址 + 配对码，同样
- *   核对指纹）与从远程服务挂载；每行状态、断开、移除。
+ * - **让别的设备访问本机**：局域网直连（对外服务的开关、监听、证书与配对码）；
+ *   经中转（每个登录着的中转账号一个「分享本机」开关与它的分享链接，
+ *   `RemoteShare.tsx`）。没有中转账号时这一行的动作是「添加中转账号」。
+ * - **中转账号**：地址、账号、口令，首次核对证书指纹；登录 / 登出、移除。
+ * - **我连接的其他 Armadra**：本机一行不可删；通过链接加入、自托管直连（配对
+ *   链接或地址 + 配对码，同样核对指纹）与从中转添加；每行状态、断开、移除。
  *
- * 远程服务出错只落在那一行或那一次操作上（旁路保证）；错误按 `code` 取文案。
+ * 中转出错只落在那一行或那一次操作上；错误按 `code` 取文案。
  */
-export function RemoteServicesPage() {
+export function RemoteAccessPage() {
   const t = useT();
   const changed = useSourceTableChanged();
   const table = useQuery({
@@ -237,75 +233,119 @@ export function RemoteServicesPage() {
     onError: (error: Error) => toast.error(error.message),
   });
 
+  const shareable = signedIn.filter((remote) => remote.accountHint !== "");
+
   return (
     <>
-      <SettingsGroup title={t("remote.services")}>
-        {remotes.map((remote) => (
-          <RemoteRow
-            key={remote.serviceId}
-            remote={remote}
-            localLabel={local?.label ?? ""}
-            pending={pendingOf(remote.issuer)}
-            inUse={sameOrigin(remote.issuer, access.relayIssuer)}
-            onSignIn={() =>
-              setAdding({
-                issuer: remote.issuer,
-                account: remote.accountHint,
-                fingerprint: remote.fingerprint,
-              })
-            }
-            onSignOut={() => logout.mutate(remote.serviceId)}
-            onRetryCleanup={() => cleanup.mutate(remote.issuer)}
-            onRemove={() =>
-              setRemoving({
-                kind: "remote",
-                id: remote.serviceId,
-                name: remote.label,
-                issuer: remote.issuer,
-              })
-            }
-          />
-        ))}
-        {orphans.map((one) => (
-          <SettingsRow
-            key={one.issuer}
-            label={hostOf(one.issuer)}
-            footnote={relayPendingReason(t, one.code)}
-          >
-            <Badge variant="outline" className="font-normal">
-              {t("remote.relayPending")}
-            </Badge>
+      <section className="flex min-w-0 flex-col gap-2">
+        <h3 className="px-0.5 text-[13px] font-medium text-foreground">
+          {t("remote.access.inbound")}
+        </h3>
+        <GatewayConfigSection
+          extra={
+            <>
+              {shareable.length === 0 ? (
+                <SettingsRow label={t("remote.access.viaRelay")}>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() =>
+                      setAdding({ issuer: "", account: "", fingerprint: "" })
+                    }
+                  >
+                    {t("remote.add")}
+                  </Button>
+                </SettingsRow>
+              ) : (
+                shareable.map((remote) => (
+                  <RemoteShareSection
+                    key={remote.serviceId}
+                    remote={remote}
+                    localLabel={local?.label ?? ""}
+                    inUse={sameOrigin(remote.issuer, access.relayIssuer)}
+                    label={
+                      shareable.length > 1
+                        ? t("remote.access.viaRelayNamed", {
+                            name: remote.label,
+                          })
+                        : t("remote.access.viaRelay")
+                    }
+                  />
+                ))
+              )}
+            </>
+          }
+        />
+      </section>
+
+      {(remotes.length > 0 || orphans.length > 0) && (
+        <SettingsGroup title={t("remote.services")}>
+          {remotes.map((remote) => (
+            <RemoteRow
+              key={remote.serviceId}
+              remote={remote}
+              pending={pendingOf(remote.issuer)}
+              inUse={sameOrigin(remote.issuer, access.relayIssuer)}
+              onSignIn={() =>
+                setAdding({
+                  issuer: remote.issuer,
+                  account: remote.accountHint,
+                  fingerprint: remote.fingerprint,
+                })
+              }
+              onSignOut={() => logout.mutate(remote.serviceId)}
+              onRetryCleanup={() => cleanup.mutate(remote.issuer)}
+              onRemove={() =>
+                setRemoving({
+                  kind: "remote",
+                  id: remote.serviceId,
+                  name: remote.label,
+                  issuer: remote.issuer,
+                })
+              }
+            />
+          ))}
+          {orphans.map((one) => (
+            <SettingsRow
+              key={one.issuer}
+              label={hostOf(one.issuer)}
+              footnote={relayPendingReason(t, one.code)}
+            >
+              <Badge variant="outline" className="font-normal">
+                {t("remote.relayPending")}
+              </Badge>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={cleanup.isPending}
+                onClick={() => cleanup.mutate(one.issuer)}
+              >
+                {t("remote.relayPending.retry")}
+              </Button>
+              <RowMenu name={hostOf(one.issuer)}>
+                <DropdownMenuItem
+                  variant="destructive"
+                  disabled={dismiss.isPending}
+                  onSelect={() => setDismissing(one.issuer)}
+                >
+                  {t("remote.relayPending.dismiss")}
+                </DropdownMenuItem>
+              </RowMenu>
+            </SettingsRow>
+          ))}
+          <SettingsRow label={null}>
             <Button
               size="sm"
               variant="secondary"
-              disabled={cleanup.isPending}
-              onClick={() => cleanup.mutate(one.issuer)}
+              onClick={() =>
+                setAdding({ issuer: "", account: "", fingerprint: "" })
+              }
             >
-              {t("remote.relayPending.retry")}
+              {t("remote.addAnother")}
             </Button>
-            <RowMenu name={hostOf(one.issuer)}>
-              <DropdownMenuItem
-                variant="destructive"
-                disabled={dismiss.isPending}
-                onSelect={() => setDismissing(one.issuer)}
-              >
-                {t("remote.relayPending.dismiss")}
-              </DropdownMenuItem>
-            </RowMenu>
           </SettingsRow>
-        ))}
-        <SettingsRow label={null}>
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() =>
-              setAdding({ issuer: "", account: "", fingerprint: "" })
-            }
-          >
-            {t("remote.add")}
-          </Button>
-        </SettingsRow>
-      </SettingsGroup>
+        </SettingsGroup>
+      )}
 
       <SettingsGroup title={t("remote.sources")}>
         {local && (
@@ -458,13 +498,9 @@ interface Removal {
   readonly issuer?: string;
 }
 
-/**
- * 一行远程服务。用账号登录着的个人中转可以分享本机：行尾的展开钮打开它下面的
- * 「分享」区，缺省展开（访客那一行没有账号，不能分享本机）。
- */
+/** 一行中转账号：登录 / 登出、重试中继侧清理、移除。分享本机在页首。 */
 function RemoteRow({
   remote,
-  localLabel,
   pending,
   inUse = false,
   onSignIn,
@@ -473,9 +509,8 @@ function RemoteRow({
   onRemove,
 }: {
   remote: RemoteService;
-  localLabel: string;
   pending: string | null;
-  /** 页面正经这个远程服务的隧道到达主机：登出、移除、停用分享都会自断。 */
+  /** 页面正经这个中转的隧道到达主机：登出、移除都会自断。 */
   inUse?: boolean;
   onSignIn(): void;
   onSignOut(): void;
@@ -483,13 +518,10 @@ function RemoteRow({
   onRemove(): void;
 }) {
   const t = useT();
-  const shareable = remote.hasCredentials && remote.accountHint !== "";
-  const [open, setOpen] = React.useState(true);
-  const row = (
+  return (
     <SettingsRow
       label={remote.label}
       footnote={[
-        t("remote.kind.personal"),
         remote.accountHint,
         shortFingerprint(remote.fingerprint),
         inUse ? t("remote.inUse") : "",
@@ -534,32 +566,7 @@ function RemoteRow({
           {t("remote.remove")}
         </DropdownMenuItem>
       </RowMenu>
-      {shareable && (
-        <CollapsibleTrigger asChild>
-          <IconButton
-            size="cluster"
-            label={t("remote.share.toggle", { name: remote.label })}
-          >
-            <ChevronDown
-              className={`transition-transform ${open ? "rotate-180" : ""}`}
-            />
-          </IconButton>
-        </CollapsibleTrigger>
-      )}
     </SettingsRow>
-  );
-  if (!shareable) return row;
-  return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      {row}
-      <CollapsibleContent>
-        <RemoteShareSection
-          remote={remote}
-          localLabel={localLabel}
-          inUse={inUse}
-        />
-      </CollapsibleContent>
-    </Collapsible>
   );
 }
 

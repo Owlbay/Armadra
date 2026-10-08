@@ -1,6 +1,5 @@
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { IdentitySessionRow } from "@armadra/shared";
 import { toast } from "sonner";
 
 import {
@@ -17,7 +16,6 @@ import {
   listLockouts,
   listMembers,
   listPasskeys,
-  listSessions,
   mfaStatus,
   oauthBindings,
   oauthProviders,
@@ -30,8 +28,6 @@ import {
   setOAuthSecret,
   removePasskey,
   renamePasskey,
-  revokeOtherSessions,
-  revokeSession,
   startOAuth,
   takeOAuthFragment,
   type OAuthOutcome,
@@ -49,17 +45,18 @@ import { AuditLog } from "./AuditLog";
 import { MfaSetup, type MfaStage } from "./MfaSetup";
 import { OAuthBindings, OAuthProviders } from "./OAuthBindings";
 import { PasskeyList } from "./PasskeyList";
-import { LockoutList, SessionList } from "./SessionList";
+import { LockoutList } from "./SessionList";
 import { Skeleton } from "@/ui/skeleton";
 
 const KEY = ["identity", "security"] as const;
 
 /**
- * 设置 → 安全（补全架构 §8.3，设计系统 §5.9–§5.11）。
+ * 设置 → 账号与安全（补全架构 §8.3，设计系统 §5.9–§5.11）。
  *
- * 所有角色都进得来（`ownerOnly: false`）：每个人都管自己的登录方式与设备。
- * 顺序：两步验证（策略要求而没开时排第一）· 通行密钥 · 第三方账号 · 会话与
- * 设备；owner 另有锁定的账号与审计。服务器壳上还没登录时这一页就是登录。
+ * 所有角色都进得来（`ownerOnly: false`）：每个人都管自己的登录方式。
+ * 顺序：两步验证（策略要求而没开时排第一）· 通行密钥 · 第三方账号；owner
+ * 另有登录提供方、锁定的账号与审计。登录会话在「设备与会话」页。服务器壳上
+ * 还没登录时这一页就是登录。
  *
  * OAuth 回调（`#oauth=`，契约 §18.5）由 `use-link-fragments` 打开到这一页，
  * 这里取走片段：登录成功换会话，`mfa` 接第二步，`bound` 提示已绑定，`error`
@@ -169,11 +166,6 @@ function SecuritySettings({ session }: { session: IdentitySession }) {
     queryKey: [...KEY, "bindings"],
     queryFn: oauthBindings,
   });
-  const [everyone, setEveryone] = React.useState(false);
-  const sessions = useQuery({
-    queryKey: [...KEY, "sessions", everyone],
-    queryFn: () => listSessions(everyone),
-  });
   const lockouts = useQuery({
     queryKey: [...KEY, "lockouts"],
     queryFn: listLockouts,
@@ -229,8 +221,7 @@ function SecuritySettings({ session }: { session: IdentitySession }) {
       });
   };
 
-  /* -------------------------------- 会话 -------------------------------- */
-  const [sessionBusy, setSessionBusy] = React.useState<string | null>(null);
+  /* ------------------------------- 其余动作 ------------------------------- */
   const [oauthBusy, setOauthBusy] = React.useState<string | null>(null);
   const [lockBusy, setLockBusy] = React.useState<string | null>(null);
   const [providerBusy, setProviderBusy] = React.useState<string | null>(null);
@@ -348,34 +339,6 @@ function SecuritySettings({ session }: { session: IdentitySession }) {
             binding.credentialId,
             () => removeOAuthBinding(binding.credentialId),
             "bindings",
-          )
-        }
-      />
-      <SessionList
-        sessions={sessions.data}
-        loading={sessions.isLoading}
-        everyone={everyone}
-        canSeeEveryone={manage}
-        names={names}
-        busy={sessionBusy}
-        onEveryone={setEveryone}
-        onRevoke={(row: IdentitySessionRow) =>
-          act(
-            setSessionBusy,
-            row.sessionId,
-            () => revokeSession(row.sessionId),
-            "sessions",
-          )
-        }
-        onRevokeOthers={() =>
-          act(
-            setSessionBusy,
-            "others",
-            async () => {
-              const count = await revokeOtherSessions();
-              toast.success(t("security.sessions.signedOut", { count }));
-            },
-            "sessions",
           )
         }
       />

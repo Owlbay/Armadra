@@ -13,7 +13,7 @@ import { useCanvasStore } from "../store/canvas-store";
 import { usePreferencesStore } from "./preferences-store";
 
 const JOIN_FRAGMENT = /^#join=(.+)$/;
-/** 设置里「远程访问」那一页的 id（`RemoteServicesPage.REMOTE_SECTION`；那一页是懒加载的，这里不引它）。 */
+/** 设置里「远程访问」那一页的 id（`RemoteAccessPage.REMOTE_SECTION`；那一页是懒加载的，这里不引它）。 */
 const REMOTE_SECTION = "remoteAccess";
 
 /**
@@ -50,7 +50,7 @@ function openRemoteWith(link: string): void {
 
 /**
  * 服务器壳的两种链接落在页面根的片段上：邀请 `#invite=<令牌>` 打开到「账号与
- * 共享」，兑换对话框在那一页取走令牌；配对 `#pair=<票>` 打开到「本机服务」，
+ * 共享」，兑换对话框在那一页取走令牌；配对 `#pair=<票>` 打开到「设备与会话」，
  * 那一页检查连接后取走票完成配对。OAuth 回调 `#oauth=…`（契约 §18.5）打开到
  * 「安全」，那一页取走结果（登录、第二步、已绑定或错误）。只看一次，片段由
  * 那几页抹掉。
@@ -94,7 +94,7 @@ export function useLinkFragments(
       : hasInvitationFragment()
         ? "accounts"
         : hasPairingFragment()
-          ? "service"
+          ? "devices"
           : hasOAuthFragment()
             ? "security"
             : undefined;

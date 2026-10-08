@@ -29,11 +29,6 @@ import {
 } from "@/ui/select";
 import { Spinner } from "@/ui/spinner";
 import { Switch } from "@/ui/switch";
-import {
-  GatewayDevices,
-  type GatewayDevice,
-  type GatewayDevicesProps,
-} from "./GatewayDevices";
 import { PairingCard } from "./PairingCard";
 
 const KNOWN_ERRORS = new Set([
@@ -91,25 +86,18 @@ export interface GatewayPanelProps {
   pairing: GatewayPairingPayload | null;
   pairingBusy: boolean;
   onNewPairing(origin?: string): void;
-  /** `null`：没有会话、读不到——整块不出现。 */
-  devices: readonly GatewayDevice[] | null;
-  revoking: string | null;
-  onRevoke(device: GatewayDevice): void;
-  /** 设备表的其余选项：当前设备、撤销权、分页。 */
-  deviceOptions?: Omit<
-    GatewayDevicesProps,
-    "devices" | "revoking" | "onRevoke"
-  >;
+  /** 同一张卡里接在开关后面的行（远程访问页的「经中转」）。 */
+  extra?: React.ReactNode;
   /** 展示页用：钉住时钟、展开「更多选项」。 */
   now?: number;
   defaultMoreOpen?: boolean;
 }
 
 /**
- * 设置 → 后台服务与对外服务 → 对外服务（设计系统 §5.12，补全架构 §7）。
+ * 设置 → 远程访问 → 局域网直连（设计系统 §5.12，补全架构 §7）。
  *
  * 关着时只有开关那一行（不写「未开启」）；开着时是监听地址、更多选项、
- * 配对卡。已配对设备与开关无关，一直在。服务器壳托管时（`managedBy:
+ * 配对卡。已配对设备在「设备与会话」页。服务器壳托管时（`managedBy:
  * shell`）配置来自命令行，控件全部只读，配对照常。
  */
 export function GatewayPanel({
@@ -119,10 +107,7 @@ export function GatewayPanel({
   pairing,
   pairingBusy,
   onNewPairing,
-  devices,
-  revoking,
-  onRevoke,
-  deviceOptions,
+  extra,
   now,
   defaultMoreOpen = false,
 }: GatewayPanelProps) {
@@ -285,6 +270,7 @@ export function GatewayPanel({
             </Collapsible>
           </>
         )}
+        {extra}
       </SettingsGroup>
 
       {status.enabled && status.error && (
@@ -326,14 +312,6 @@ export function GatewayPanel({
           }
           onNewPairing={onNewPairing}
           now={now}
-        />
-      )}
-      {devices && (
-        <GatewayDevices
-          devices={devices}
-          revoking={revoking}
-          onRevoke={onRevoke}
-          {...deviceOptions}
         />
       )}
     </div>

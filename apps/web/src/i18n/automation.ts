@@ -20,13 +20,13 @@ const zh = {
   /* 不可用状态（§5：不出现伪按钮） */
   "automation.blocked.noWorkspace": "先打开一个工作空间",
   "automation.blocked.nativeSession":
-    "桌面壳未能建立本机会话，原因见「设置 → 连接 → 后台服务与对外服务」",
+    "桌面壳未能建立本机会话，原因见「设置 → 设备与会话」",
   "automation.blocked.disconnected": "连不上 Host",
   "automation.blocked.unsupported": "这个 Host 没有执行 Worker，无法运行计划",
   "automation.blocked.noSession": "这个 Host 不支持浏览器会话",
   "automation.blocked.signedOut": "这台设备还没有与 Host 配对",
   "automation.blocked.noPermission": "这台设备没有该工作空间的自动化权限",
-  "automation.blocked.action": "前往设置 → 连接",
+  "automation.blocked.action": "前往设置",
   "automation.readOnly": "只读权限：可以查看，不能创建或改动计划",
 
   /* 计划状态 */
@@ -228,7 +228,7 @@ const en: Record<keyof typeof zh, string> = {
 
   "automation.blocked.noWorkspace": "Open a workspace first",
   "automation.blocked.nativeSession":
-    "The desktop shell could not open a local session; see Settings → Connections → Background and external services",
+    "The desktop shell could not open a local session; see Settings → Devices & sessions",
   "automation.blocked.disconnected": "Cannot reach the Host",
   "automation.blocked.unsupported":
     "This Host has no execution Worker, so it cannot run plans",
@@ -236,7 +236,7 @@ const en: Record<keyof typeof zh, string> = {
   "automation.blocked.signedOut": "This device is not paired with the Host",
   "automation.blocked.noPermission":
     "This device holds no automation permission for this workspace",
-  "automation.blocked.action": "Go to Settings → Connections",
+  "automation.blocked.action": "Open Settings",
   "automation.readOnly": "Read-only: plans can be viewed but not changed",
 
   "automation.planState.unspecified": "Unknown",

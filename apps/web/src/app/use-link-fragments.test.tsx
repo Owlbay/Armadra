@@ -32,11 +32,11 @@ describe("useLinkFragments", () => {
     expect(usePreferencesStore.getState().lastSettingsSection).toBe("accounts");
   });
 
-  it("配对链接打开到「后台服务」", () => {
+  it("配对链接打开到「设备与会话」", () => {
     window.history.replaceState(null, "", "#pair=abc.def");
     renderHook(() => useLinkFragments(true));
     expect(useCanvasStore.getState().panels.settings).toBe(true);
-    expect(usePreferencesStore.getState().lastSettingsSection).toBe("service");
+    expect(usePreferencesStore.getState().lastSettingsSection).toBe("devices");
   });
 
   it("OAuth 回调打开到「安全」", () => {
