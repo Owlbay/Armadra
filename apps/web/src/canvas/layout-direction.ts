@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useQuery } from "@tanstack/react-query";
 import { create } from "zustand";
 import {
   DEFAULT_LAYOUT_DIRECTION,
@@ -6,7 +7,8 @@ import {
   type LayoutDirection,
 } from "@armadra/shared";
 
-import { useRuntimeSettings } from "@/panels/settings/use-runtime-settings";
+import { useAccess } from "@/app/use-access";
+import { settingsGateway } from "@/settings";
 import { runCanvasCommand } from "./commands";
 
 /**
@@ -46,9 +48,19 @@ export function useLayoutDirection(): LayoutDirection {
   return useLayoutDirectionStore((state) => state.setting);
 }
 
-/** 画布挂一次：读设置并推进 store。 */
+/**
+ * 画布挂一次：读设置并推进 store。与设置页共用 `["settings"]` 查询（同一个
+ * 键、同一个 `queryFn`），存完设置画布立刻跟着变。共享画布的成员读不了主机
+ * 设置（`settings.get` 答 403），不发这次请求，按缺省纵向。
+ */
 export function useLayoutDirectionSync(): void {
-  const { settings } = useRuntimeSettings();
+  const { member } = useAccess();
+  const settings = useQuery({
+    queryKey: ["settings"],
+    queryFn: () => settingsGateway.load(),
+    retry: false,
+    enabled: !member,
+  });
   const value = settings.data ? layoutDirectionOf(settings.data) : null;
   React.useEffect(() => {
     if (value) useLayoutDirectionStore.setState({ setting: value });

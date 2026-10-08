@@ -4,6 +4,7 @@ import {
 } from "@armadra/shared";
 
 import { useT } from "@/app/preferences-store";
+import { useAccess } from "@/app/use-access";
 import { SettingsRow } from "@/panels/settings/SettingsRow";
 import { CONTROL_WIDTH } from "@/panels/settings/pages/GeneralPage";
 import { useRuntimeSettings } from "@/panels/settings/use-runtime-settings";
@@ -21,6 +22,12 @@ import { layoutDirectionOf } from "./layout-direction";
  * 读它，同一块画布在手机与桌面上排法一致。存好后画布经同一个设置查询同步。
  */
 export function LayoutDirectionRow() {
+  // 共享画布的成员读不了主机设置：这一行不摆，也不发请求。
+  const { member } = useAccess();
+  return member ? null : <LayoutDirectionSelect />;
+}
+
+function LayoutDirectionSelect() {
   const t = useT();
   const { settings, save } = useRuntimeSettings();
   const value = layoutDirectionOf(settings.data);
