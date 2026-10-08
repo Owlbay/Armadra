@@ -133,11 +133,11 @@ export default async function run5(ctx) {
       readFileSync(join(data, "integration", "global-migration.json"), "utf8"),
     );
     s.check(
-      "迁移记录升到 version 2，临时 CODEX_HOME 里没有要清的会话信任记录",
-      record.version === 2 &&
-        Array.isArray(record.sessionTrust?.removed) &&
-        record.sessionTrust.removed.length === 0,
-      record.sessionTrust,
+      "迁移记录是 version 3：启动只动数据目录，不碰任何 CLI 的配置",
+      record.version === 3 &&
+        Object.keys(record.agents ?? {}).length === 0 &&
+        record.sessionTrust === undefined,
+      record,
     );
 
     // 共用的环境：画布内带源节点的身份，画布外只少这一个变量。

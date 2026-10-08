@@ -625,6 +625,8 @@ G5-25 追加：`GET /api/usage` 与 `POST /api/usage/refresh` 里 Claude 那一�
 
 `<数据目录>/integration/global-migration.json`（代码在 `core/hook/install/migrate.ts`）。`version: 2` 在 v1 的 `agents` 之外多一个 `sessionTrust`：把旧版本写进 `~/.codex/config.toml` 的 `/<session-flags>/config.toml:*` 信任记录清掉的那一步。没有记录的机器 v1、v2 一起跑；已有 `version: 1` 的只跑 v2 并把记录升版，`agents` 原样保留。`ARMADRA_NO_GLOBAL_WRITES=1` 时都不跑。
 
+**2026-10-08 起**：启动不再改用户 HOME 下的任何文件。没有记录的机器只清数据目录里旧安装器的标记，写 `{ "version": 3, "migratedAt", "agents": {} }`；已有任何版本记录的机器原样读回、不再补跑。旧版本留在 CLI 配置里的条目改由集成页的「清理旧版」（`repairIntegration`，§39.1）在用户点击后处理。早期版本写下的 v1 / v2 记录仍可读；集成状态里的 `migration.removed` / `backups` 不再列出技能根下非本产品技能目录的路径。
+
 ```json
 {
   "version": 2,
@@ -645,7 +647,7 @@ G5-25 追加：`GET /api/usage` 与 `POST /api/usage/refresh` 里 Claude 那一�
 ### 13.4 Worker 能力 `remote.integration.v2`
 
 - 新 Worker 在握手里多报 `remote.integration.v2`（`core/remote/operations.ts::INTEGRATION_V2_CAPABILITY`）。`integration.sync` 不再接受 `codexCommand`（收到就忽略），答复只有 `{ missing, written }`，没有 `trustChanged`；`integration.locate` 不变。
-- 新 Worker 在第一次 `integration.sync` 时对执行主机的 `~/.codex/config.toml` 做一次 §13.3 的第二步，记进它状态目录下的 `integration/global-migration.json`。
+- 新 Worker 在第一次 `integration.sync` 时对执行主机的 `~/.codex/config.toml` 做一次 §13.3 的第二步，记进它状态目录下的 `integration/global-migration.json`。2026-10-08 起取消：Worker 除状态目录外不写执行主机上的任何文件。
 - 控制端只要求 `remote.integration.v1` 就能同步，且不再发 `codexCommand`（旧 Worker 只在收到它时写信任）。只有 v1 的主机控制端记为「Worker 旧」：它之前写下的 Codex 信任记录要等 Worker 升级后才会被清。
 - 远端注入文件改为与本机同一个生成器：`run/<cli>`（POSIX 启动器）与委托给它的 `shims/<cli>`。
 
@@ -2813,7 +2815,7 @@ core 校验远程服务地址与指纹的写法时用具名码（状态均 400�
 ### 39.1 目录、模型菜单、集成与 ama 密钥
 
 - `models` 对不认识的 Agent 答 404；`integration*` 的拒绝是集成域自己的 `InstallError`（码与状态它带），其余失败是 500。
-- 集成只写数据目录（画布内注入）；`repairIntegration` 动 CLI 自己的配置目录里旧产品名留下的条目，先备份再改。
+- 集成只写数据目录（画布内注入）；`repairIntegration` 只在用户点击时动 CLI 自己的配置目录，且只认本产品写下的条目：程序是我们的 Hook 客户端（现名或改名前的名字，含开发构建）的 Hook 与状态行、调用它的状态模块、带我们签名的技能目录、我们的指令块标记 `armadra:skills` / `aicc:skills`、与我们的条目同在时 Codex `hooks.json` 顶层的 `version`；先备份再改。其他工具写进同一批文件的条目不列入 `found`、不进 `removed` / `kept`、不改不删（2026-10-08 起）。`kept` 只剩我们自己留下没删的（旁边有用户文件的技能目录、指令文件的其余部分）。
 - ama 的密钥只进不出：三条都答「哪家设了、存在哪个后端」。密钥后端不可用时答 503，码是后端自己的（`secret_unavailable`），原话不带后端给的理由。
 
 <!-- rpc:begin contract=§39.1 -->

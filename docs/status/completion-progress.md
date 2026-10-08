@@ -3244,3 +3244,32 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - 契约 §52：`POST /api/agents/launch-slot { workspaceId, nodeId, agentId } → { granted, waitedMs }`；`POST /api/agents/launch-result { …, attempt } → { verdict: started|failed|unknown, settled }`；`agents.list` 的 `launchTarget` 也用于垫片；`wait` 的 `reason: "launch_failed"`。
 - core：`launchGate()`（`acquire({ agentId, configDir, nodeId, timeoutMs? })`、`release(nodeId)`、`forget(nodeId)`、`holds` / `position`）、`configDirFor(baseAgentId, env?, home?)`、`policyFor`、`watchLaunch`、`installLaunchGate(bus)`、`activeLaunchGate()`；`registry.versionManagerTarget(resolved, which?)`、`clearShimCache()`；`send-queue.failLaunch(database, nodeId)`、`LAUNCH_FAILED_REASON`；`routes.launchOperations(collab, options?)`。
 - 页面：`runtimeApi.launchSlot(body, signal?)`、`runtimeApi.launchResult(body, signal?)`；`TerminalSurfaceStatus.launch?: "failed" | null`。
+
+## 集成清理只认本产品签名、启动不写 HOME（紧急修复 2026-10-08）
+
+用户要求：不动用户的配置与系统配置，只注入自己的，不管也不改别人的东西。审计发现 `hook/install/repair.ts` 把另一个独立应用写进 CLI 配置的 Hook、指令块与技能目录当成我们旧版的残留（按名字子串、任意 `target/debug/`、通用技能名、指令块前缀匹配），集成页「修复」会列出并删除；启动迁移不经点击就删技能目录。实证：该应用在用户机器上运行，`~/.copilot/hooks/` 里它的文件被反复清空，两边互相改写，累积了多份 `.armadra-backup-*`。
+
+做了什么：
+
+- `repair.ts`：只认本产品签名——程序（路径最后一段）是 `armadra-hook` / `aicc-hook`（含 `.exe` / `.cmd`、开发构建）的 Hook 与状态行；调用它的状态模块；`armadra`、`armadra-canvas`、`armadra-linked-context`、`aicc-canvas`、`aicc-linked-context` 且 `SKILL.md` 带 `armadra:skill-revision` 尾注或调用我们客户端的技能目录；恰为 `armadra:skills` / `aicc:skills` 的指令块；与我们条目同在时 Codex `hooks.json` 的顶层 `version`。其他条目不进 `found` / `removed` / `kept`，所在文件没有我们的条目就不读写、不备份。`isLegacyCommand` 改为 `isOwnCommand`，`LEGACY_SKILL_DIRS` 改为 `OWN_SKILL_DIRS`。
+- `migrate.ts`：启动只清数据目录里旧安装器的 `installed.json`，记录 `version: 3`、`agents: {}`；已有任何版本记录的原样读回。删掉启动时改 Claude / Codex / Copilot 配置、删模块与技能、清 Codex 会话信任记录的步骤；Worker 的 `integration.sync` 也不再改执行主机的 `~/.codex/config.toml`。
+- `integration.ts`：早期版本记录里技能根下非本产品目录的路径不再出现在 `migration.removed` / `backups`。
+- 页面：「修复 N」改为「清理旧版 N」，结果里的「保留 N 处（不是我们写的）」改为「保留 N 处」（中英同步）。
+- 探针：`ui-features/integration.mjs` 夹具改为我们真实写过的命令形状，外加一条其他工具的命令，断言弹层不列、清理后仍在；`packaged-smoke.mjs` 改为断言启动不改临时 HOME 的任何 CLI 文件，再经 API 逐个点清理，断言我们的条目移除、他人的 Hook / 技能 / 指令块与 `config.toml` 字节不变；`scenario-5` 断言记录为 `version: 3`。
+
+实测（macOS arm64，基于 main 20248839）：
+
+- `repair.test.ts`、`migrate.test.ts`、`integration.test.ts`、`remote/integration.test.ts` 新夹具（中性名 `othertool` 的 Hook、Copilot 文件、技能目录、指令块、Codex 未知键）：扫描、清理、启动迁移都不碰，结果与集成状态里不含它；我们的条目照常列出与清理。
+- `ui-features-e2e --only=integration` 通过（截图核对弹层只列我们的一条 ×11）。
+- `pnpm libs:build && pnpm -r --if-present test` 全过（web 4027、desktop 5346 / 67 跳、shared 372、server 98 / 4 跳）；`pnpm check` 通过。
+
+没做 / 偏离：
+
+- 用户机器上已被改写的他人文件不恢复：该应用会自己重写；Armadra 留下的 `.armadra-backup-*` 也不自动删除（删除同样是改用户目录），由用户决定。
+- 清理我们自己的 Codex 条目时不再同步修剪 `config.toml` 的按序号信任记录（规则按位置、认不出归属）；残留的信任记录无副作用。
+- 已删除的启动步骤不在执行主机上补做；早期 Worker 写下的会话信任记录留在原处。
+
+接口：
+
+- 契约 §39.1 写明 `repairIntegration` 只认本产品签名；§13.3 记录 `version: 3`；§13.4 Worker 不再写执行主机。形状不变。
+- core：`isOwnCommand(command)`、`isOwnSkill(body)`、`OWN_SKILL_DIRS`；`MigrationOptions` 去掉 `env` / `homes`；`MIGRATION_VERSION = 3`；`integration-worker.sync(stateDir, args)` 去掉 `env`；删除 `clearCodexSessionTrust`、`clearSessionTrustOnce`、`CODEX_SESSION_KEY_PREFIX`。

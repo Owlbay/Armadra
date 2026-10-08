@@ -16,6 +16,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -30,10 +31,7 @@ import {
   expect,
   it,
 } from "vitest";
-import {
-  CODEX_SESSION_KEY_PREFIX,
-  readMigration,
-} from "../hook/install/migrate";
+import { readMigration } from "../hook/install/migrate";
 import { registerSkillContent } from "../hook/install/skills";
 import { issueNodeToken } from "../hook/tokens";
 import type { SshHost } from "../settings/ssh-hosts";
@@ -387,75 +385,39 @@ describe("the remote command", () => {
   });
 });
 
-describe("Codex's trust on an execution host", () => {
-  const ours = `[hooks.state."${CODEX_SESSION_KEY_PREFIX}stop:0:0"]\nenabled = true\ntrusted_hash = "sha256:ours"\n`;
+describe("Codex's configuration on an execution host", () => {
+  // 旧 Worker 写过的会话级信任记录：键前缀不是我们独有的，不替人删。
+  const trust =
+    '[hooks.state."/<session-flags>/config.toml:stop:0:0"]\nenabled = true\ntrusted_hash = "sha256:x"\n';
   const theirs = 'model = "gpt-5"\n';
 
-  function host(config: string | undefined): {
-    stateDir: string;
-    codexHome: string;
-    env: NodeJS.ProcessEnv;
-  } {
+  it("never touches the host's ~/.codex, and ignores codexCommand", () => {
     const root = tempDir("armadra-far-codex-");
     const codexHome = join(root, "home", ".codex");
-    if (config !== undefined) {
-      mkdirSync(codexHome, { recursive: true });
-      writeFileSync(join(codexHome, "config.toml"), config, "utf8");
-    }
-    return {
-      stateDir: join(root, "state"),
-      codexHome,
-      env: {
-        ...process.env,
-        HOME: join(root, "home"),
-        CODEX_HOME: codexHome,
-        ARMADRA_NO_GLOBAL_WRITES: "",
-      },
-    };
-  }
-
-  it("clears the old Worker's records once, with a backup, and ignores codexCommand", () => {
-    const { stateDir, codexHome, env } = host(`${theirs}\n${ours}`);
+    mkdirSync(codexHome, { recursive: true });
     const config = join(codexHome, "config.toml");
-    const answer = syncIntegration(
-      stateDir,
-      { files: [], codexCommand: "/old/armadra-hook codex" },
-      env,
-    );
-    expect(answer).toEqual({ missing: [], written: 0 });
-    expect(readFileSync(config, "utf8")).toBe(theirs);
-    const record = readMigration(stateDir);
-    expect(record?.version).toBe(2);
-    expect(record?.sessionTrust?.removed).toEqual([
-      `${CODEX_SESSION_KEY_PREFIX}stop:0:0`,
-    ]);
-    const backup = record?.sessionTrust?.backup as string;
-    expect(readFileSync(backup, "utf8")).toContain(CODEX_SESSION_KEY_PREFIX);
-
-    // 只做一次：之后再出现的记录不归这一步管，也不再写回信任。
-    writeFileSync(config, `${theirs}\n${ours}`, "utf8");
-    syncIntegration(stateDir, { files: [] }, env);
-    expect(readFileSync(config, "utf8")).toBe(`${theirs}\n${ours}`);
-  });
-
-  it("does not create ~/.codex on a host without Codex", () => {
-    const { stateDir, codexHome, env } = host(undefined);
-    syncIntegration(stateDir, { files: [] }, env);
-    expect(existsSync(codexHome)).toBe(false);
-    expect(readMigration(stateDir)?.sessionTrust?.removed).toEqual([]);
-  });
-
-  it("does nothing while global writes are off", () => {
-    const { stateDir, codexHome, env } = host(ours);
-    syncIntegration(
-      stateDir,
-      { files: [] },
-      {
-        ...env,
-        ARMADRA_NO_GLOBAL_WRITES: "1",
-      },
-    );
-    expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(ours);
+    writeFileSync(config, `${theirs}\n${trust}`, "utf8");
+    const stateDir = join(root, "state");
+    const previous = {
+      HOME: process.env.HOME,
+      CODEX_HOME: process.env.CODEX_HOME,
+    };
+    process.env.HOME = join(root, "home");
+    process.env.CODEX_HOME = codexHome;
+    try {
+      const answer = syncIntegration(stateDir, {
+        files: [],
+        codexCommand: "/old/armadra-hook codex",
+      });
+      expect(answer).toEqual({ missing: [], written: 0 });
+    } finally {
+      for (const [name, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+    expect(readFileSync(config, "utf8")).toBe(`${theirs}\n${trust}`);
+    expect(readdirSync(codexHome)).toEqual(["config.toml"]);
     expect(readMigration(stateDir)).toBeUndefined();
   });
 

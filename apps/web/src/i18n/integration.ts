@@ -4,8 +4,8 @@ import type { MessageModule } from "./index";
  * 设置 → 集成（[界面与 ACP 刷新](../../../../docs/design/ui-acp-refresh.md) §1.5）。
  *
  * 一家 CLI 一张分组、固定五行，所以文案也归到一处。CLI、ACP、Hook 是术语，
- * 保留原文；`aicc-hook` 与上一个产品名是磁盘上的字面量（见 core 的
- * `hook/install/repair.ts` `LEGACY_MARKERS`），同样不翻译。
+ * 保留原文。「清理旧版」只针对本产品旧版本写下的条目（core 的
+ * `hook/install/repair.ts` 只认我们自己的签名），不涉及其他工具。
  */
 export const integration: MessageModule = {
   "zh-CN": {
@@ -30,7 +30,7 @@ export const integration: MessageModule = {
     "integration.action.reinstall": "重新安装",
     "integration.action.installing": "安装中",
     "integration.action.copyCommand": "复制命令",
-    "integration.action.repair": "修复 {count}",
+    "integration.action.repair": "清理旧版 {count}",
     "integration.action.rollback": "恢复上一版本",
     "integration.action.output": "查看输出",
     "integration.action.retry": "重试",
@@ -63,12 +63,12 @@ export const integration: MessageModule = {
     "integration.regenerate": "重新生成",
     "integration.regenerated": "注入产物已重新生成",
     "integration.failed": "接入操作失败",
-    "integration.repair": "修复",
+    "integration.repair": "清理",
     "integration.repair.done": "已清理旧残留",
-    "integration.repair.failed": "修复失败",
+    "integration.repair.failed": "清理失败",
     "integration.repair.found": "发现 {count} 处",
     "integration.repair.removed": "移除 {count} 处",
-    "integration.repair.kept": "保留 {count} 处（不是我们写的）",
+    "integration.repair.kept": "保留 {count} 处",
     "integration.backup": "原文件已备份到 {path}",
     "integration.outdatedHost": "Worker 待升级",
     "integration.outdatedHost.version": "Worker 待升级 · {version}",
@@ -98,7 +98,7 @@ export const integration: MessageModule = {
     "integration.action.reinstall": "Reinstall",
     "integration.action.installing": "Installing",
     "integration.action.copyCommand": "Copy command",
-    "integration.action.repair": "Repair {count}",
+    "integration.action.repair": "Clean up old version {count}",
     "integration.action.rollback": "Restore previous version",
     "integration.action.output": "View output",
     "integration.action.retry": "Retry",
@@ -131,12 +131,12 @@ export const integration: MessageModule = {
     "integration.regenerate": "Regenerate",
     "integration.regenerated": "Injection regenerated",
     "integration.failed": "Integration action failed",
-    "integration.repair": "Repair",
+    "integration.repair": "Clean up",
     "integration.repair.done": "Leftovers cleaned up",
-    "integration.repair.failed": "Repair failed",
+    "integration.repair.failed": "Cleanup failed",
     "integration.repair.found": "Found {count}",
     "integration.repair.removed": "Removed {count}",
-    "integration.repair.kept": "Kept {count} (not written by us)",
+    "integration.repair.kept": "Kept {count}",
     "integration.backup": "The original was backed up to {path}",
     "integration.outdatedHost": "Worker outdated",
     "integration.outdatedHost.version": "Worker outdated · {version}",
