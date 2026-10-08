@@ -426,7 +426,9 @@ describe("our names", () => {
         }
       }
       if (layout.module !== undefined) {
-        expect(readFileSync(layout.module, "utf8")).toContain(hookBin);
+        expect(readFileSync(layout.module, "utf8")).toContain(
+          JSON.stringify(hookBin),
+        );
       }
 
       const injection = inject(agentId);
