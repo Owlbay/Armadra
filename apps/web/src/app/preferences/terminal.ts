@@ -39,6 +39,7 @@ export interface TerminalPreferences {
 
 export const TERMINAL_FONT_SIZE_RANGE = [10, 20] as const;
 export const TERMINAL_LINE_HEIGHT_RANGE = [1, 1.6] as const;
+export const TERMINAL_LETTER_SPACING_RANGE = [-2, 4] as const;
 
 /**
  * 默认字号与行高（契约 §3.4，2026-09-19：13/1.2 → 12/1.15）。
@@ -79,7 +80,12 @@ export function storedTerminalPreferences(): TerminalPreferences {
       TERMINAL_LINE_HEIGHT_RANGE[0],
       TERMINAL_LINE_HEIGHT_RANGE[1],
     ),
-    letterSpacing: storedNumber(TERM_LETTER_SPACING_KEY, 0, -2, 4),
+    letterSpacing: storedNumber(
+      TERM_LETTER_SPACING_KEY,
+      0,
+      TERMINAL_LETTER_SPACING_RANGE[0],
+      TERMINAL_LETTER_SPACING_RANGE[1],
+    ),
     cursorStyle: storedEnum(
       TERM_CURSOR_STYLE_KEY,
       TERMINAL_CURSOR_STYLES,
