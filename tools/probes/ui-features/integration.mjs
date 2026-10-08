@@ -185,8 +185,8 @@ export default async function integration({ stack, output, report, scenario }) {
   );
   await phone.dialogSettled("手机设置抽屉停稳");
   await phone.clickOn(
-    `return [...document.querySelectorAll('[role="dialog"] button, [role="dialog"] a')].find((b) => b.getAttribute("aria-label") === "集成" || b.textContent.trim() === "Agent CLI");`,
-    "手机集成页",
+    `return [...document.querySelectorAll('[role="dialog"] button, [role="dialog"] a')].find((b) => b.getAttribute("aria-label") === "Agent CLI");`,
+    "手机 Agent CLI 页",
   );
   await phone.clickOn(badge, "手机上点开「清理旧版 11」");
   await phone.until(
