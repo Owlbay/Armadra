@@ -3554,3 +3554,16 @@ human initiator。页面不接收任何 controller 凭据；body owner/controlle
 - **谁读得到**：只有 `acp.log`（`GET /api/acp/sessions/{id}/log`）的 `entries` 带这两种块与 `diffs` / `status` / `kind` / `locations`。连线读取、摘要、交接、终端画面（`capture`）这些经 `history/registry.ts` 读镜像的读取方照旧只看到 `text` / `tool_use` / `tool_result`，图片的 base64 不进别人的上下文。
 - **`acp.log` 的 `snapshot`**：出参多一个可选的 `snapshot: { plan: AcpPlanEntry[], usage: { used, size, cost?: { amount, currency } } | null, availableCommands: { name, description }[], title: string | null }`，是活进程最近一次 `plan` / `usage_update` / `available_commands_update` / `session_info_update` 的值（命令最多 200 条）。与 `pending`、`turns` 同一条件：没有活进程时缺席。回放（`session/load`）的这几种不进快照。
 - 镜像与快照都不含凭据；`title` 只给页面作命名建议，core 不拿它改节点。
+
+## 52. 启动闸门：`launch-slot`、`launch-result`、垫片穿透与 `wait` 的 `launch_failed`
+
+自协议 1.24 起。同一份 CLI 配置目录上同时起几个 Codex，会同时迁移同一个状态库、同时对同一个账号做路由探测，其中一个起不来。core 按 `(agentId, 配置目录)` 排队启动，页面敲启动行前申请、敲完问结果，没起来就自动重敲一次。实现在 `core/agent/launch-gate.ts`（闸门与判定）、`core/agent/routes.ts`（两条路由）、`core/agent/registry.ts`（垫片穿透）与 `core/collab/send-queue.ts`（结算）。没有 procedure，两条都是 REST。
+
+- **闸门**：键是 `(agentId, 配置目录)`。自定义条目按它的 base；配置目录是 Codex 的 `CODEX_HOME`（缺省 `~/.codex`）、Claude 的 `CLAUDE_CONFIG_DIR`（缺省 `~/.claude`）、其余 `~/.<agentId>`，自定义条目的 `env` 优先。策略是 core 常量：`codex` 同时 1 个、持有上限 6 s、放行下一个前随机等 500–1500 ms；其余 CLI 不排队（立即 `granted: true`）。持有者的节点报出第一条真上报（来源 `hook` / `extension` / `acp`，不是 `restored`）或持有到期，先到者放行下一个。闸门只在内存里，重启即清空。依赖与运行由 core 启动的节点在 core 内直接过同一个闸门；SSH 节点不排。
+- **`POST /api/agents/launch-slot`** `{ workspaceId, nodeId, agentId }` → `200 { granted: boolean, waitedMs: number }`。长轮询，最多 30 s。`granted: false` 是等满没轮到，或被同一节点的新申请顶掉；闸门是减速带不是门禁，页面照常敲。
+- **`POST /api/agents/launch-result`** `{ workspaceId, nodeId, agentId, attempt }`（`attempt` 是 1–9 的整数，自动重试那一次是 2）→ `200 { verdict: "started" | "failed" | "unknown", settled: number }`。长轮询，最多约 30 s。判据只有两样，不读屏幕：节点终端里 shell 下面有没有进程、节点有没有报过状态。敲出后 30 s 内报过状态，或者看满 30 s 仍有进程是 `started`；前台连续两次为空、且一条状态都没报是 `failed`（启动行是敲进 shell 的，拿不到退出码，所以一个 30 s 内被人退掉、又从没报过状态的 CLI 也算失败）；终端后端答不出前台命令（Windows 的会话宿主）或节点没有终端是 `unknown`。`failed` 时放掉它在闸门上的位置；`attempt ≥ 2` 时把这个节点还排着的投递（`queued`）结算为 `cancelled`、`settledBy: "gate"`、原因 `launch_failed`，回执照常写回发送方，`settled` 是结算的条数。
+- 两条的错误：缺字段或 `agentId` 不是 Agent 答 400 `bad_request`；节点已落库且不在体里的工作空间答 404 `not_found`（还没落库的新节点不算越界）。权限：往自己起的节点里敲只要 `terminal:create`，别人的要 `terminal:drive`（与往别人的终端里写同一档）；服务器壳按体里的 `workspaceId` 判，节点在别的工作空间时拒绝。
+- **页面**：提示符安静后先 `launch-slot`（最多等 32 s），再敲，再 `launch-result`；`failed` 且是第一次就随机退避 2–5 s 重敲一次（`attempt: 2`）；第二次仍 `failed` 时节点头显示「启动失败」胶囊与「重试」按钮（重开终端并重新走这一遍），不再自动重敲。请求失败或旧 core 没有这两条路由时照常敲、不重试。
+- **`launchTarget` 的垫片穿透**：§26 的 `launchTarget` 原只用于 Windows 的 `.cmd` 包装（原文不改）。自 1.24 起，`GET /api/agents`（`agents.list`）的 `resolvedPath` 是 mise / asdf 的垫片（指向 `mise` / `asdf` 本体的符号链接，或路径含 `/mise/shims/`、`/.asdf/shims/`）时，core 在家目录里跑一次 `mise which <cli>`（asdf 同理，10 s 超时，按 `(垫片路径, mtime)` 缓存），答出的是真实存在的可执行文件就填 `launchTarget: { program: <真实路径>, args: [] }`。真实路径是 node 脚本时不再往下穿。只读，不写任何 CLI 或版本管理器的配置；问不出来就不带 `launchTarget`。Windows 不穿透。按目录切版本的项目以家目录里的全局版本为准。
+- **`wait --task`**（§15.5）：`status: "failed"` 时 `reason` 可以是 `launch_failed`——成员自动重试一次仍没起来，排给它的任务已经结算，调用方不必等到队列过期。
+- 事件无变化；不写数据库迁移（结算复用 `agent_send_queue` 已有的列）。

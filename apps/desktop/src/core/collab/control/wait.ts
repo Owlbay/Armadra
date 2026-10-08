@@ -6,6 +6,7 @@ import { loadNode, type Caller } from "../nodes";
 import { type Args, Refused } from "../refusals";
 import { type CollabContext, nowDate } from "../service";
 import { type Outcome, result } from "./outcome";
+import { LAUNCH_FAILED_REASON } from "../send-queue";
 
 /**
  * `wait` — 协调者的 runner 等一个画布成员把任务做完（补全架构 §5.3，契约
@@ -105,7 +106,10 @@ export interface WaitAnswer {
   readonly nodeId: string;
   /** `blocked`：挂着的那条审批。 */
   readonly approvalId?: string;
-  /** `failed` / `blocked` / `needsInput` 的原因码。 */
+  /**
+   * `failed` / `blocked` / `needsInput` 的原因码。成员启动失败（自动重试一次
+   * 之后）是 `launch_failed`（契约 §52）。
+   */
   readonly reason?: string;
   /** `done` 且成员 post 了结果：那条正文。 */
   readonly result?: { readonly text: string; readonly key: string };
@@ -442,6 +446,10 @@ function sentence(answer: WaitAnswer): string {
         ? "成员这一轮结束了，没有 post 结果；用 context summary 看它做了什么。"
         : "成员 post 了结果。";
     case "failed":
+      // 契约 §52：成员的 CLI 自动重试过一次仍没起来，排给它的任务已经结算。
+      if (answer.reason === LAUNCH_FAILED_REASON) {
+        return "成员没能启动（已自动重试一次），任务没有投进去。";
+      }
       return `任务没有做完（${answer.reason ?? "failed"}）。`;
     case "blocked":
       return "成员停在一个权限请求上，等人在画布或它的终端里回答；不要替人回答。";

@@ -487,6 +487,30 @@ export function expireQueue(
   return Number(expired.changes);
 }
 
+/** 节点没能启动时，排在它前面的那些结算成的原因码（契约 §52）。 */
+export const LAUNCH_FAILED_REASON = "launch_failed";
+
+/**
+ * 目标节点自动重试一次之后仍然没起来（界面第二波 §8.3）：把还排着的结算掉，
+ * 不让第一条任务与之后的 `send` 等满五分钟才过期。
+ *
+ * 终态是 `cancelled`、`settled_by = 'gate'`、原因 {@link LAUNCH_FAILED_REASON}：
+ * 回执照常写回发送方，`wait --task` 据此答 `failed`。已经在投的那一条
+ * （`delivering`）不动，它的结果由投递自己定。返回结算了几条。
+ */
+export function failLaunch(
+  database: DatabaseSync,
+  targetNodeId: string,
+): number {
+  const changes = database
+    .prepare(
+      "UPDATE agent_send_queue SET state = 'cancelled', settled_by = 'gate', last_reason = ? " +
+        "WHERE target_node_id = ? AND state = 'queued'",
+    )
+    .run(LAUNCH_FAILED_REASON, targetNodeId);
+  return Number(changes.changes);
+}
+
 /** 还排着的目标，出队泵扫一遍时问它。 */
 export function targetsWithPending(
   database: DatabaseSync,
