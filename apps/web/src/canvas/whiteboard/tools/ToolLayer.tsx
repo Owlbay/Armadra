@@ -1,5 +1,4 @@
 import * as React from "react";
-import { useWizardOpen } from "@/acp/wizard-open";
 import { useStoreApi } from "@xyflow/react";
 
 import { usePreferencesStore } from "@/app/preferences-store";
@@ -52,15 +51,11 @@ const ImportMermaidDialog = React.lazy(
   () => import("../mermaid/ImportMermaidDialog"),
 );
 
-/** 新建 Agent 向导（ACP 设计 §8）：同样懒加载、只在打开时渲染。 */
-const NewAgentWizard = React.lazy(() => import("@/acp/NewAgentWizard"));
-
 export function ToolLayer() {
   const tool = useTool();
   const store = useStoreApi();
   const { draft } = useToolPointer();
   const mermaidOpen = useMermaidDialogOpen();
-  const wizardOpen = useWizardOpen((state) => state.open);
 
   useItemDrag();
   useClipboardCommands();
@@ -91,11 +86,6 @@ export function ToolLayer() {
       {mermaidOpen ? (
         <React.Suspense fallback={null}>
           <ImportMermaidDialog />
-        </React.Suspense>
-      ) : null}
-      {wizardOpen ? (
-        <React.Suspense fallback={null}>
-          <NewAgentWizard />
         </React.Suspense>
       ) : null}
     </>

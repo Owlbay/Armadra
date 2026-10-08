@@ -83,6 +83,8 @@ import {
 import { DANGER_ACTION_CLASS } from "@/lib/danger-action";
 import { MAX_ZOOM, MIN_ZOOM } from "./zoom";
 import { tidySelection } from "./tidy-flow";
+import { layoutDirection, useLayoutDirectionSync } from "./layout-direction";
+import { useConnectEndSpawn } from "./flow/use-connect-end";
 import { isZoomWheel, zoomCanvasByWheel } from "./interaction/wheel-zoom";
 
 /**
@@ -196,7 +198,24 @@ function FlowWorkspaceInner() {
     return () => stage.removeEventListener("wheel", onWheel, { capture: true });
   }, []);
 
-  const bindings = useFlowNodes();
+  const flowBindings = useFlowNodes();
+  // 从 Agent 把手拖到空白处松手 = 在落点开「派发」菜单（ui-wave2 §6.3）。
+  const { onConnectEnd: spawnOnDrop, menu: spawnMenu } = useConnectEndSpawn();
+  const bindings = React.useMemo(
+    () => ({
+      ...flowBindings,
+      onConnectEnd: (
+        event: MouseEvent | TouchEvent,
+        connection: Parameters<typeof flowBindings.onConnectEnd>[1],
+      ) => {
+        flowBindings.onConnectEnd(event, connection);
+        spawnOnDrop(event, connection);
+      },
+    }),
+    [flowBindings, spawnOnDrop],
+  );
+  // 布局方向（契约 §50）：派发线的走向、整理与「派生」的落点都读它。
+  useLayoutDirectionSync();
   // 右键菜单插槽（§5.3）：`handlers` 摊给 `<ReactFlow>`，`menus` 摆在
   // 触发器后面。四种菜单的分流与目标状态都在 `menus/CanvasMenus.tsx`。
   const { handlers: menuHandlers, menus } = useCanvasMenus();
@@ -341,7 +360,7 @@ function FlowWorkspaceInner() {
             delete stage.dataset.tidying;
           }, TIDY_TRANSITION_MS);
         }
-        store().arrangeNodes({ aspect, only });
+        store().arrangeNodes({ aspect, only, direction: layoutDirection() });
         // 整理全画布之后 fitView：既然已经裹成一屏的形状，就让它真的落在
         // 一屏里。只整理选中时相机不动，免得把用户正看着的地方带走。
         if (!only) window.requestAnimationFrame(fitView);
@@ -520,6 +539,7 @@ function FlowWorkspaceInner() {
       </ContextMenuTrigger>
 
       {menus}
+      {spawnMenu}
 
       <ResponsiveAlertDialog
         open={pendingDelete !== null}

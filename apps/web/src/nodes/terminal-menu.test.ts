@@ -16,7 +16,16 @@ vi.mock("@/store/canvas-store", () => ({
 }));
 vi.mock("@/meta/annotations", () => ({ openNodeAnnotation: vi.fn() }));
 vi.mock("./terminal-registry", () => ({ terminalHandle: () => null }));
+const registry = vi.hoisted(() => ({
+  agents: [] as {
+    id: string;
+    label: string;
+    installed: boolean;
+    resolvedPath?: string;
+  }[],
+}));
 vi.mock("@/agent/launch", () => ({
+  agentRegistry: () => registry.agents,
   customAgentFor: (id: string) =>
     id === "custom:pi" ? { baseAgent: "pi" } : undefined,
   permissionModeLabel: (mode: string) => mode,
@@ -94,23 +103,37 @@ describe("driver items", () => {
   });
 });
 
-describe("spawn agent", () => {
+describe("spawn", () => {
   function entries(data: Record<string, unknown>) {
     const node = { id: "lead", type: "terminal", data } as CanvasNode;
     return registration.factory!({ node, targetIds: [node.id] });
   }
 
-  it("offers 「派生 Agent…」 on an agent node and opens the wizard for it", async () => {
-    const { useWizardOpen } = await import("@/acp/wizard-open");
+  it("「派生」是子菜单：每家可用的 Agent 一项，与父同一家排第一", () => {
+    registry.agents = [
+      {
+        id: "claude",
+        label: "Claude Code",
+        installed: true,
+        resolvedPath: "/bin/claude",
+      },
+      {
+        id: "codex",
+        label: "Codex",
+        installed: true,
+        resolvedPath: "/bin/codex",
+      },
+      { id: "pi", label: "Pi", installed: false },
+    ];
     const spawn = entries({ kind: "terminal", agent: { id: "codex" } }).find(
       (item) => item.id === "agent.spawn",
     );
-    expect(spawn).toBeDefined();
-    spawn!.run();
-    expect(useWizardOpen.getState()).toMatchObject({
-      open: true,
-      supervisorNodeId: "lead",
-    });
+    expect(spawn?.label).toBe("派生");
+    // 没装的那家缺省不列（与新建菜单同一套「启用」判定）。
+    expect(spawn?.children?.map((item) => item.id)).toEqual([
+      "spawn.agent.codex",
+      "spawn.agent.claude",
+    ]);
   });
 
   it("is not on a plain terminal", () => {

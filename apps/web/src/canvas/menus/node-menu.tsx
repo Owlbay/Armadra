@@ -46,7 +46,11 @@ export interface NodeMenuItem {
   icon?: LucideIcon;
   disabled?: boolean;
   destructive?: boolean;
+  /** 禁用原因（悬停提示）。 */
+  hint?: string;
   run: () => void;
+  /** 给了就渲染成一层子菜单（`run` 不再被调用）；只支持一层。 */
+  children?: NodeMenuItem[];
 }
 
 export type NodeMenuItemsFactory = (context: NodeMenuContext) => NodeMenuItem[];
@@ -208,17 +212,22 @@ export function NodeMenuContent({ node }: { node: CanvasNode }) {
       {extras.length > 0 ? <ContextMenuSeparator /> : null}
       {extras.map((item) => {
         const Icon = item.icon;
-        return (
-          <ContextMenuItem
-            key={item.id}
-            disabled={item.disabled}
-            variant={item.destructive ? "destructive" : "default"}
-            onSelect={item.run}
-          >
-            {Icon ? <Icon /> : null}
-            <span className="truncate">{item.label}</span>
-          </ContextMenuItem>
-        );
+        if (item.children) {
+          return (
+            <ContextMenuSub key={item.id}>
+              <ContextMenuSubTrigger disabled={item.disabled}>
+                {Icon ? <Icon /> : null}
+                <span className="truncate">{item.label}</span>
+              </ContextMenuSubTrigger>
+              <ContextMenuSubContent className="min-w-44">
+                {item.children.map((child) => (
+                  <ExtraItem key={child.id} item={child} />
+                ))}
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+          );
+        }
+        return <ExtraItem key={item.id} item={item} />;
       })}
 
       <ContextMenuSeparator />
@@ -230,5 +239,20 @@ export function NodeMenuContent({ node }: { node: CanvasNode }) {
         {t("node.delete")}
       </ContextMenuItem>
     </>
+  );
+}
+
+function ExtraItem({ item }: { item: NodeMenuItem }) {
+  const Icon = item.icon;
+  return (
+    <ContextMenuItem
+      disabled={item.disabled}
+      variant={item.destructive ? "destructive" : "default"}
+      title={item.hint}
+      onSelect={item.run}
+    >
+      {Icon ? <Icon /> : null}
+      <span className="truncate">{item.label}</span>
+    </ContextMenuItem>
   );
 }

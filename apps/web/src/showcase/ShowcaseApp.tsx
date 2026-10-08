@@ -25,7 +25,6 @@ import MobileSection from "./sections/mobile";
 import StatesSection from "./sections/states";
 import TokensSection from "./sections/tokens";
 import UpdatesSection from "./sections/updates";
-import WizardSection from "./sections/wizard";
 import WorkflowSection from "./sections/workflow";
 
 /**
@@ -38,7 +37,6 @@ export const SHOWCASE_SECTIONS = [
   ["components", ComponentsSection],
   ["canvas", CanvasSection],
   ["acp", AcpSection],
-  ["wizard", WizardSection],
   ["coordinator", CoordinatorSection],
   ["workflow", WorkflowSection],
   ["collab", CollabSection],

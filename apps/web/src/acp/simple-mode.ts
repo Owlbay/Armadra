@@ -57,9 +57,9 @@ export const SIMPLE_HIDDEN_NODE_MENU: readonly string[] = [
   "agent.driver.terminal",
 ];
 
-/** 新建菜单在简洁模式下只留这几项。 */
+/** 新建菜单在简洁模式下只留这几项（各 Agent 一项一家）。 */
 export const SIMPLE_ADD_MENU: readonly string[] = [
-  "add.newAgent",
+  "add.agent.*",
   "add.sticky",
   "add.text",
   "add.frame",
@@ -93,6 +93,8 @@ export function visibleAddMenu<T extends { id: string }>(
   simple: boolean = isSimpleMode(),
 ): T[] {
   return simple
-    ? items.filter((item) => SIMPLE_ADD_MENU.includes(item.id))
+    ? items.filter((item) =>
+        SIMPLE_ADD_MENU.some((pattern) => matches(item.id, pattern)),
+      )
     : [...items];
 }

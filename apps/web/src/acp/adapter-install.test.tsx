@@ -303,7 +303,7 @@ describe("新建向导的直接安装", () => {
     mock.install.mockResolvedValue(job({ state: "running" }));
     view(agent("codex"), true);
     const button = await screen.findByRole("button", {
-      name: zh("wizard.install.run"),
+      name: zh("integration.action.install"),
     });
     mock.status.mockResolvedValue(job({ state: "running" }));
     fireEvent.click(button);
@@ -325,7 +325,9 @@ describe("新建向导的直接安装", () => {
     mock.install.mockResolvedValue(job({ target: "cli", state: "running" }));
     view(agent("opencode", { cli: false }), true);
     fireEvent.click(
-      await screen.findByRole("button", { name: zh("wizard.install.run") }),
+      await screen.findByRole("button", {
+        name: zh("integration.action.install"),
+      }),
     );
     await waitFor(() =>
       expect(mock.install).toHaveBeenCalledWith(
