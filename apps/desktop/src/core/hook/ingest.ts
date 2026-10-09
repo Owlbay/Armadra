@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { recordTrustedReport } from "../runs/reports";
+import { allocateSourceRevision, recordTrustedReport } from "../runs/reports";
 import type { EventBus } from "../bus";
 import { baseAgent, hasCapability } from "./capabilities";
 import type { AgentEvent } from "./normalize";
@@ -60,7 +60,17 @@ export interface TerminalBinding {
   readonly sourceRevision: string;
 }
 
-function readBinding(raw: unknown): TerminalBinding | undefined | "invalid" {
+/**
+ * A binding as posted: `sourceRevision` may be absent (contract §55.2), and
+ * the core then allocates it.
+ */
+interface PostedBinding {
+  readonly sessionId: string;
+  readonly generation: number;
+  readonly sourceRevision?: string;
+}
+
+function readBinding(raw: unknown): PostedBinding | undefined | "invalid" {
   if (raw === undefined || raw === null) return undefined;
   if (typeof raw !== "object" || Array.isArray(raw)) return "invalid";
   const value = raw as Record<string, unknown>;
@@ -68,18 +78,19 @@ function readBinding(raw: unknown): TerminalBinding | undefined | "invalid" {
   // know is a client we do not know, and the report is dropped rather than
   // half-read.
   const keys = Object.keys(value);
+  const allocated = !("sourceRevision" in value);
   if (
-    keys.length !== 3 ||
+    keys.length !== (allocated ? 2 : 3) ||
     typeof value.sessionId !== "string" ||
     typeof value.generation !== "number" ||
-    typeof value.sourceRevision !== "string"
+    (!allocated && typeof value.sourceRevision !== "string")
   ) {
     return "invalid";
   }
   return {
     sessionId: value.sessionId,
     generation: value.generation,
-    sourceRevision: value.sourceRevision,
+    ...(allocated ? {} : { sourceRevision: value.sourceRevision as string }),
   };
 }
 
@@ -171,17 +182,42 @@ export function ingest(
     provider = baseAgent(owner.agentId);
   }
 
-  const binding = readBinding(request.terminalBinding);
-  if (binding === "invalid") return ACCEPTED;
-  if (binding !== undefined) {
-    const revision = Number(binding.sourceRevision);
+  const posted = readBinding(request.terminalBinding);
+  if (posted === "invalid") return ACCEPTED;
+  let binding: TerminalBinding | undefined;
+  if (posted !== undefined && posted.sourceRevision !== undefined) {
+    const revision = Number(posted.sourceRevision);
     const usable =
       verdict === "verified" &&
-      /^\d+$/.test(binding.sourceRevision) &&
+      /^\d+$/.test(posted.sourceRevision) &&
       Number.isFinite(revision) &&
       revision > 0 &&
-      isCurrentNodeSession(context.database, nodeId, binding, agentId);
+      isCurrentNodeSession(context.database, nodeId, posted, agentId);
     if (!usable) return ACCEPTED;
+    binding = posted as TerminalBinding;
+  } else if (posted !== undefined) {
+    // No revision: the core draws one from the session's own counter, after
+    // the same gates (contract §55.2). One it cannot draw (no counter file)
+    // leaves the report without a binding, as the hook client's would be.
+    const usable =
+      verdict === "verified" &&
+      /^[A-Za-z0-9_-]{1,80}$/.test(posted.sessionId) &&
+      Number.isSafeInteger(posted.generation) &&
+      posted.generation >= 0 &&
+      isCurrentNodeSession(context.database, nodeId, posted, agentId);
+    if (!usable) return ACCEPTED;
+    const revision = allocateSourceRevision(
+      context.hooks.dataDir,
+      posted.sessionId,
+      posted.generation,
+    );
+    if (revision !== undefined) {
+      binding = {
+        sessionId: posted.sessionId,
+        generation: posted.generation,
+        sourceRevision: String(revision),
+      };
+    }
   }
 
   const payload = request.payload ?? null;
@@ -239,7 +275,7 @@ export function ingest(
 function isCurrentNodeSession(
   database: DatabaseSync,
   nodeId: string,
-  binding: TerminalBinding,
+  binding: Pick<TerminalBinding, "sessionId" | "generation">,
   agentId: string,
 ): boolean {
   const row = database
