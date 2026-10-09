@@ -3801,3 +3801,32 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 
 - `node tools/probes/terminal-memory.mjs [输出目录] [选项]`，产物 `result.json`（`phases[].stage`、`metrics`、`comparison`、`restore`、`pressure`、`cadence`、`runtime`）、`table.md`；`--merge r1 r2 r3 [--machine 说明]` 写基线。
 - lib：`parseArgs`、`METRICS`、`compare(current, baseline, { platform })`、`deriveMetrics(report)`、`mergeRuns(reports)`、`restoreCheck({ before, after, paneBefore, pane })`、`summarizeDiagnostics(samples)`、`baselineKey`。
+
+## 移动端独立版本线与「关于」页的协议兼容（2026-10-10）
+
+手机与 iPad（Android 手机与平板）是同一个 App，版本从桌面 / 服务器套件里拆出来，单独演进；与主机是否兼容只看协议。细节见 [CI 与发布](../guides/ci-release.md) §2.8。
+
+做了什么：
+
+- 版本线：`apps/mobile/package.json` 改为 **1.0.0**（与 0.2.x 一眼分得开，且 Android 版本号不再由 semver 推出，没有换号约束），移出 `VERSION_SITES`；`version.mjs` 加 `mobile check [--tag mobile-vX.Y.Z] | set | print`（只收纯 `X.Y.Z`）；`pnpm release:check` 两条都跑。更新记录另立 `apps/mobile/CHANGELOG.md`，根 `CHANGELOG.md` 头注明。
+- 派生：`apps/mobile/scripts/app-version.mjs write`（`sync` 第一步）写不入库的 `ios/version.generated.xcconfig` 与 `android/app/version.properties`。构建号 = `ARMADRA_BUILD_NUMBER` 或 `git rev-list --count HEAD`，浅克隆报错。iOS：`project.pbxproj` 删掉六处写死的 `MARKETING_VERSION = 0.2.0` / `CURRENT_PROJECT_VERSION = 1`（iPad 显示 0.2.0（1）的缺陷），新增 `ios/version.xcconfig` 作工程级 Release 的基础配置、`debug.xcconfig` include 它。Android：`build.gradle` 读 `version.properties`，缺文件即失败；`ARMADRA_VERSION_CODE` 与 semver 推号删除。
+- 兼容：`compatibility.json` 加 `mobile.minimumHostProtocol`（1.14，不进围栏），`compatibility.mjs::normalizeMobile` 严格校验；页面副本 `apps/web/src/mobile/host-compatibility.ts`（`hostCompatibility` → `compatible / updateHost / updateApp / unknown`），`mobile check` 核对两者与 core 的 `PROTOCOL_MAJOR` / `PROTOCOL_MINOR`。
+- 关于页：原生插件加 `appInfo`（iOS 读 `CFBundleShortVersionString` / `CFBundleVersion`，Android 读 `PackageInfo`），页面 `nativeBridge().appInfo()`；原生 App 里「设置 → 关于」显示 App 版本（构建号）、主机版本、主机协议，不兼容时 `Alert destructive` 说明更新哪一边（i18n `updates.appVersion*`、`updates.hostProtocol*` 中英）。原生 App 里不再出桌面的更新行。
+- 工作流：`nightly.yml` 两个移动端作业 `fetch-depth: 0`，版本取 `version.mjs mobile print`，iOS 不再在命令行覆盖 `MARKETING_VERSION`；产物名带移动端版本。
+
+实测：
+
+- `app-version.test.mjs` 21（版本名、构建号四种来源、两份文件、xcconfig 链解析并叠加个人签名配置、gradle 读法重放）；`version.test.mjs` +7（不在桌面清单、仓库自查、`mobile set`、标签、写死版本 / 旧推号、协议对齐、`mobile` 键严格且不进围栏）；`host-compatibility.test.ts` 5、`native-bridge.test.ts` +1、`AboutPage.test.tsx` +3。
+- 本机：`xcodebuild -showBuildSettings`（带与不带 `-xcconfig ~/armadra-ios-build/personal.xcconfig`，Debug / Release，App、NotificationService、AppUITests）全部 1.0.0 / 3185；模拟器 `xcodebuild build` 成功，App 与 NSE 的 Info.plist 都是 1.0.0（3185）；`./gradlew :app:processDebugMainManifest` 合并清单 `versionCode="3185"`、`versionName="1.0.0"`，`:app:compileDebugJavaWithJavac` 通过（JDK 21）。
+
+没做 / 偏离：
+
+- `release.yml` 不打移动端产物：商店构建要用户的签名与上传凭据，`mobile-v*` 标签之后的上架仍是人的动作；`mobile-v*` 不触发 `v*` 发布。
+- 「关于」页的 App 版本要新装的安装包（插件有 `appInfo`）；旧包显示「未知」。真机上的显示没跑。
+- 构建号取提交数，分支上的构建号可能高于之后主干上的某次构建；商店构建应只从主干 / 标签出。
+
+接口：
+
+- `version.mjs`：`mobileVersion`、`setMobileVersion`、`checkMobile`、`MOBILE_MANIFEST`、`MOBILE_CHANGELOG`、`MOBILE_TAG_PREFIX`、`MOBILE_PAGE_PROTOCOL`；`compatibility.mjs`：`readMobileCompatibility`、`normalizeMobile`。
+- `apps/mobile/scripts/app-version.mjs`：`parseMobileVersion`、`mobileVersion`、`buildNumber`、`nativeVersionFiles`、`writeNativeVersion`；环境变量 `ARMADRA_BUILD_NUMBER`。
+- web：`NativeBridge.appInfo()` → `NativeAppInfo { version, build }`；`MINIMUM_HOST_PROTOCOL`、`hostCompatibility`、`formatProtocol`；`MobileAbout`。
