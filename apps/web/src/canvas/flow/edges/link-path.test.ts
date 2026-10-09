@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { Box } from "../../geometry";
+import { dispatchAnchor, type Box } from "../../geometry";
 import { linkCurve, pointOnCurve, sampleCurve } from "./link-path";
 
 /**
@@ -90,6 +90,48 @@ describe("linkCurve", () => {
     expect(curve.d).toBe(
       `M ${curve.sourceX},${curve.sourceY} C ${curve.c1.x},${curve.c1.y} ${curve.c2.x},${curve.c2.y} ${curve.targetX},${curve.targetY}`,
     );
+  });
+});
+
+describe("linkCurve 随两端位置重新选边（#211）", () => {
+  it("同一对节点：目标从右侧绕到下方、左侧、上方，两端各换一次边", () => {
+    const source = box(0, 0);
+    const sides = [box(600, 0), box(0, 600), box(-600, 0), box(0, -600)].map(
+      (target) => {
+        const curve = linkCurve(source, target);
+        return `${curve.sourceSide}->${curve.targetSide}`;
+      },
+    );
+    expect(sides).toEqual([
+      "right->left",
+      "bottom->top",
+      "left->right",
+      "top->bottom",
+    ]);
+  });
+
+  it("纵向派发线：子拖到主上方时从主顶出、子底入", () => {
+    const main = box(0, 600);
+    const child = box(20, 0);
+    const curve = linkCurve(
+      main,
+      child,
+      dispatchAnchor(main, child, "vertical"),
+    );
+    expect([curve.sourceSide, curve.targetSide]).toEqual(["top", "bottom"]);
+    expect([curve.sourceX, curve.sourceY]).toEqual([120, 600]);
+    expect([curve.targetX, curve.targetY]).toEqual([140, 200]);
+  });
+
+  it("横向派发线：子拖到主左侧时从主左出、子右入", () => {
+    const main = box(600, 0);
+    const child = box(0, 40);
+    const curve = linkCurve(
+      main,
+      child,
+      dispatchAnchor(main, child, "horizontal"),
+    );
+    expect([curve.sourceSide, curve.targetSide]).toEqual(["left", "right"]);
   });
 });
 
