@@ -3605,3 +3605,25 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - core：`ProgramTap { subscribe, answer }`（`TerminalBackend.programTap?`）、`TerminalManagerOptions.onProgramStatus`、`TerminalManager.programStatus(sessionId)`、`listSessions(..., program?)`、`OscScanner` / `parseProgramReport` / `ProgramStatusTracker` / `ProgramStatusBook` / `connectProgramStatus`、`TmuxProgramTap`。
 - shared：`programStatusSchema` / `ProgramStatus`、`sessionSummarySchema.programStatus`、事件 `terminal.program`（`TerminalProgramEvent`）。
 - web：`useProgramStatusStore`、`headerStateFor`、`programHeaderState`、`reportedLive`、`programNotificationStatus`、`registerProgramOsc`。
+
+## 小地图收起钮悬停才显示、连线同画布锚点与曲线（#216，2026-10-09）
+
+做了什么：
+
+- 收起钮：拆出 `MinimapToggle`。展开时是缩略图右上角里的一个 24px「−」（`Minus`），平时 `opacity: 0` 且不接指针，悬停缩略图或钮本身、键盘 `focus-visible` 时出现（`styles/canvas.css`，用 `.react-flow__minimap:hover ~ .minimap-toggle-panel` 与 `.minimap-toggle-panel:hover`）；`(hover: none), (any-pointer: coarse)` 下常显。收起后原地是常显的带边框缩略图图标（`Map`），文案沿用 `canvas.expandMinimap` / `canvas.collapseMinimap`，无新文案。
+- 连线：新文件 `flow/minimap-links.ts`。每条 `link` 边按画布同一套规则取锚（上下文线 `free`，派发线 `dispatchAnchor`，四边中点）、同一组 `bezierControls` 的三次贝塞尔，去掉箭头、标签、命中区与选中 / 闪动；颜色仍是 `linkColor`（`--link-context`、主的簇色）。所有边**按颜色合并**成几条 `<path>`（上下文一条、每个簇一条），坐标取整；线宽 = 画布线宽 ÷ 缩略图比例，夹在 1–1.5px（`vector-effect: non-scaling-stroke`）。
+- 渲染：整层只挂一次——`<MiniMap>` 的 SVG 没有插槽，于是由第一个可见节点的 `nodeComponent` 在自己的矩形前面画（`firstMinimapNodeId`），连线压在全部节点下面。原来每个节点各订阅 `nodes` / `edges` / `nodeLookup` 并各画一组 `<line>`，现在只有这一处订阅。只在节点、边、簇色、布局方向变化时重算，拖动节点时按 60ms 节流（新 `lib/use-throttled-value.ts`，尾沿一定跟上），平移缩放视口不重算。
+- 展示页「画布」：簇色样本的小地图右上角定格「−」悬停态（`reveal`），连线随动样本右下角放收起后的展开钮。`design-system.md` 小地图一行同步。
+
+实测（macOS arm64，基于 main afc8daa3）：
+
+- 新增用例：`minimap-links.test.ts`（曲线与画布 `linkCurve` 同点、四边中点、按颜色合并与先后、派发线子在下游 / 上游的锚、引用 / 隐藏 / 缺端点不画、无簇色退回品牌色、线宽比例与上下限、外接尺寸）、`use-throttled-value.test.ts`（冷却期只跟尾沿且是最新值、冷却后立刻跟）、`styles/canvas.test.ts`（展开钮默认隐藏不接指针，悬停缩略图 / 钮 / 聚焦 / 收起态显示，触屏常显）、`Minimap.test.tsx`（真 React Flow 里整层只一组、两条上下文线合成一条 path、没有 `<line>`、在第一个节点矩形之前；首节点隐藏时换下一个挂；无边不画；`−` / 缩略图图标两态）。
+- 展示页在开发服务器上看过深浅两种主题：曲线从节点四边中点出，派发线簇色、上下文线品红；真实指针悬停缩略图时钮 `opacity` 变 1、可点，移开变回 0。
+
+没做 / 偏离：
+
+- 线宽的缩略图比例只按节点外接矩形估，不含视口框（为它在平移时逐帧重算不划算）；视口远大于节点时线比真实比例略粗，仍在 1.5px 上限内。
+
+接口：
+
+- `flow/minimap-links.ts`：`minimapLinkLayer`、`minimapLinkSegment`、`minimapLinkWidth`、`boxesExtent`、`MINIMAP_LINK_THROTTLE_MS` 等常量；`Minimap.tsx`：新增 `MinimapToggle`、`MinimapLinkLayer`、`firstMinimapNodeId`，删去 `minimapLinksFrom`、`MINIMAP_LINK_WIDTH`、`MinimapLink`；`lib/use-throttled-value.ts`：`useThrottledValue`。

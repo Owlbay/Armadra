@@ -1,6 +1,12 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { ReactFlowProvider } from "@xyflow/react";
+import {
+  ReactFlow,
+  ReactFlowProvider,
+  type Edge,
+  type Node,
+  type NodeTypes,
+} from "@xyflow/react";
 import type { AgentGlow } from "@/agent/status-store";
 
 import { installDomPolyfills } from "@/app/test-harness";
@@ -11,7 +17,7 @@ import {
   Minimap,
   minimapFill,
   minimapItemOf,
-  minimapLinksFrom,
+  firstMinimapNodeId,
   minimapStroke,
   minimapStrokeWidth,
 } from "./Minimap";
@@ -24,6 +30,9 @@ import {
  * 由 React Flow 的 `<MiniMap>` 负责，我们只剩颜色。另加
  * `CanvasNavigationPanel.test.tsx` 那一项收起开关。
  */
+
+/** DOM 的 `Node` 常量（名字被 React Flow 的 `Node` 类型占了）。 */
+const Node_ = globalThis.Node;
 
 beforeAll(installDomPolyfills);
 beforeEach(() => useMinimapPreferences.getState().setCollapsed(false));
@@ -154,9 +163,15 @@ describe("收起开关", () => {
     renderPanel();
     expect(screen.getByTestId("rf__minimap")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "收起缩略图" }));
+    // 展开时是一个「−」（悬停才显示，`styles/canvas.test.ts` 守 CSS），
+    // 收起后是缩略图图标。
+    const collapse = screen.getByRole("button", { name: "收起缩略图" });
+    expect(collapse.getAttribute("aria-expanded")).toBe("true");
+    expect(collapse.querySelector(".lucide-minus")).toBeTruthy();
+    fireEvent.click(collapse);
     expect(screen.queryByTestId("rf__minimap")).toBeNull();
-    expect(screen.getByRole("button", { name: "展开缩略图" })).toBeTruthy();
+    const expand = screen.getByRole("button", { name: "展开缩略图" });
+    expect(expand.querySelector(".lucide-map")).toBeTruthy();
   });
 
   it("收起状态记在 `minimap-preferences` 里，重挂之后还在", () => {
@@ -171,64 +186,97 @@ describe("收起开关", () => {
   });
 });
 
-describe("小地图里的连线", () => {
-  const box = (x: number) => ({ x, y: 0, width: 100, height: 50 });
-  const boxes: Record<string, ReturnType<typeof box>> = {
-    b: box(300),
-    c: box(600),
-  };
-  const edge = (id: string, target: string, role?: "supervises") =>
-    ({
-      id,
-      type: "link",
-      source: "a",
-      target,
-      ...(role ? { data: { role } } : { data: {} }),
-    }) as never;
-
-  it("上下文线用 --link-context，派发线用主的簇色；中心连中心", () => {
-    const links = minimapLinksFrom(
-      "a",
-      box(0),
-      [
-        edge("e1", "b"),
-        edge("e2", "c", "supervises"),
-        { id: "r", type: "reference", source: "a", target: "b" } as never,
-      ],
-      (id) => boxes[id],
-      () => "var(--node-color-6)",
+describe("小地图里的连线（#216）", () => {
+  const A = "019ff7d1-0d12-7421-833d-2c5e8d64ee01";
+  const B = "019ff7d1-0d12-7421-833d-2c5e8d64ee02";
+  const C = "019ff7d1-0d12-7421-833d-2c5e8d64ee03";
+  const nodeTypes: NodeTypes = { armadra: () => null };
+  const node = (id: string, x: number, y: number, hidden = false): Node => ({
+    id,
+    type: "armadra",
+    position: { x, y },
+    width: 100,
+    height: 50,
+    hidden,
+    data: {},
+  });
+  const renderFlow = (nodes: Node[], edges: Edge[]) =>
+    render(
+      <ReactFlowProvider>
+        <ReactFlow
+          width={800}
+          height={600}
+          nodeTypes={nodeTypes}
+          nodes={nodes}
+          edges={edges}
+        >
+          <Minimap />
+        </ReactFlow>
+      </ReactFlowProvider>,
     );
-    expect(links).toEqual([
-      {
-        key: "e1",
-        x1: 50,
-        y1: 25,
-        x2: 350,
-        y2: 25,
-        color: "var(--link-context)",
-        role: "context",
-      },
-      {
-        key: "e2",
-        x1: 50,
-        y1: 25,
-        x2: 650,
-        y2: 25,
-        color: "var(--node-color-6)",
-        role: "dispatch",
-      },
+
+  it("整层连线只画一次，按颜色合并成 path，压在所有节点矩形下面", () => {
+    const { container } = renderFlow(
+      [node(A, 0, 0), node(B, 300, 0), node(C, 0, 300)],
+      [
+        { id: "ab", type: "link", source: A, target: B, data: {} },
+        { id: "bc", type: "link", source: B, target: C, data: {} },
+        {
+          id: "ac",
+          type: "link",
+          source: A,
+          target: C,
+          data: { role: "supervises" },
+        },
+      ],
+    );
+    const svg = container.querySelector(".react-flow__minimap-svg")!;
+    const layers = svg.querySelectorAll('[data-slot="minimap-links"]');
+    expect(layers).toHaveLength(1);
+    const paths = layers[0]!.querySelectorAll("path");
+    expect([...paths].map((p) => p.getAttribute("data-role"))).toEqual([
+      "context",
+      "dispatch",
     ]);
+    // 两条上下文线合成一条 path；没有逐边的 <line>。
+    expect(paths[0]!.getAttribute("d")!.match(/M/g)).toHaveLength(2);
+    expect(svg.querySelectorAll("line")).toHaveLength(0);
+    // 连线层在第一个节点矩形之前（SVG 后画的在上面）。
+    const first = svg.querySelector("rect.react-flow__minimap-node")!;
+    expect(
+      layers[0]!.compareDocumentPosition(first) &
+        Node_.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
-  it("目标不在小地图里就不画", () => {
+  it("第一个节点隐藏时由下一个节点挂连线层；没有连线就不画", () => {
+    const { container } = renderFlow(
+      [node(A, 0, 0, true), node(B, 300, 0), node(C, 0, 300)],
+      [{ id: "bc", type: "link", source: B, target: C, data: {} }],
+    );
     expect(
-      minimapLinksFrom(
-        "a",
-        box(0),
-        [edge("e1", "gone")],
-        () => undefined,
-        () => undefined,
+      container.querySelectorAll('[data-slot="minimap-links"]'),
+    ).toHaveLength(1);
+    cleanup();
+    const empty = renderFlow([node(A, 0, 0), node(B, 300, 0)], []);
+    expect(
+      empty.container.querySelector('[data-slot="minimap-links"]'),
+    ).toBeNull();
+  });
+
+  it("firstMinimapNodeId 跳过隐藏与没量到尺寸的节点", () => {
+    const boxes: Record<
+      string,
+      { x: number; y: number; width: number; height: number }
+    > = {
+      b: { x: 0, y: 0, width: 1, height: 1 },
+    };
+    expect(
+      firstMinimapNodeId(
+        [{ id: "a" }, { id: "h", hidden: true }, { id: "b" }],
+        (id) => boxes[id],
       ),
-    ).toEqual([]);
+    ).toBe("b");
+    expect(firstMinimapNodeId([], () => undefined)).toBeUndefined();
   });
 });
