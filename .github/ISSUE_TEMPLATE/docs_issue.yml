@@ -1,0 +1,40 @@
+name: 文档问题 / Documentation issue
+description: 文档有误、过时、缺失或难以理解。 / Documentation is wrong, outdated, missing or unclear.
+title: "[Docs] "
+labels: ["documentation", "needs-triage"]
+body:
+  - type: input
+    id: location
+    attributes:
+      label: 文档位置 / Location
+      description: 文件路径或链接，带上章节更好。 / File path or link, ideally with the section.
+      placeholder: docs/guides/development.md §…
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 问题类型 / Kind
+      options:
+        - 内容有误 / Incorrect
+        - 与当前行为不符 / Outdated
+        - 缺少内容 / Missing
+        - 难以理解 / Unclear
+        - 链接失效 / Broken link
+        - 中英不一致 / Chinese and English differ
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述 / Description
+      description: 现在写的是什么、哪里不对。 / What it says now and what is wrong.
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: 建议的修改 / Suggested change

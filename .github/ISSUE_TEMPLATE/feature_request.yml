@@ -1,0 +1,56 @@
+name: 功能建议 / Feature request
+description: 提出新能力或对现有行为的改进。 / Suggest a new capability or an improvement to existing behavior.
+title: "[Feature] "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先查看 README 的路线图与已有 issue。描述要解决的问题，比直接给出方案更有帮助。
+        Please check the roadmap in the README and existing issues first. Describing the problem helps more than prescribing a solution.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 要解决的问题 / Problem
+      description: 你在做什么、卡在哪里、现在怎么绕过。 / What you are doing, where you get stuck, and how you work around it today.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议的方案 / Proposed solution
+      description: 期望的交互或行为；可以附草图。 / The interaction or behavior you expect; sketches are welcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 考虑过的替代方案 / Alternatives considered
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 涉及范围 / Area
+      multiple: true
+      options:
+        - 画布 / Canvas
+        - Agent 与协作 / Agents and collaboration
+        - 终端 / Terminal
+        - Git 与 GitHub / Git and GitHub
+        - 设置 / Settings
+        - 远程访问与中转 / Remote access and relay
+        - 手机 / Mobile
+        - 服务器壳 / Server shell
+        - 其他 / Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: 参与 / Contribution
+      options:
+        - label: 我愿意提交实现这个功能的 PR。 / I am willing to open a PR for this.

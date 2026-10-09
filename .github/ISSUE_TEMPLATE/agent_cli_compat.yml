@@ -1,0 +1,124 @@
+name: Agent CLI 兼容问题 / Agent CLI compatibility
+description: 某家 Agent CLI 在 Armadra 里启动、注入、投递或审批不正常。 / An Agent CLI fails to start, inject, deliver or approve correctly inside Armadra.
+title: "[Agent CLI] "
+labels: ["agent-cli", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Armadra 保留各家 CLI 自己的账户、模型与权限策略，不改写你的 CLI 配置。请说明 CLI 本身单独运行时是否正常。
+        **不要贴凭据与终端原始输出**；需要说明终端里出现的内容时，用自己的话描述或只摘关键的一行并打码。
+
+        Armadra keeps each CLI's own account, model and permission policy and does not rewrite your CLI configuration. Please tell us whether the CLI works on its own.
+        **Do not paste credentials or raw terminal output**; describe what the terminal shows in your own words, or quote a single redacted line.
+
+  - type: dropdown
+    id: cli
+    attributes:
+      label: Agent CLI
+      options:
+        - Claude Code
+        - Codex
+        - OpenCode
+        - Pi
+        - Oh My Pi
+        - GitHub Copilot
+        - ama
+        - 自定义 Agent / Custom agent
+        - 其他 / Other
+    validations:
+      required: true
+
+  - type: input
+    id: cli-version
+    attributes:
+      label: CLI 版本 / CLI version
+      description: "`<cli> --version` 的输出。 / Output of `<cli> --version`."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: driver
+    attributes:
+      label: 驱动方式 / Driver
+      options:
+        - ACP
+        - 终端 / Terminal
+        - 不确定 / Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Armadra 版本 / Armadra version
+      placeholder: 0.2.4 / ae520e9a
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 平台 / Platform
+      multiple: true
+      options:
+        - macOS
+        - Windows
+        - Linux
+        - 服务器壳 / Server shell (apps/server)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: stage
+    attributes:
+      label: 出问题的环节 / Where it fails
+      multiple: true
+      options:
+        - 探测与安装 / Detection and installation
+        - 启动会话 / Session start
+        - 注入（Hook / Skill） / Injection (hooks / skills)
+        - 消息投递 / Message delivery
+        - 权限审批 / Permission approval
+        - 上下文读取 / Context reads
+        - 交接 / Handoff
+        - 状态与用量显示 / Status and usage display
+        - 其他 / Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: standalone
+    attributes:
+      label: CLI 单独运行是否正常 / Does the CLI work on its own
+      options:
+        - 正常 / Yes
+        - 同样有问题 / No, same problem
+        - 没试过 / Not tried
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤 / Steps to reproduce
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-actual
+    attributes:
+      label: 期望与实际 / Expected and actual
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / Logs
+      description: 只贴 Armadra 日志里相关的 error / warn 行，先删去凭据与终端原始输出。 / Only relevant error / warn lines from the Armadra log, with credentials and raw terminal output removed.
+      render: text
