@@ -319,6 +319,17 @@ try {
       `桌面 core 经中继挂载 ${label}（relayed）`,
       { kind: mounted.kind },
     );
+    // 一源多路（契约 §55）：这条中继是它唯一、首选的路，镜像就是它。
+    const routes = Array.isArray(mounted.routes) ? mounted.routes : [];
+    run.check(
+      routes.length === 1 &&
+        routes[0].via === "relayed" &&
+        routes[0].preferred === true &&
+        routes[0].origin === mounted.relayOrigin &&
+        routes[0].cloudIssuer === mounted.cloudIssuer,
+      `${label} 的路由表只有这条中继`,
+      { routes: routes.map(({ via, preferred }) => ({ via, preferred })) },
+    );
   }
   await reloadAfterMount(win);
   await win.capture(join(output, "01-desktop-loaded.png"));

@@ -4,6 +4,7 @@ import {
   type SourceAccess,
   type SourceDescriptor,
   SourceError,
+  type SourceRoute,
   type Via,
 } from "./types";
 
@@ -63,16 +64,59 @@ export async function probeDirect(
 export interface Route {
   readonly via: Via;
   readonly access: SourceAccess;
+  /** 走的是哪一条（§55）；凭据来源自己选的中继是 `undefined`。 */
+  readonly origin?: string;
 }
 
-/** 这个源有哪几条路可走（按优先次序）。 */
+/**
+ * 这个源的全部路（§55），按次序：直连在前（首选的先），中继按首选、最近成功。
+ * 旧描述没有 `routes` 时由镜像字段推出。
+ */
+export function routesOf(descriptor: SourceDescriptor): SourceRoute[] {
+  if (descriptor.kind === "local") return [];
+  const listed =
+    descriptor.routes !== undefined && descriptor.routes.length > 0
+      ? [...descriptor.routes]
+      : legacyRoutes(descriptor);
+  const rank = (route: SourceRoute) => (route.via === "direct" ? 0 : 1);
+  return listed.sort(
+    (a, b) =>
+      rank(a) - rank(b) ||
+      Number(b.preferred) - Number(a.preferred) ||
+      b.lastOkAtMs - a.lastOkAtMs,
+  );
+}
+
+function legacyRoutes(descriptor: SourceDescriptor): SourceRoute[] {
+  const routes: SourceRoute[] = [];
+  if (descriptor.baseUrl !== "")
+    routes.push({
+      via: "direct",
+      origin: descriptor.baseUrl,
+      cloudIssuer: "",
+      fingerprint: descriptor.fingerprint,
+      preferred: descriptor.kind === "direct",
+      lastOkAtMs: 0,
+    });
+  if (descriptor.kind !== "direct" && descriptor.relayOrigin !== "")
+    routes.push({
+      via: "relayed",
+      origin: descriptor.relayOrigin,
+      cloudIssuer: descriptor.cloudIssuer,
+      fingerprint: "",
+      preferred: descriptor.kind === "relayed",
+      lastOkAtMs: 0,
+    });
+  return routes;
+}
+
+/** 这个源有哪几类路可走（按优先次序）。 */
 export function candidateRoutes(descriptor: SourceDescriptor): Via[] {
   if (descriptor.kind === "local") return ["local"];
-  const routes: Via[] = [];
-  if (descriptor.baseUrl !== "") routes.push("direct");
-  if (descriptor.kind !== "direct" && descriptor.relayOrigin !== "")
-    routes.push("relayed");
-  return routes;
+  const vias: Via[] = [];
+  for (const route of routesOf(descriptor))
+    if (!vias.includes(route.via)) vias.push(route.via);
+  return vias;
 }
 
 /**
@@ -84,35 +128,50 @@ export async function pickRoute(
   provider: CredentialProvider,
   options: ProbeOptions = {},
 ): Promise<Route> {
-  const routes = candidateRoutes(descriptor);
-  if (routes.length === 0 || routes[0] === "local")
+  if (descriptor.kind === "local")
+    throw new SourceError(SOURCE_ERROR.unreachable, "no route");
+  const routes = routesOf(descriptor);
+  if (routes.length === 0)
     throw new SourceError(SOURCE_ERROR.unreachable, "no route");
   const id = descriptor.sourceId;
+  const directs = routes.filter((route) => route.via === "direct");
+  const relays = routes.filter((route) => route.via === "relayed");
+  // 这一类只有一条路时凭据来源不必知道是哪一条（与 §55 之前一样）。
+  const directOf = (route: SourceRoute) =>
+    directs.length === 1
+      ? provider.getAccess(id, "direct")
+      : provider.getAccess(id, "direct", route.origin);
 
-  // 只有直连一条路：不必先探，凭据来源换票时自然会连它。
-  if (routes.length === 1 && routes[0] === "direct") {
-    return { via: "direct", access: await provider.getAccess(id, "direct") };
+  // 只有直连：不必先探，凭据来源换票时自然会连它。
+  if (relays.length === 0 && directs.length === 1) {
+    const route = directs[0] as SourceRoute;
+    return {
+      via: "direct",
+      access: await directOf(route),
+      origin: route.origin,
+    };
   }
-  const relayed = routes.includes("relayed")
-    ? provider
-        .getAccess(id, "relayed")
-        .then((access): Route => ({ via: "relayed", access }))
-    : null;
+  const relayed = relays.length === 0 ? null : relayRace(id, relays, provider);
   // 中继那条先挂一个空处理：直连成功时它的失败没人等，不该成为未处理的拒绝。
   relayed?.catch(() => undefined);
 
-  if (
-    routes.includes("direct") &&
-    (await probeDirect(descriptor.baseUrl, id, options))
-  ) {
+  let directFailure: unknown;
+  for (const route of directs) {
+    if (!(await probeDirect(route.origin, id, options))) continue;
     try {
-      return { via: "direct", access: await provider.getAccess(id, "direct") };
+      return {
+        via: "direct",
+        access: await directOf(route),
+        origin: route.origin,
+      };
     } catch (error) {
-      if (relayed === null) throw error;
+      directFailure = error;
     }
   }
-  if (relayed === null)
+  if (relayed === null) {
+    if (directFailure !== undefined) throw directFailure;
     throw new SourceError(SOURCE_ERROR.unreachable, "direct unreachable");
+  }
   try {
     return await relayed;
   } catch (cause) {
@@ -125,4 +184,29 @@ export async function pickRoute(
       { cause },
     );
   }
+}
+
+/**
+ * 中继：凭据来源自己会选（桌面）就问一次；否则按次序逐条试，第一条成的用。
+ * 全不成时抛第一条的失败（首选的那条最能说明问题）。
+ */
+async function relayRace(
+  id: string,
+  relays: readonly SourceRoute[],
+  provider: CredentialProvider,
+): Promise<Route> {
+  if (provider.selectsRelay === true || relays.length === 1) {
+    const access = await provider.getAccess(id, "relayed");
+    return { via: "relayed", access };
+  }
+  let first: unknown;
+  for (const route of relays) {
+    try {
+      const access = await provider.getAccess(id, "relayed", route.origin);
+      return { via: "relayed", access, origin: route.origin };
+    } catch (error) {
+      first ??= error;
+    }
+  }
+  throw first;
 }

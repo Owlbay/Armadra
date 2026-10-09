@@ -154,6 +154,7 @@ export {
 export { systemHelloOutputSchema } from "./system.js";
 export type { SystemHello } from "./system.js";
 export {
+  clientSourceRouteSchema,
   clientSourceSchema,
   remoteAddInputSchema,
   remoteServiceSchema,
@@ -164,6 +165,8 @@ export {
 } from "./sources.js";
 export type {
   ClientSource,
+  ClientSourceRoute,
+  SourceRouteRef,
   RemoteAddInput,
   RemoteService,
   RemoteSourceSummary,

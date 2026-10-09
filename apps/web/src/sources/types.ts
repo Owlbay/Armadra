@@ -13,6 +13,21 @@ export type SourceKind = "local" | "direct" | "relayed" | "hosted";
 /** 这一次连接实际走的路。 */
 export type Via = "local" | "direct" | "relayed";
 
+/**
+ * 一条到达方式（契约 §55）：直连 Gateway 或经某个中继。同一个源可以有几条；
+ * `origin` 是直连的 Gateway 来源或中继来源。
+ */
+export interface SourceRoute {
+  readonly via: "direct" | "relayed";
+  readonly origin: string;
+  /** relayed：经哪个远程服务；direct 是空串。 */
+  readonly cloudIssuer: string;
+  /** direct 的信任锚指纹；没有是空串。 */
+  readonly fingerprint: string;
+  readonly preferred: boolean;
+  readonly lastOkAtMs: number;
+}
+
 export interface SourceDescriptor {
   /** 源的标识，等于那台 core `system.hello` 的 `sourceId`。本机是 `local`。 */
   readonly sourceId: string;
@@ -27,6 +42,11 @@ export interface SourceDescriptor {
   /** 直连 Gateway 的信任锚指纹；没有是空串。 */
   readonly fingerprint: string;
   readonly orderIndex: number;
+  /**
+   * 全部的路（§55）。上面几个地址字段是首选路由的镜像；没有这一项（旧的
+   * 描述）时由它们推出（`routing.ts::routesOf`）。
+   */
+  readonly routes?: readonly SourceRoute[];
 }
 
 export type SourceState =
@@ -69,10 +89,18 @@ export interface SourceAccess {
 }
 
 export interface CredentialProvider {
-  /** 取（或复用）这个源经这条路的访问；拿不到就抛。 */
-  getAccess(sourceId: string, via: Via): Promise<SourceAccess>;
+  /**
+   * 取（或复用）这个源经这条路的访问；拿不到就抛。`origin` 指定同一类路里的
+   * 哪一条（§55）；不给由凭据来源自己选。
+   */
+  getAccess(sourceId: string, via: Via, origin?: string): Promise<SourceAccess>;
   /** 手里那份被拒了：换一份新的（刷新令牌，必要时经远程服务重取断言）。 */
-  refresh(sourceId: string, via: Via): Promise<SourceAccess>;
+  refresh(sourceId: string, via: Via, origin?: string): Promise<SourceAccess>;
+  /**
+   * 不给 `origin` 时自己在几条中继里选（桌面：本机 core 并行要断言，§55）。
+   * 为真时选路只问一次中继，不逐条试。
+   */
+  readonly selectsRelay?: boolean;
   /** 忘掉这个源在内存里的访问（断开、移除）。 */
   invalidate(sourceId: string): void;
 }

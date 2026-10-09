@@ -230,7 +230,7 @@ async function enterConnection(descriptor: SourceDescriptor): Promise<Entry> {
         // 走中继时记下中继：运行时断开时通知条据此分辨是不是中继停了。
         setMobileRelayRoute(
           route.via === "relayed"
-            ? descriptor.relayOrigin || descriptor.cloudIssuer
+            ? route.origin || descriptor.relayOrigin || descriptor.cloudIssuer
             : null,
         );
         setNativeRuntimeBase(route.access.httpBase);
