@@ -12,6 +12,14 @@ final class ConnectFlowUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    /// Debug 构建认这个启动参数：不放开屏动画（`ArmadraBridgeViewController`）。
+    private func launched() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = ["-ArmadraUITest"]
+        app.launch()
+        return app
+    }
+
     private func button(_ app: XCUIApplication, _ labels: [String]) -> XCUIElement {
         app.webViews.buttons.matching(NSPredicate(format: "label IN %@", labels)).firstMatch
     }
@@ -22,8 +30,7 @@ final class ConnectFlowUITests: XCTestCase {
     }
 
     func test1WithoutAGatewayTheAppOpensOnTheConnectScreen() {
-        let app = XCUIApplication()
-        app.launch()
+        let app = launched()
         let link = pairingLink(app)
         XCTAssertTrue(link.waitForExistence(timeout: 60), "connect screen")
         link.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
@@ -35,8 +42,7 @@ final class ConnectFlowUITests: XCTestCase {
         guard let link = ProcessInfo.processInfo.environment["ARMADRA_PAIR_LINK"], !link.isEmpty else {
             throw XCTSkip("ARMADRA_PAIR_LINK not given (run through tools/probes/mobile-shell-e2e.mjs)")
         }
-        let app = XCUIApplication()
-        app.launch()
+        let app = launched()
         XCTAssertTrue(pairingLink(app).waitForExistence(timeout: 60), "connect screen")
         // 链接走深链交给 App（也就测了 `armadra://pair` → `#link=` 预填、直接落在链接输入框）；
         // 连接页由人点「连接」。
@@ -72,9 +78,9 @@ final class ConnectFlowUITests: XCTestCase {
         XCTAssertTrue(button(app, ["画布", "Canvas"]).waitForExistence(timeout: 60), "canvas after relaunch")
         XCTAssertFalse(button(app, ["连接", "Connect"]).exists)
         // 原生 OAuth 的深链（R-56）：App 写进 `#link=` 重载，入口收尾（本机没有挂起的流程，答失败、
-        // 不发请求），结果打开「安全」页；会话不受影响，不回连接页。
+        // 不发请求），结果打开「账号与安全」页（#205 设置重组后的分区名）；会话不受影响，不回连接页。
         app.open(try XCTUnwrap(URL(string: "armadra://oauth?state=e2e-state&code=e2e-code")))
-        let security = app.webViews.descendants(matching: .any).matching(NSPredicate(format: "label IN %@", ["安全", "Security"])).firstMatch
+        let security = app.webViews.descendants(matching: .any).matching(NSPredicate(format: "label IN %@", ["账号与安全", "Account & security"])).firstMatch
         XCTAssertTrue(security.waitForExistence(timeout: 60), "security page after the oauth link")
         XCTAssertFalse(button(app, ["连接", "Connect"]).exists)
     }

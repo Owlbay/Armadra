@@ -20,6 +20,18 @@ class ArmadraBridgeViewController: CAPBridgeViewController {
 
     override open func capacitorDidLoad() {
         bridge?.registerPluginInstance(ArmadraNativePlugin())
+        #if DEBUG
+        // UI 用例（`AppUITests`）带 `-ArmadraUITest` 启动：开屏动画先记成「这一页面会话已放过」
+        // （`apps/web/src/splash/session.ts` 的键）。动画盖在页面上、按下即跳过，用例的第一下点按会
+        // 被它吞掉；30fps 的 SVG 动画还会让无障碍快照在慢的 CI 模拟器上超时。只在 Debug 构建里认。
+        if ProcessInfo.processInfo.arguments.contains("-ArmadraUITest") {
+            webView?.configuration.userContentController.addUserScript(WKUserScript(
+                source: "try{sessionStorage.setItem('armadra.splash.shown','1')}catch(e){}",
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            ))
+        }
+        #endif
         loadingObservation = webView?.observe(\.isLoading, options: [.new]) { [weak self] view, _ in
             DispatchQueue.main.async {
                 guard let self, !view.isLoading, view.url != nil else { return }
