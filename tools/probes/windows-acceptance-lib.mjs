@@ -489,6 +489,42 @@ export function loopLine(dialect) {
   return "while ($true) { 'tick-' + 'OK'; Start-Sleep -Seconds 1 }";
 }
 
+/**
+ * 保活之后的回显判定。Ctrl+C 停循环后先等输出静下来（提示符回来了），再敲记号；
+ * 记号没回来就整行重敲，最多 `attempts` 次。Windows PowerShell 5.1 在忙的
+ * runner 上停管线、回到提示符可以超过固定的两秒，这期间敲进去的字会被 Ctrl+C
+ * 的处理清掉（nightly 37906434287：5.1 无回显，同一会话重启后立刻有回显）。
+ * 不改用户 shell 的启动方式，只让探针不在提示符回来之前计时。
+ *
+ * `terminal(lines, waitFor, timeoutMs)` 是绑定了会话的 `app.terminal`。
+ */
+export async function responsiveAfterLoop(
+  terminal,
+  dialect,
+  marker,
+  { settleMs = 30_000, quietMs = 3_000, attempts = 3, attemptMs = 20_000 } = {},
+) {
+  let settled = await terminal(["\u0003"], { quietMs }, settleMs);
+  if (!settled.ok) settled = await terminal(["\u0003"], { quietMs }, settleMs);
+  let last;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    last = await terminal(
+      ["\r", `${markerLine(dialect, marker)}\r`],
+      marker,
+      attemptMs,
+    );
+    if (last.ok)
+      return { ok: true, attempts: attempt, settled: settled.reason };
+  }
+  return {
+    ok: false,
+    attempts,
+    settled: settled.reason,
+    reason: last?.reason ?? null,
+    tail: (last?.tail ?? "").slice(-600),
+  };
+}
+
 export const ECHO_SCRIPT = [
   "const fs = require('node:fs');",
   "const [out, ...argv] = process.argv.slice(2);",
@@ -585,8 +621,16 @@ export const PAGE_HELPERS = `(() => {
       let inputId = 0;
       const finish = (ok, reason) => {
         clearTimeout(timer);
+        clearTimeout(quiet);
         try { socket.close(); } catch {}
         done({ ok, reason, hello, tail: output.slice(-2000) });
+      };
+      // waitFor：null 只管发；字符串等它出现；{ quietMs } 等输出停够这么久（快照不算）。
+      const quietMs = typeof waitFor === "object" && waitFor !== null ? waitFor.quietMs : null;
+      let quiet = null;
+      const hush = () => {
+        clearTimeout(quiet);
+        quiet = setTimeout(() => finish(true, "quiet"), quietMs);
       };
       const timer = setTimeout(() => finish(waitFor === null, "timeout"), timeoutMs);
       socket.onmessage = (event) => {
@@ -598,11 +642,14 @@ export const PAGE_HELPERS = `(() => {
             socket.send(JSON.stringify({ type: "input", data: line, inputId }));
           }
           if (waitFor === null) setTimeout(() => finish(true, "sent"), 500);
+          if (quietMs !== null) hush();
           return;
         }
         if (frame.type === "output" || frame.type === "snapshot") {
           output += frame.data;
-          if (waitFor !== null && output.includes(waitFor)) finish(true, "matched");
+          if (quietMs !== null) {
+            if (frame.type === "output" && hello !== null) hush();
+          } else if (waitFor !== null && output.includes(waitFor)) finish(true, "matched");
         }
       };
       socket.onerror = () => finish(false, "socket error");

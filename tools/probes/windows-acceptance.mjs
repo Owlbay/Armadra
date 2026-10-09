@@ -73,6 +73,7 @@ import {
   diffSnapshots,
   launchLine,
   loopLine,
+  responsiveAfterLoop,
   markerLine,
   newResult,
   parseArgs,
@@ -1049,18 +1050,18 @@ async function runFull(options, result, record, out) {
         const last = result.samples.at(-1);
         const dead = pids().filter((pid) => !alive(pid));
         const responsive = {};
+        const answers = {};
         for (const session of sessions) {
           const marker = `ACC-after-${session.dialect}-${randomBytes(3).toString("hex")}-OK`;
           // Ctrl+C 会清空控制台的输入缓冲：先停循环，等提示符回来再敲记号。
-          await app.terminal(session.id, ["\u0003"], null, 3_000);
-          await sleep(2_000);
-          const typed = await app.terminal(
-            session.id,
-            ["\r", `${markerLine(session.dialect, marker)}\r`],
+          const answer = await responsiveAfterLoop(
+            (lines, waitFor, timeoutMs) =>
+              app.terminal(session.id, lines, waitFor, timeoutMs),
+            session.dialect,
             marker,
-            30_000,
           );
-          responsive[session.dialect] = typed.ok;
+          responsive[session.dialect] = answer.ok;
+          answers[session.dialect] = answer;
         }
         const growth = (role) => {
           const a = first.app.find((p) => p.role === role);
@@ -1077,7 +1078,13 @@ async function runFull(options, result, record, out) {
         return {
           ok: dead.length === 0 && Object.values(responsive).every(Boolean),
           warn: suspicious,
-          detail: { dead, responsive, main: growth("main"), sessionHost: host },
+          detail: {
+            dead,
+            responsive,
+            answers,
+            main: growth("main"),
+            sessionHost: host,
+          },
         };
       });
     }
