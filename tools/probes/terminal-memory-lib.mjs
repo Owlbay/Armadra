@@ -535,6 +535,8 @@ export const METRICS = {
     slack: 60,
     unit: "MiB",
     label: "Renderer 活跃",
+    // Linux 运行器上软件渲染，同一提交三次是 1057 / 1073 / 2061 MiB，只记录。
+    compareOn: ["darwin"],
   },
   rendererOffscreenLongMiB: {
     better: "lower",
@@ -549,6 +551,8 @@ export const METRICS = {
     slack: 40,
     unit: "MiB",
     label: "Renderer 强制 GC − 回到视口",
+    // Linux 运行器上软件渲染，三次里这个差值从 −450 到 +31 MiB，只记录。
+    compareOn: ["darwin"],
   },
   gpuOffscreenLongMiB: {
     better: "lower",

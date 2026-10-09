@@ -209,6 +209,17 @@ test("compare: 只看绝对差的项、下限、精确断言与只记录的平�
     by(compare({ tmuxProcs: 11 }, { tmuxProcs: 21 })).tmuxProcs.regressed,
     true,
   );
+  // 强制 GC 的差值在 Linux 只记录（软件渲染，噪声比容差大得多）。
+  assert.equal(
+    by(
+      compare(
+        { rendererAfterGcDeltaMiB: 31 },
+        { rendererAfterGcDeltaMiB: -129 },
+        { platform: "linux" },
+      ),
+    ).rendererAfterGcDeltaMiB.regressed,
+    false,
+  );
   // GPU 只在 macOS 比，Linux 软件 GL 只记录。
   const gpu = { gpuOffscreenLongMiB: 400 };
   const gpuBase = { gpuOffscreenLongMiB: 130 };
