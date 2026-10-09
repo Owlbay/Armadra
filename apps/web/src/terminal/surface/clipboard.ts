@@ -59,7 +59,7 @@ async function clipboardImages(): Promise<File[]> {
 
 /**
  * 右键菜单「粘贴」。xterm 的 `paste()` 自己处理括号粘贴。剪贴板里是图片时
- * 交给 `pasteFiles`（上传再粘路径，契约 §55）。
+ * 交给 `pasteFiles`（上传再粘路径，契约 §56）。
  */
 export async function pasteIntoTerminal(
   terminal: Terminal | null,

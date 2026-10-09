@@ -95,7 +95,7 @@ describe("filesOf", () => {
   });
 });
 
-describe("pasteFilesIntoTerminal (§55)", () => {
+describe("pasteFilesIntoTerminal (§56)", () => {
   it("uploads each file and pastes its path once, without Enter", async () => {
     const api = services();
     const paste = vi.fn();

@@ -107,7 +107,7 @@ export interface AcpSessionOptions extends AcpSessionIdentity {
   readonly resumeSessionId?: string | undefined;
   /** 适配器自己退了（不是我们要它退的）。 */
   readonly onExit?: (exit: AcpExit) => void;
-  /** SSH 节点：适配器在执行主机上，本机路径对它没有意义（契约 §55）。 */
+  /** SSH 节点：适配器在执行主机上，本机路径对它没有意义（契约 §56）。 */
   readonly remote?: boolean;
 }
 
@@ -293,7 +293,7 @@ export class AcpSession implements AcpSessionIdentity {
     return this.mirror?.path;
   }
 
-  /** `initialize` 里声明的 `promptCapabilities`（契约 §55）；会话没开好时为 `null`。 */
+  /** `initialize` 里声明的 `promptCapabilities`（契约 §56）；会话没开好时为 `null`。 */
   get promptCapabilities(): PromptCapabilities | null {
     const capabilities = this.host?.capabilities;
     if (capabilities === undefined) return null;
@@ -464,7 +464,7 @@ export class AcpSession implements AcpSessionIdentity {
     this.running = turnId;
     this.record(turnId, { state: "running" });
     // 我方这条也是对话的一部分：先进镜像，再让别的设备看见。附件只记链接
-    // （契约 §55）：图片与文件正文不进镜像与事件。
+    // （契约 §56）：图片与文件正文不进镜像与事件。
     const links = attachments?.links ?? [];
     this.mirror?.prompt(text, links);
     const shown: AcpContentBlock[] = [

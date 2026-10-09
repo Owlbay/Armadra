@@ -366,12 +366,12 @@ export const createAcpSessionRequestSchema = z.object({
  * answers the same `turnId`, so a retry after a lost answer cannot send twice.
  */
 export const acpPromptAttachmentSchema = z.object({
-  /** An `agent-uploads` id (§55) on the session's core. */
+  /** An `agent-uploads` id (§56) on the session's core. */
   uploadId: z.string().regex(/^[0-9a-f]{32}$/),
 });
 
 /**
- * `attachments` (§55): uploads sent with the text — an image as an `image`
+ * `attachments` (§56): uploads sent with the text — an image as an `image`
  * block (only when the agent declared `promptCapabilities.image`), any other
  * file as an embedded `resource` or a `resource_link`. With attachments the
  * text may be empty.
@@ -579,7 +579,7 @@ export const acpLogSnapshotSchema = z.looseObject({
 
 export type AcpLogSnapshot = z.infer<typeof acpLogSnapshotSchema>;
 
-/** §55: what the agent said it accepts in a prompt (`initialize`). */
+/** §56: what the agent said it accepts in a prompt (`initialize`). */
 export const acpPromptCapabilitiesSchema = z.looseObject({
   image: z.boolean(),
   embeddedContext: z.boolean(),
@@ -613,8 +613,8 @@ export const acpLogResponseSchema = z.looseObject({
   /** §49: what the live process last said that the mirror does not keep. */
   snapshot: acpLogSnapshotSchema.optional(),
   /**
-   * §55: the live agent's `promptCapabilities`. Absent when no process is
-   * running — and from a core older than 1.27, which takes no attachments.
+   * §56: the live agent's `promptCapabilities`. Absent when no process is
+   * running — and from a core older than 1.28, which takes no attachments.
    */
   promptCapabilities: acpPromptCapabilitiesSchema.optional(),
 });

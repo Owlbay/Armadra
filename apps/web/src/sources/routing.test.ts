@@ -188,3 +188,66 @@ describe("pickRoute（D27：直连优先）", () => {
     ).toEqual(["relayed"]);
   });
 });
+
+describe("一源多路（§55）", () => {
+  const LAN = "https://192.168.0.107:8443";
+  const relayRoute = (origin: string, preferred: boolean, lastOkAtMs = 0) => ({
+    via: "relayed" as const,
+    origin,
+    cloudIssuer: origin,
+    fingerprint: "",
+    preferred,
+    lastOkAtMs,
+  });
+  const twoRelays = descriptor({
+    baseUrl: "",
+    routes: [relayRoute(LAN, false, 5), relayRoute(RELAY, true)],
+  });
+
+  function byOrigin(down: string[], selectsRelay = false) {
+    const asked: (string | undefined)[] = [];
+    const credentials: CredentialProvider = {
+      getAccess: vi.fn(async (_id: string, via: Via, origin?: string) => {
+        asked.push(origin);
+        if (origin !== undefined && down.includes(origin))
+          throw Object.assign(new Error("no"), { code: "source_unreachable" });
+        return { ...accessFor(via), httpBase: `${origin ?? "core"}/s/${ID}` };
+      }),
+      refresh: vi.fn(async (_id: string, via: Via) => accessFor(via)),
+      invalidate: vi.fn(),
+      ...(selectsRelay ? { selectsRelay: true } : {}),
+    };
+    return { credentials, asked };
+  }
+
+  it("中继按首选、再按最近成功逐条试，第一条成的用，记下是哪一条", async () => {
+    const { credentials, asked } = byOrigin([RELAY]);
+    const route = await pickRoute(twoRelays, credentials);
+    expect(asked).toEqual([RELAY, LAN]);
+    expect(route).toMatchObject({ via: "relayed", origin: LAN });
+    expect(candidateRoutes(twoRelays)).toEqual(["relayed"]);
+  });
+
+  it("全不成：抛首选那条的失败", async () => {
+    const { credentials } = byOrigin([RELAY, LAN]);
+    await expect(pickRoute(twoRelays, credentials)).rejects.toMatchObject({
+      code: "source_unreachable",
+    });
+  });
+
+  it("凭据来源自己选中继（桌面）：只问一次，不带来源", async () => {
+    const { credentials, asked } = byOrigin([], true);
+    const route = await pickRoute(twoRelays, credentials);
+    expect(asked).toEqual([undefined]);
+    expect(route.origin).toBeUndefined();
+  });
+
+  it("旧描述没有 routes：由镜像字段推出，行为与之前一样", async () => {
+    const legacy = descriptor({ baseUrl: "" });
+    const { credentials, asked } = byOrigin([]);
+    await expect(pickRoute(legacy, credentials)).resolves.toMatchObject({
+      via: "relayed",
+    });
+    expect(asked).toEqual([undefined]);
+  });
+});

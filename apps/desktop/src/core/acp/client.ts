@@ -75,7 +75,7 @@ export type AcpErrorCode =
   | "acp_model_unsupported"
   | "acp_model_unavailable"
   | "acp_not_installed"
-  // prompt 的附件（契约 §55）。
+  // prompt 的附件（契约 §56）。
   | "acp_image_unsupported"
   | "acp_attachment_unsupported"
   | "acp_attachment_too_large"

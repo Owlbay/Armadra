@@ -78,6 +78,8 @@ import { setActiveConnection, upsertConnection } from "./connections";
 import { prepareEntry, ticketWithRefresh } from "./entry";
 import { mobileRelayRoute } from "./relay-status";
 import { memoryStorage } from "./testing";
+import { usePreferencesStore } from "../app/preferences-store";
+import { recentIds, setEnterIntent } from "../services/recent";
 
 beforeEach(() => {
   Object.assign(mocks, {
@@ -94,6 +96,8 @@ beforeEach(() => {
   mocks.refresh.mockReset();
   mocks.attach.mockClear();
   vi.stubGlobal("localStorage", memoryStorage());
+  vi.stubGlobal("sessionStorage", memoryStorage());
+  usePreferencesStore.setState({ servicesAutoEnter: false });
 });
 afterEach(() => {
   history.replaceState(null, "", "/");
@@ -371,6 +375,11 @@ describe("原生 App：多连接", () => {
       cloudIssuer: ISSUER,
       fingerprint: "",
     });
+  // 这一组测的是「进一个连接」本身：开着「启动时直接进入上次的服务」。
+  // 缺省落在选择页的那几条在下面「选择服务」一组。
+  beforeEach(() => {
+    usePreferencesStore.setState({ servicesAutoEnter: true });
+  });
 
   it("当前连接走直连：选路 → 本机源指向 Gateway，传输不带中继头", async () => {
     mocks.app = true;
@@ -545,5 +554,140 @@ describe("原生 App：多连接", () => {
     });
     expect(location.hash).toBe("");
     expect(mocks.route).not.toHaveBeenCalled();
+  });
+});
+
+describe("原生 App：选择服务（A7-1）", () => {
+  const GATEWAY = "https://192.168.1.8:8443";
+  const HOST = "a".repeat(32);
+  const OTHER = "b".repeat(32);
+  const DIRECT = {
+    via: "direct",
+    access: {
+      accessToken: "t",
+      expiresAtMs: 0,
+      httpBase: GATEWAY,
+      wsBase: "wss://192.168.1.8:8443",
+    },
+  };
+
+  const addTwo = () => {
+    upsertConnection({
+      sourceId: HOST,
+      label: "MacBook",
+      baseUrl: GATEWAY,
+      relayOrigin: "",
+      cloudIssuer: "",
+      fingerprint: "ab".repeat(32),
+    });
+    upsertConnection({
+      sourceId: OTHER,
+      label: "Studio",
+      baseUrl: "https://192.168.1.9:8443",
+      relayOrigin: "",
+      cloudIssuer: "",
+      fingerprint: "cd".repeat(32),
+    });
+    setActiveConnection(HOST);
+  };
+
+  it("表非空：启动缺省落在选择页，不选路", async () => {
+    mocks.app = true;
+    mocks.restored = true;
+    addTwo();
+    await expect(prepareEntry()).resolves.toMatchObject({
+      kind: "connect",
+      mode: "native",
+      pick: true,
+      activeId: HOST,
+      recent: [],
+      connections: [
+        expect.objectContaining({ sourceId: HOST }),
+        expect.objectContaining({ sourceId: OTHER }),
+      ],
+    });
+    expect(mocks.route).not.toHaveBeenCalled();
+    expect(mocks.install).not.toHaveBeenCalled();
+  });
+
+  it("只有一个连接也照样先选", async () => {
+    mocks.app = true;
+    mocks.restored = true;
+    upsertConnection({
+      sourceId: HOST,
+      label: "",
+      baseUrl: GATEWAY,
+      relayOrigin: "",
+      cloudIssuer: "",
+      fingerprint: "ab".repeat(32),
+    });
+    await expect(prepareEntry()).resolves.toMatchObject({ pick: true });
+    expect(mocks.route).not.toHaveBeenCalled();
+  });
+
+  it("选择页点了一行（进入意图）：重载后直接进那一个，并记进最近使用", async () => {
+    mocks.app = true;
+    mocks.restored = true;
+    addTwo();
+    setEnterIntent(OTHER);
+    // 其余连接作为远程源在后台连：挂着不答，不发真请求。
+    mocks.route.mockImplementation(() => new Promise(() => undefined));
+    mocks.route.mockResolvedValueOnce(DIRECT);
+    await expect(prepareEntry()).resolves.toEqual({ kind: "app" });
+    expect(mocks.route.mock.calls[0]![0]).toMatchObject({ sourceId: OTHER });
+    expect(recentIds()).toEqual([OTHER]);
+    // 意图只用一次：再启动又回到选择页。
+    resetSourceRegistry();
+    mocks.route.mockClear();
+    await expect(prepareEntry()).resolves.toMatchObject({
+      pick: true,
+      recent: [OTHER],
+    });
+    expect(mocks.route).not.toHaveBeenCalled();
+  });
+
+  it("「启动时直接进入上次的服务」开着才直进", async () => {
+    mocks.app = true;
+    mocks.restored = true;
+    addTwo();
+    usePreferencesStore.setState({ servicesAutoEnter: true });
+    // 其余连接作为远程源在后台连：挂着不答，不发真请求。
+    mocks.route.mockImplementation(() => new Promise(() => undefined));
+    mocks.route.mockResolvedValueOnce(DIRECT);
+    await expect(prepareEntry()).resolves.toEqual({ kind: "app" });
+    expect(mocks.route.mock.calls[0]![0]).toMatchObject({ sourceId: HOST });
+  });
+
+  it("推送要切到别的连接（#push=）不受影响：直接进当前", async () => {
+    mocks.app = true;
+    mocks.restored = true;
+    addTwo();
+    setActiveConnection(OTHER);
+    history.replaceState(
+      null,
+      "",
+      `/#push=${encodeURIComponent("armadra://w/ws1?s=" + OTHER)}`,
+    );
+    // 其余连接作为远程源在后台连：挂着不答，不发真请求。
+    mocks.route.mockImplementation(() => new Promise(() => undefined));
+    mocks.route.mockResolvedValueOnce(DIRECT);
+    await expect(prepareEntry()).resolves.toEqual({ kind: "app" });
+    expect(mocks.route.mock.calls[0]![0]).toMatchObject({ sourceId: OTHER });
+    // 深链留给画布里的 `usePushOpen` 取。
+    expect(location.hash.startsWith("#push=")).toBe(true);
+  });
+
+  it("进不去：回选择页，失败挂在那一行（failedId）", async () => {
+    mocks.app = true;
+    addTwo();
+    setEnterIntent(OTHER);
+    mocks.route.mockRejectedValue(new SourceError("source_offline"));
+    await expect(prepareEntry()).resolves.toMatchObject({
+      kind: "connect",
+      pick: true,
+      failure: "offline",
+      failedId: OTHER,
+    });
+    expect(recentIds()).toEqual([]);
   });
 });

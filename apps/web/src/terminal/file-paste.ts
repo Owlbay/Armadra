@@ -8,7 +8,7 @@ import { assertSafePathText, FileDragError } from "../files/workspace-drag";
 import { quoteTerminalPath } from "./file-drop";
 
 /**
- * 粘贴或拖进终端节点的外部文件（截图、Finder / 资源管理器里的文件；契约 §55）。
+ * 粘贴或拖进终端节点的外部文件（截图、Finder / 资源管理器里的文件；契约 §56）。
  *
  * 各家 CLI 收图片的方式不一样，但有一条是共同的：**括号粘贴进来的一段文字若是
  * 一个图片文件的路径，就当作附图**——Claude Code 去掉引号与反斜杠转义后认

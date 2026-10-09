@@ -9,6 +9,9 @@
 //   * Android：`adb reverse` 把模拟器的回环端口接到宿主，`connectedDebugAndroidTest`
 //     跑 `ConnectFlowTest`（插桩），链接经插桩参数 `armadraPairLink` 交进去。
 //
+// 连接表非空时启动先落在「选择服务」（A7-1），用例点配对的那一行才进画布；Android 另记一个
+// 连不上的连接，走「两个连接 → 选择页 → 选它 → 切换服务 → 回选择页」。
+//
 // UI 用例在连接页填链接、点「连接」：原生先取 `/ca.crt` 按指纹钉住信任锚（App 不装
 // CA），再用票配对拿 Bearer 会话，页面进画布（底部导航出现）——之后页面的 fetch 与
 // WebSocket 都经钉扎过的 TLS 走 Gateway。
@@ -272,7 +275,7 @@ async function ios(mint) {
   ]);
   check(
     second === 0,
-    "XCUITest：深链 → 钉扎 → 配对 → 画布 → 重开仍在画布 → 原生 OAuth 深链",
+    "XCUITest：深链 → 钉扎 → 配对 → 画布 → 重开落在选择服务 → 选它进画布 → 原生 OAuth 深链",
     `exit ${second}`,
   );
 }
@@ -320,7 +323,7 @@ async function android(mint, port, assetUrl) {
   ]);
   check(
     code === 0,
-    "插桩用例：连接页 → 钉扎 → 配对 → 画布 → 重开仍在画布；图片带 Bearer；原生 OAuth 深链收尾",
+    "插桩用例：连接页 → 钉扎 → 配对 → 画布 → 两个连接重开落在选择服务 → 选它进画布 → 切换服务回选择页；图片带 Bearer；原生 OAuth 深链收尾",
     `gradle exit ${code}`,
   );
 }

@@ -337,7 +337,7 @@ export const agentsApiFor = (rpc: (source?: Source) => ArmadraClient) => ({
         ),
 
   /**
-   * 粘贴或拖进 Agent 节点的文件（契约 §55）：原样 POST 到当前源，落在会话所在
+   * 粘贴或拖进 Agent 节点的文件（契约 §56）：原样 POST 到当前源，落在会话所在
    * 那台 core 的数据目录里（经中继的远程源就在远端）。答复的 `path` 是那台机器上
    * 的绝对路径，`id` 给 ACP prompt 的 `attachments` 用。
    */

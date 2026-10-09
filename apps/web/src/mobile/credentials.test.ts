@@ -401,6 +401,116 @@ describe("手机的凭据来源 · 同一个中继下按主体分槽", () => {
   });
 });
 
+describe("手机的凭据来源 · 同一台主机经两个中继（§55）", () => {
+  const LAN = "https://192.168.0.107:8443";
+  const LAN_SLOT = serviceIdOf(LAN, "acct-1");
+  const PUB_SLOT = serviceIdOf(ISSUER, "acct-1");
+  const two = descriptor({
+    relayOrigin: ISSUER,
+    cloudIssuer: ISSUER,
+    routes: [
+      {
+        via: "relayed",
+        origin: ISSUER,
+        cloudIssuer: ISSUER,
+        fingerprint: "",
+        preferred: true,
+        lastOkAtMs: 0,
+      },
+      {
+        via: "relayed",
+        origin: LAN,
+        cloudIssuer: LAN,
+        fingerprint: "",
+        preferred: false,
+        lastOkAtMs: 0,
+      },
+    ],
+  });
+
+  async function bothSlots() {
+    const store = fakeBridge();
+    for (const [slot, issuer] of [
+      [PUB_SLOT, ISSUER],
+      [LAN_SLOT, LAN],
+    ] as const) {
+      await store.bridge.setRemote({
+        serviceId: slot,
+        issuer,
+        kind: "personal",
+        refreshToken: `${slot}-refresh`,
+        fingerprint: "",
+      });
+    }
+    return store;
+  }
+
+  it("按来源选槽：各用各的远程服务登录；别的中继存的会话不拿来换票", async () => {
+    const { bridge, remotes } = await bothSlots();
+    // 钥匙串里存着的是公网中继那份会话。
+    await bridge.setSession({
+      sourceId: SOURCE,
+      origin: ISSUER,
+      via: "relayed",
+      accessToken: SESSION_A,
+      refreshToken: SESSION_B,
+      expiresAtMs: NOW + 600_000,
+    });
+    const hosts: string[] = [];
+    const fetcher = routedFetch({
+      "POST /v1/auth/refresh": (_init, url) => {
+        hosts.push(`refresh ${url.origin}`);
+        return { body: cloudSession(`access-${url.host}`, `next-${url.host}`) };
+      },
+      [`POST /v1/sources/${SOURCE}/assertion`]: (_init, url) => ({
+        body: assertionBody({
+          relayOrigin: url.origin,
+          relayBaseUrl: `${url.origin}/s/${SOURCE}`,
+        }),
+      }),
+      [`POST /s/${SOURCE}/api/identity/cloud/login`]: (_init, url) => {
+        hosts.push(`login ${url.origin}`);
+        return { body: { session: coreSession(SESSION_C, "lan-refresh") } };
+      },
+    });
+    const slots: Record<string, string> = {
+      [`${SOURCE} ${ISSUER}`]: PUB_SLOT,
+      [`${SOURCE} ${LAN}`]: LAN_SLOT,
+    };
+    const touched: string[] = [];
+    const provider = createMobileCredentialProvider({
+      bridge,
+      describe: () => two,
+      slotOf: (sourceId, origin) => slots[`${sourceId} ${origin}`] ?? null,
+      touched: (_id, via, origin) => touched.push(`${via} ${origin}`),
+      connections: () => [two],
+      cloud: { fetch: fetcher.fetch },
+      now: () => NOW,
+    });
+
+    // 不指定：首选的公网中继，用存着的会话，不重新登录。
+    await expect(provider.getAccess(SOURCE, "relayed")).resolves.toMatchObject({
+      accessToken: SESSION_A,
+      httpBase: `${ISSUER}/s/${SOURCE}`,
+    });
+    // 指定局域网那条：用局域网那一槽，存着的会话是公网的，不拿去换票，改用断言登录。
+    await expect(
+      provider.getAccess(SOURCE, "relayed", LAN),
+    ).resolves.toMatchObject({
+      accessToken: SESSION_C,
+      httpBase: `${LAN}/s/${SOURCE}`,
+    });
+    expect(hosts).toEqual([
+      `refresh ${ISSUER}`,
+      `refresh ${LAN}`,
+      `login ${LAN}`,
+    ]);
+    expect(remotes.get(PUB_SLOT)?.refreshToken).toBe("next-relay.example.com");
+    expect(remotes.get(LAN_SLOT)?.refreshToken).toBe("next-192.168.0.107:8443");
+    expect(touched).toEqual([`relayed ${ISSUER}`, `relayed ${LAN}`]);
+  });
+});
+
 describe("手机的凭据来源 · 直连", () => {
   const GATEWAY = "https://192.168.1.8:8443";
 

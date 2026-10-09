@@ -84,7 +84,7 @@ export const acp = {
   /**
    * 发一条提示：与终端里敲键同一个人类驾驶者；答这一回合的标识。带
    * `clientTurnId`（§39.9）时同一会话同一 id 只投递一次，重发答同一个回合。
-   * `attachments`（§55）是这台 core 上 `agent-uploads` 的 id，随文字一起发。
+   * `attachments`（§56）是这台 core 上 `agent-uploads` 的 id，随文字一起发。
    */
   prompt: oc
     .input(

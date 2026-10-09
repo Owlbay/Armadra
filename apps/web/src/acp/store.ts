@@ -155,7 +155,7 @@ export interface AcpSessionView {
   /** 对账确认 core 没收到（或无从确认）：重试沿用同一个 `clientTurnId`。 */
   readonly undelivered: boolean;
   /**
-   * 契约 §55：活进程声明的 `promptCapabilities`。`null`：还没读到，或 core 太旧
+   * 契约 §56：活进程声明的 `promptCapabilities`。`null`：还没读到，或 core 太旧
    * （不收附件）。
    */
   readonly promptCapabilities: AcpPromptCapabilities | null;

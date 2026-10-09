@@ -11,6 +11,7 @@ import { createDesktopCloudAuth } from "../sources/credentials";
 import { hostedRelay } from "../sources/hosted";
 import { type SourceRegistry, sourceRegistry } from "../sources/registry";
 import { attachRemoteStreams } from "../sources/remote-stream";
+import { initialSourceParam } from "../services/switcher";
 import { useCanvasStore } from "../store/canvas-store";
 import { usePreferencesStore } from "./preferences-store";
 
@@ -26,6 +27,7 @@ import { usePreferencesStore } from "./preferences-store";
 export function useSourcesBootstrap(): void {
   useEffect(() => {
     hydrateSourcesAtStartup();
+    const stopInitial = followInitialSource(sourceRegistry());
     const section = takeSettingsReopen();
     if (section !== null) {
       usePreferencesStore.getState().setLastSettingsSection(section);
@@ -33,11 +35,37 @@ export function useSourcesBootstrap(): void {
     }
     // 背后有本机 core 的页面（桌面壳、服务器壳）才接；设置页中途挂上的源也跟着开。
     if ((!isDesktop() && !RUNTIME_VIA_SERVER_SHELL) || hostedRelay() !== null)
-      return;
-    return attachRemoteStreams(sourceRegistry(), {
+      return stopInitial;
+    const stopStreams = attachRemoteStreams(sourceRegistry(), {
       auth: createDesktopCloudAuth(),
     });
+    return () => {
+      stopInitial();
+      stopStreams();
+    };
   }, []);
+}
+
+/**
+ * 「在新窗口打开」开的窗口（`?source=<sourceId>`，A7-1）：那个源挂上之后设为
+ * 当前源，只设一次；之后人在这扇窗口里怎么切都随他。
+ */
+export function followInitialSource(
+  registry: SourceRegistry,
+  sourceId: string | null = initialSourceParam(),
+): () => void {
+  if (sourceId === null) return () => undefined;
+  let done = false;
+  let stop: () => void = () => undefined;
+  const apply = () => {
+    if (done || registry.get(sourceId) === undefined) return;
+    done = true;
+    registry.setCurrent(sourceId);
+    stop();
+  };
+  stop = registry.subscribe(apply);
+  apply();
+  return () => stop();
 }
 
 /**

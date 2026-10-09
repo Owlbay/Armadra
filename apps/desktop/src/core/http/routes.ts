@@ -701,7 +701,7 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
-  // 粘进 Agent 节点的文件（契约 §55）。
+  // 粘进 Agent 节点的文件（契约 §56）。
   {
     path: "/api/workspaces/{workspaceId}/agent-uploads",
     methods: ["POST"],
@@ -1038,6 +1038,18 @@ export const ROUTES: readonly RouteEntry[] = [
   },
   {
     path: "/api/sources/{sourceId}/session",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/{sourceId}/routes/prefer",
+    methods: ["POST"],
+    surface: "runtime",
+    implemented: true,
+  },
+  {
+    path: "/api/sources/{sourceId}/routes/remove",
     methods: ["POST"],
     surface: "runtime",
     implemented: true,

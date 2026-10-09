@@ -131,9 +131,11 @@ import {
   loadRenderer,
   markQuitting,
   onWindowCreated,
+  openSourceWindow,
   revealWindow,
   sendToWindow,
   setPageUrl,
+  sourceWindowUrl,
 } from "./window";
 
 beforeEach(() => {
@@ -239,6 +241,49 @@ describe("loading the page", () => {
     setPageUrl("");
     const window = open();
     await expect(loadRenderer(window as never)).rejects.toThrow(/page source/);
+  });
+});
+
+describe("a window opened on one source (window:open)", () => {
+  it("loads the same page with `?source=` and stays out of `sendToWindow`", () => {
+    const main = open();
+    const second = openSourceWindow(
+      "a1b2c3",
+      "darwin",
+    ) as unknown as FakeWindow;
+    expect(second).not.toBe(null);
+    expect(second.loaded).toEqual(["http://127.0.0.1:5173/?source=a1b2c3"]);
+    expect(second.options.webPreferences?.contextIsolation).toBe(true);
+    expect(getMainWindow()).toBe(main);
+    sendToWindow("x:y");
+    expect(main.sent).toHaveLength(1);
+    expect(second.sent).toHaveLength(0);
+    // Closing it really closes it: nothing to keep alive behind it.
+    second.close();
+    expect(second.destroyed).toBe(true);
+    expect(getMainWindow()).toBe(main);
+  });
+
+  it("runs the all-window wiring but not the main-only kind", () => {
+    const seen: string[] = [];
+    onWindowCreated(() => seen.push("all"));
+    onWindowCreated(() => seen.push("main"), "main");
+    open();
+    seen.length = 0;
+    openSourceWindow("a1b2c3", "darwin");
+    expect(seen).toContain("all");
+    expect(seen).not.toContain("main");
+  });
+
+  it("refuses ids that do not look like one", () => {
+    for (const bad of ["", "../x", "a b", 7, null, "x".repeat(129)])
+      expect(openSourceWindow(bad, "darwin")).toBe(null);
+  });
+
+  it("keeps the page's own query and replaces an old `source`", () => {
+    expect(
+      sourceWindowUrl("http://127.0.0.1:5173/?a=1&source=old", "new"),
+    ).toBe("http://127.0.0.1:5173/?a=1&source=new");
   });
 });
 

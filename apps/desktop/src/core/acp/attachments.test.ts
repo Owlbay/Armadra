@@ -22,7 +22,7 @@ function upload(
   return { id: "0".repeat(32), name, path, mimeType, bytes };
 }
 
-describe("attachmentBlocks (§55)", () => {
+describe("attachmentBlocks (§56)", () => {
   const read = (path: string) =>
     path.endsWith(".png") ? PNG : Buffer.from("const a = 1;\n");
 
@@ -143,7 +143,7 @@ function events(core: AcpCore): WorkspaceEvent[] {
   return seen;
 }
 
-describe("acp.prompt with attachments (§55)", () => {
+describe("acp.prompt with attachments (§56)", () => {
   it("sends uploads with the prompt and mirrors only their links", async () => {
     open = await acpCore();
     const seen = events(open);

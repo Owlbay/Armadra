@@ -18,6 +18,7 @@ import { randomBytes } from "node:crypto";
 import { CoreFailure, fail } from "../http/errors";
 import {
   type ClientSource,
+  type ClientSourceRoute,
   type RemoteService,
   type RemoteSourceSummary,
   type SourceSession,
@@ -36,10 +37,18 @@ import type {
   SourceAddress,
   SourceClient,
 } from "./source-client";
-import type { RemoteRow, SourceRow, SourcesStore } from "./store";
+import type {
+  RemoteRow,
+  RouteRow,
+  RouteVia,
+  SourceRow,
+  SourcesStore,
+} from "./store";
 
 /** D27：直连 hello 等多久就改走中继。 */
 export const DIRECT_PROBE_MS = 1_500;
+/** 选路时最多同时向几条中继要断言（契约 §55）。 */
+export const RELAY_RACE = 3;
 /** 远程服务的访问令牌提前这么久换新的。 */
 const ACCESS_SLACK_MS = 60_000;
 
@@ -98,6 +107,21 @@ function relayFingerprint(
   }
 }
 
+/**
+ * 几个失败里挑最有用的：拒绝比不可达更有用——页面据此提示重新登录，而不是
+ * 「连不上」。都不是就答 `source_unreachable`。
+ */
+function telling(failures: readonly unknown[], message: string): CoreFailure {
+  const useful = failures.find(
+    (error): error is CoreFailure =>
+      error instanceof CoreFailure &&
+      (error.code === "source_unauthorized" ||
+        error.code === "source_offline" ||
+        error.code === "fingerprint_mismatch"),
+  );
+  return useful ?? fail("source_unreachable", message);
+}
+
 function wsBaseOf(httpBase: string): string {
   return httpBase.replace(/^http/, "ws");
 }
@@ -148,6 +172,26 @@ export function parsePairLink(link: string): {
     ticket,
     fingerprint: fragment.get("fp") ?? "",
   };
+}
+
+/** 一条路在答案里的样子（契约 §55）：没有凭据，只有地址与时刻。 */
+function routeJson(route: RouteRow): ClientSourceRoute {
+  return {
+    via: route.via,
+    origin: route.origin,
+    cloudIssuer: route.cloudIssuer,
+    fingerprint: route.fingerprint,
+    preferred: route.preferred,
+    lastOkAtMs: route.lastOkAtMs,
+  };
+}
+
+/** 一条中继的来源：断言给的 `relayOrigin`，没有就是 `relayBaseUrl` 的来源。 */
+function relayOriginOf(assertion: {
+  relayOrigin?: string;
+  relayBaseUrl: string;
+}): string {
+  return assertion.relayOrigin || new URL(assertion.relayBaseUrl).origin;
 }
 
 export class SourcesService {
@@ -208,9 +252,13 @@ export class SourcesService {
 
   /* ------------------------------ 出参 ------------------------------ */
 
-  private async sourceJson(row: SourceRow): Promise<ClientSource> {
+  private async sourceJson(
+    row: SourceRow,
+    routes: readonly RouteRow[] = this.store.routes(row.sourceId),
+  ): Promise<ClientSource> {
     return {
       ...row,
+      routes: routes.map(routeJson),
       // 本机不要凭据，永远连得上。
       hasCredentials:
         row.kind === "local"
@@ -229,8 +277,11 @@ export class SourcesService {
   }
 
   async list(): Promise<{ sources: ClientSource[]; remotes: RemoteService[] }> {
+    const routes = this.store.allRoutes();
     const sources = await Promise.all(
-      this.store.list().map((row) => this.sourceJson(row)),
+      this.store
+        .list()
+        .map((row) => this.sourceJson(row, routes.get(row.sourceId) ?? [])),
     );
     const remotes = await Promise.all(
       this.store.remotes().map((row) => this.remoteJson(row)),
@@ -358,21 +409,35 @@ export class SourcesService {
     });
     const existing = this.store.get(sourceId);
     const at = this.now();
-    const row = this.store.upsert({
+    this.store.upsert({
       sourceId,
-      kind: existing?.kind === "relayed" ? "relayed" : "direct",
+      kind: existing?.kind ?? "direct",
       label: label ?? existing?.label ?? clip(new URL(origin).host, 128),
-      baseUrl: origin,
+      baseUrl: existing?.baseUrl ?? origin,
       relayOrigin: existing?.relayOrigin ?? "",
-      fingerprint,
+      fingerprint: existing?.fingerprint ?? fingerprint,
       cloudIssuer: existing?.cloudIssuer ?? "",
       principalHint: credentials.principalHint,
       addedAtMs: existing?.addedAtMs ?? at,
       lastOkAtMs: at,
       orderIndex: existing?.orderIndex ?? this.store.nextOrder(),
     });
+    // 新的直连地址顶替原来首选的直连地址；首选是中继时不抢（选路照样先探直连）。
+    const current = this.store.routes(sourceId).find((one) => one.preferred);
+    this.store.upsertRoute({
+      sourceId,
+      via: "direct",
+      origin,
+      cloudIssuer: "",
+      fingerprint,
+      addedAtMs: at,
+      lastOkAtMs: at,
+      ...(current === undefined || current.via === "direct"
+        ? { preferred: true }
+        : {}),
+    });
     this.options.log.info("added a direct source", { sourceId });
-    return this.sourceJson(row);
+    return this.sourceJson(this.row(sourceId));
   }
 
   async update(input: {
@@ -402,14 +467,63 @@ export class SourcesService {
         : input.relayOrigin === ""
           ? ""
           : normalizeOrigin(input.relayOrigin);
-    const updated = this.store.upsert({
+    this.store.upsert({
       ...row,
       label: label ?? row.label,
       orderIndex: input.orderIndex ?? row.orderIndex,
-      baseUrl,
-      relayOrigin,
     });
-    return this.sourceJson(updated);
+    // 旧的地址字段改的是镜像的那条路（契约 §55）：换掉它的来源，凭据键随之换。
+    if (baseUrl !== row.baseUrl) {
+      await this.replaceRoute(row, "direct", row.baseUrl, baseUrl, {
+        cloudIssuer: "",
+        fingerprint: row.fingerprint,
+      });
+    }
+    if (relayOrigin !== row.relayOrigin) {
+      await this.replaceRoute(row, "relayed", row.relayOrigin, relayOrigin, {
+        cloudIssuer: row.cloudIssuer,
+        fingerprint: "",
+      });
+    }
+    return this.sourceJson(this.row(input.sourceId));
+  }
+
+  /** `update` 改地址：旧的那条路删掉（连同它的凭据），新的一条接替它是否首选。 */
+  private async replaceRoute(
+    row: SourceRow,
+    via: RouteVia,
+    from: string,
+    to: string,
+    keep: { cloudIssuer: string; fingerprint: string },
+  ): Promise<void> {
+    const old =
+      from === "" ? undefined : this.store.route(row.sourceId, via, from);
+    if (to !== "") {
+      this.store.upsertRoute({
+        sourceId: row.sourceId,
+        via,
+        origin: to,
+        cloudIssuer: old?.cloudIssuer ?? keep.cloudIssuer,
+        fingerprint: old?.fingerprint ?? keep.fingerprint,
+        addedAtMs: old?.addedAtMs ?? this.now(),
+        lastOkAtMs: 0,
+        ...(old?.preferred === true ? { preferred: true } : {}),
+      });
+    }
+    if (old !== undefined) {
+      this.store.deleteRoute(row.sourceId, via, from);
+      await this.secrets.putSource(row.sourceId, from, undefined);
+    }
+    if (this.store.routes(row.sourceId).length === 0) {
+      // 地址全清空了：镜像也清空（没有路可镜像）。
+      this.store.upsert({
+        ...this.row(row.sourceId),
+        baseUrl: "",
+        relayOrigin: "",
+        cloudIssuer:
+          via === "relayed" ? "" : this.row(row.sourceId).cloudIssuer,
+      });
+    }
   }
 
   async remove(sourceId: string): Promise<Record<string, never>> {
@@ -419,6 +533,51 @@ export class SourcesService {
     this.store.delete(sourceId);
     this.options.log.info("removed a source", { sourceId });
     return {};
+  }
+
+  /** 设为首选的路（契约 §55）。 */
+  async routePrefer(input: {
+    sourceId: string;
+    via: RouteVia;
+    origin: string;
+  }): Promise<ClientSource> {
+    const row = this.row(input.sourceId);
+    if (row.kind === "local") throw fail("conflict", "本机没有路可选");
+    if (!this.store.preferRoute(input.sourceId, input.via, input.origin)) {
+      throw fail("not_found", "这个源没有这条路");
+    }
+    return this.sourceJson(this.row(input.sourceId));
+  }
+
+  /**
+   * 删一条路与它的凭据（契约 §55）。最后一条路不在这里删——那等于删源，答
+   * `conflict`，由 `sources.remove` 来。
+   */
+  async routeRemove(input: {
+    sourceId: string;
+    via: RouteVia;
+    origin: string;
+  }): Promise<ClientSource> {
+    const row = this.row(input.sourceId);
+    if (row.kind === "local") throw fail("conflict", "本机没有路可删");
+    const routes = this.store.routes(input.sourceId);
+    if (
+      !routes.some(
+        (one) => one.via === input.via && one.origin === input.origin,
+      )
+    ) {
+      throw fail("not_found", "这个源没有这条路");
+    }
+    if (routes.length === 1) {
+      throw fail("conflict", "这是最后一条路，要删就删掉这个源");
+    }
+    this.store.deleteRoute(input.sourceId, input.via, input.origin);
+    await this.secrets.putSource(input.sourceId, input.origin, undefined);
+    this.options.log.info("removed a source route", {
+      sourceId: input.sourceId,
+      via: input.via,
+    });
+    return this.sourceJson(this.row(input.sourceId));
   }
 
   async forget(sourceId: string): Promise<Record<string, never>> {
@@ -461,34 +620,37 @@ export class SourcesService {
     });
   }
 
-  private ok(sourceId: string): void {
-    this.store.touchOk(sourceId, this.now());
+  private ok(row: SourceRow, route: RouteRow): void {
+    const at = this.now();
+    this.store.touchOk(row.sourceId, at);
+    this.store.touchRouteOk(row.sourceId, route.via, route.origin, at);
   }
 
-  private async direct(row: SourceRow): Promise<SourceSession> {
-    const fresh = await this.refreshAt(row.sourceId, row.baseUrl, {
-      base: row.baseUrl,
-      fingerprint: row.fingerprint,
+  private async direct(
+    row: SourceRow,
+    route: RouteRow,
+  ): Promise<SourceSession> {
+    const fresh = await this.refreshAt(row.sourceId, route.origin, {
+      base: route.origin,
+      fingerprint: route.fingerprint,
     });
-    this.ok(row.sourceId);
+    this.ok(row, route);
     return {
       accessToken: fresh.accessToken,
       accessExpiresAtMs: fresh.accessExpiresAtMs,
-      httpBase: row.baseUrl,
-      wsBase: wsBaseOf(row.baseUrl),
+      httpBase: route.origin,
+      wsBase: wsBaseOf(route.origin),
       via: "direct",
     };
   }
 
-  private relayKey(row: SourceRow, assertion: SourceAssertion): string {
-    return row.relayOrigin !== ""
-      ? row.relayOrigin
-      : assertion.relayOrigin || assertion.relayBaseUrl;
-  }
-
-  /** 经中继：先用存着的刷新令牌，401 时用断言重新 `cloud/login`。 */
+  /**
+   * 经中继：先用这条路存着的刷新令牌，401 时用断言重新 `cloud/login`。凭据键是
+   * 这条路的来源——每个中继各一份，换一个中继进来不碰另一个的（契约 §55）。
+   */
   private async relayed(
     row: SourceRow,
+    route: RouteRow,
     remote: RemoteRow,
     assertion: SourceAssertion,
   ): Promise<SourceSession> {
@@ -498,7 +660,7 @@ export class SourcesService {
       fingerprint: relayFingerprint(assertion.relayBaseUrl, remote),
       relayToken: assertion.relayToken,
     };
-    const key = this.relayKey(row, assertion);
+    const key = route.origin;
     let fresh: NativeCredentials;
     try {
       fresh = await this.refreshAt(row.sourceId, key, address);
@@ -518,7 +680,7 @@ export class SourcesService {
         return logged;
       });
     }
-    this.ok(row.sourceId);
+    this.ok(row, route);
     return {
       accessToken: fresh.accessToken,
       accessExpiresAtMs: fresh.accessExpiresAtMs,
@@ -545,85 +707,139 @@ export class SourcesService {
     );
   }
 
+  /** 中继的路配上它的远程服务；远程服务删掉了的路不可走。 */
+  private relayCandidates(
+    routes: readonly RouteRow[],
+  ): { route: RouteRow; remote: RemoteRow }[] {
+    return routes
+      .filter((one) => one.via === "relayed" && one.cloudIssuer !== "")
+      .flatMap((route) => {
+        const remote = this.store.remoteByIssuer(route.cloudIssuer);
+        return remote === undefined ? [] : [{ route, remote }];
+      });
+  }
+
   /**
-   * `sources.session`（规格 §1.5、D27）：`via` 省略时并行问直连的 hello（1.5 秒）
-   * 与远程服务的断言；直连通且 `hostId` 就是这个源 → 直连换票，否则走中继；都
-   * 不行 → `source_unreachable`。
+   * 中继里选一条（契约 §55）：首选的、其余按最近成功，最多 {@link RELAY_RACE} 条
+   * 同时要断言，第一条答「在线」的用。全不行时抛最有用的那个失败。
+   */
+  private async pickRelay(
+    row: SourceRow,
+    candidates: readonly { route: RouteRow; remote: RemoteRow }[],
+  ): Promise<SourceSession> {
+    if (candidates.length === 0) {
+      throw fail("source_unreachable", "这个源没有可用的远程服务");
+    }
+    return (await this.pickRelayLater(row, candidates))();
+  }
+
+  /**
+   * `sources.session`（规格 §1.5、D27，契约 §55）：
+   *
+   * - 给了 `route`：只走那一条；
+   * - 只给 `via`：那一类里按首选、最近成功选；
+   * - 都省略：并行问直连的 hello（1.5 秒）与中继的断言；直连通且 `hostId` 就是
+   *   这个源 → 直连换票，否则走中继；都不行 → `source_unreachable`。
    */
   async session(
     sourceId: string,
     via?: "direct" | "relayed",
+    target?: { via: RouteVia; origin: string },
   ): Promise<SourceSession> {
     const row = this.row(sourceId);
     if (row.kind === "local") throw fail("conflict", "本机不需要换票");
+    const routes = this.store.routes(sourceId);
     const credentials = await this.secrets.source(sourceId);
-    const canDirect =
-      row.baseUrl !== "" && credentials.byOrigin[row.baseUrl] !== undefined;
-    const remote =
-      row.cloudIssuer === ""
-        ? undefined
-        : this.store.remoteByIssuer(row.cloudIssuer);
-    const canRelay = remote !== undefined;
+    const directs = routes.filter((one) => one.via === "direct");
+    const relays = this.relayCandidates(routes);
 
-    if (via === "direct") {
-      if (row.baseUrl === "")
-        throw fail("source_unreachable", "这个源没有直连地址");
-      return this.direct(row);
-    }
-    if (via === "relayed") {
-      if (remote === undefined) {
-        throw fail("source_unreachable", "这个源没有可用的远程服务");
-      }
-      return this.relayed(
-        row,
-        remote,
-        await this.assertionFor(remote, sourceId),
+    if (target !== undefined) {
+      const route = routes.find(
+        (one) => one.via === target.via && one.origin === target.origin,
       );
+      if (route === undefined) throw fail("not_found", "这个源没有这条路");
+      if (route.via === "direct") return this.direct(row, route);
+      const relay = relays.find((one) => one.route === route);
+      if (relay === undefined) {
+        throw fail("source_unreachable", "这条路的远程服务已不在");
+      }
+      return this.pickRelay(row, [relay]);
     }
-    if (!canDirect && !canRelay) {
+    if (via === "direct") {
+      const route =
+        directs.find((one) => credentials.byOrigin[one.origin] !== undefined) ??
+        directs[0];
+      if (route === undefined)
+        throw fail("source_unreachable", "这个源没有直连地址");
+      return this.direct(row, route);
+    }
+    if (via === "relayed") return this.pickRelay(row, relays);
+
+    const direct = directs.find(
+      (one) => credentials.byOrigin[one.origin] !== undefined,
+    );
+    if (direct === undefined && relays.length === 0) {
       throw fail(
-        row.baseUrl === "" && row.cloudIssuer === ""
-          ? "source_unreachable"
-          : "source_unauthorized",
+        routes.length === 0 ? "source_unreachable" : "source_unauthorized",
         "这个源没有保存的登录",
       );
     }
 
-    const [hello, assertion] = await Promise.allSettled([
-      canDirect
-        ? this.peer.hello(
-            { base: row.baseUrl, fingerprint: row.fingerprint },
-            DIRECT_PROBE_MS,
-          )
-        : Promise.reject(fail("source_unreachable", "没有直连")),
-      canRelay
-        ? this.assertionFor(remote, sourceId)
-        : Promise.reject(fail("source_unreachable", "没有中继")),
-    ]);
+    const relayed =
+      relays.length === 0
+        ? Promise.reject(fail("source_unreachable", "没有中继"))
+        : this.pickRelayLater(row, relays);
+    relayed.catch(() => undefined);
     const failures: unknown[] = [];
-    if (hello.status === "fulfilled" && hello.value.hostId === sourceId) {
+    if (direct !== undefined) {
       try {
-        return await this.direct(row);
+        const hello = await this.peer.hello(
+          { base: direct.origin, fingerprint: direct.fingerprint },
+          DIRECT_PROBE_MS,
+        );
+        if (hello.hostId === sourceId) return await this.direct(row, direct);
       } catch (error) {
         failures.push(error);
       }
-    } else if (hello.status === "rejected") {
-      failures.push(hello.reason);
     }
-    if (assertion.status === "fulfilled" && remote !== undefined) {
-      return this.relayed(row, remote, assertion.value);
+    try {
+      return await (
+        await relayed
+      )();
+    } catch (error) {
+      failures.push(error);
     }
-    if (assertion.status === "rejected") failures.push(assertion.reason);
-    // 拒绝比不可达更有用：页面据此提示重新登录，而不是「连不上」。
-    const telling = failures.find(
-      (error) =>
-        error instanceof CoreFailure &&
-        (error.code === "source_unauthorized" ||
-          error.code === "source_offline" ||
-          error.code === "fingerprint_mismatch"),
-    );
-    if (telling !== undefined) throw telling;
-    throw fail("source_unreachable", "直连与中继都连不上这个源");
+    throw telling(failures, "直连与中继都连不上这个源");
+  }
+
+  /**
+   * 中继那一侧先把断言要来（与直连探测并行），换票等直连没成再做——直连成了，
+   * 这一份断言就丢掉，不在中继上多换一次票。
+   */
+  private async pickRelayLater(
+    row: SourceRow,
+    candidates: readonly { route: RouteRow; remote: RemoteRow }[],
+  ): Promise<() => Promise<SourceSession>> {
+    const racing = candidates.slice(0, RELAY_RACE);
+    const winner = await Promise.any(
+      racing.map(async (candidate) => {
+        const assertion = await this.assertionFor(
+          candidate.remote,
+          row.sourceId,
+        );
+        if (!assertion.online)
+          throw fail("source_offline", "这台机器当前不在线");
+        return { ...candidate, assertion };
+      }),
+    ).catch((error: unknown) => {
+      const errors = error instanceof AggregateError ? error.errors : [error];
+      // 只有一条路：它的失败原样交出去。
+      throw errors.length === 1
+        ? errors[0]
+        : telling(errors, "几条中继都连不上这个源");
+    });
+    return () =>
+      this.relayed(row, winner.route, winner.remote, winner.assertion);
   }
 
   /* --------------------------- 远程服务 ---------------------------- */
@@ -834,10 +1050,15 @@ export class SourcesService {
       this.endpoint(row),
       token.accessToken,
     );
+    // 「挂上了」= 这台主机经这个服务有一条路（契约 §55）；经别的服务挂上的不算。
+    const routes = this.store.allRoutes();
     return {
       sources: listed.map((source) => ({
         ...source,
-        mounted: this.store.get(source.sourceId) !== undefined,
+        mounted: (routes.get(source.sourceId) ?? []).some(
+          (route) =>
+            route.via === "relayed" && route.cloudIssuer === row.issuer,
+        ),
       })),
     };
   }
@@ -867,10 +1088,10 @@ export class SourcesService {
       throw fail("source_unauthorized", "中继另一端不是这个源");
     }
     const existing = this.store.get(input.sourceId);
-    const relayOrigin =
-      assertion.relayOrigin || new URL(assertion.relayBaseUrl).origin;
-    const key = existing?.relayOrigin || relayOrigin;
-    await this.secrets.putSource(input.sourceId, key, {
+    // 凭据键是**这一次**的中继来源（契约 §55）：经第二个中继挂上同一台主机，
+    // 不覆盖第一个中继那一份。
+    const relayOrigin = relayOriginOf(assertion);
+    await this.secrets.putSource(input.sourceId, relayOrigin, {
       refreshToken: credentials.refreshToken,
       deviceId: credentials.deviceId,
     });
@@ -888,28 +1109,59 @@ export class SourcesService {
           .catch(() => "");
       }
     }
-    const at = this.now();
-    const row = this.store.upsert({
+    const row = this.saveRelayRoute({
       sourceId: input.sourceId,
-      kind: existing?.kind === "direct" ? "direct" : "relayed",
-      label: clip(
+      existing,
+      label:
         label ?? existing?.label ?? (name.trim() || input.sourceId.slice(0, 8)),
-        128,
-      ),
-      baseUrl: existing?.baseUrl ?? "",
-      relayOrigin: key,
-      fingerprint: existing?.fingerprint ?? "",
-      cloudIssuer: remote.issuer,
+      relayOrigin,
+      issuer: remote.issuer,
       principalHint: credentials.principalHint,
-      addedAtMs: existing?.addedAtMs ?? at,
-      lastOkAtMs: at,
-      orderIndex: existing?.orderIndex ?? this.store.nextOrder(),
     });
     this.options.log.info("mounted a relayed source", {
       sourceId: input.sourceId,
       serviceId: remote.serviceId,
     });
     return this.sourceJson(row);
+  }
+
+  /**
+   * 挂载的落库：源行建或留（显示名、主体提示），中继这条路 upsert 一行；镜像由
+   * 首选路由决定，挂第二个中继不改原来的首选（契约 §55）。
+   */
+  private saveRelayRoute(input: {
+    sourceId: string;
+    existing: SourceRow | undefined;
+    label: string;
+    relayOrigin: string;
+    issuer: string;
+    principalHint: string;
+  }): SourceRow {
+    const at = this.now();
+    const { existing } = input;
+    this.store.upsert({
+      sourceId: input.sourceId,
+      kind: existing?.kind ?? "relayed",
+      label: clip(input.label, 128),
+      baseUrl: existing?.baseUrl ?? "",
+      relayOrigin: existing?.relayOrigin || input.relayOrigin,
+      fingerprint: existing?.fingerprint ?? "",
+      cloudIssuer: existing?.relayOrigin ? existing.cloudIssuer : input.issuer,
+      principalHint: input.principalHint,
+      addedAtMs: existing?.addedAtMs ?? at,
+      lastOkAtMs: at,
+      orderIndex: existing?.orderIndex ?? this.store.nextOrder(),
+    });
+    this.store.upsertRoute({
+      sourceId: input.sourceId,
+      via: "relayed",
+      origin: input.relayOrigin,
+      cloudIssuer: input.issuer,
+      fingerprint: "",
+      addedAtMs: at,
+      lastOkAtMs: at,
+    });
+    return this.row(input.sourceId);
   }
 
   /**
@@ -1013,10 +1265,8 @@ export class SourcesService {
     }
 
     const existing = this.store.get(accepted.sourceId);
-    const relayOrigin =
-      accepted.relayOrigin || new URL(accepted.relayBaseUrl).origin;
-    const key = existing?.relayOrigin || relayOrigin;
-    await this.secrets.putSource(accepted.sourceId, key, {
+    const relayOrigin = relayOriginOf(accepted);
+    await this.secrets.putSource(accepted.sourceId, relayOrigin, {
       refreshToken: credentials.refreshToken,
       deviceId: credentials.deviceId,
     });
@@ -1035,23 +1285,16 @@ export class SourcesService {
           .catch(() => "");
       }
     }
-    const row = this.store.upsert({
+    const row = this.saveRelayRoute({
       sourceId: accepted.sourceId,
-      kind: existing?.kind === "direct" ? "direct" : "relayed",
-      label: clip(
+      existing,
+      label:
         label ??
-          existing?.label ??
-          (name.trim() || accepted.sourceId.slice(0, 8)),
-        128,
-      ),
-      baseUrl: existing?.baseUrl ?? "",
-      relayOrigin: key,
-      fingerprint: existing?.fingerprint ?? "",
-      cloudIssuer: issuer,
+        existing?.label ??
+        (name.trim() || accepted.sourceId.slice(0, 8)),
+      relayOrigin,
+      issuer,
       principalHint: credentials.principalHint,
-      addedAtMs: existing?.addedAtMs ?? at,
-      lastOkAtMs: at,
-      orderIndex: existing?.orderIndex ?? this.store.nextOrder(),
     });
     this.options.log.info("mounted a source by share link", {
       sourceId: accepted.sourceId,

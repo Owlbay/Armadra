@@ -9,7 +9,7 @@ import { AcpError } from "./client";
 import type { AcpContentBlock } from "./types";
 
 /**
- * 一条 prompt 带的上传（契约 §55）→ 发给 Agent 的内容块，以及记进镜像、发给
+ * 一条 prompt 带的上传（契约 §56）→ 发给 Agent 的内容块，以及记进镜像、发给
  * 别的设备的那一份。
  *
  *   * 图片（PNG / JPEG / GIF / WebP）→ `image` 块，base64 正文；Agent 在

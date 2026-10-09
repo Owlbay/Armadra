@@ -336,7 +336,7 @@ describe("TerminalSurface file input guards", () => {
   });
 });
 
-describe("TerminalSurface external files (§55)", () => {
+describe("TerminalSurface external files (§56)", () => {
   const shot = () =>
     new File([new Uint8Array(4)], "image.png", { type: "image/png" });
 

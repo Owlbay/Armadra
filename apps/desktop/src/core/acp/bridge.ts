@@ -64,7 +64,7 @@ interface Entry {
   lastTurn?: string;
   /** 下一条经输入路径发出的 prompt 带的页面回合 id（§39.9），用一次就清。 */
   clientTurnId?: string;
-  /** 下一条 prompt 带的附件（§55），用一次就清。 */
+  /** 下一条 prompt 带的附件（§56），用一次就清。 */
   attachments?: AttachmentBlocks;
 }
 
@@ -138,7 +138,7 @@ export class AcpBackend implements TerminalBackend {
   }
 
   /**
-   * 下一条经输入路径发出的 prompt 带这些附件（契约 §55）。与
+   * 下一条经输入路径发出的 prompt 带这些附件（契约 §56）。与
    * {@link expectClientTurn} 同一个用法：路由在 `writeSubmit` 之前设、之后清，
    * 租约与授权仍由输入路径判。有附件时正文可以是空的。
    */

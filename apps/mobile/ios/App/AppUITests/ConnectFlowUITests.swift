@@ -6,7 +6,8 @@ import XCTest
 /// `TEST_RUNNER_ARMADRA_PAIR_LINK` 交进来，用例经深链交给 App。页面在 WKWebView 里，按无障碍树
 /// 找输入框与按钮；文案中英都认（模拟器的语言不定）。还没有连接时连接页先列添加方式，
 /// 「配对链接」之后才有输入框。XCTest 按名字排序：配对之后 App 记住了
-/// Gateway，「没有 Gateway」那条必须在前（`test1…`、`test2…`）。
+/// Gateway，「没有 Gateway」那条必须在前（`test1…`、`test2…`）。连接表非空时启动先落在「选择服务」
+/// （A7-1），点一行才进画布。
 final class ConnectFlowUITests: XCTestCase {
     override func setUp() {
         continueAfterFailure = false
@@ -72,10 +73,18 @@ final class ConnectFlowUITests: XCTestCase {
             XCTFail("canvas after pairing: \(app.webViews.staticTexts.allElementsBoundByIndex.prefix(12).map(\.label))")
             return
         }
-        // 重开 App：会话从钥匙串读回，直接进画布、不再问配对。
+        // 重开 App：启动落在「选择服务」（A7-1，表非空不再自动进）。点那一行进画布——会话从钥匙串
+        // 读回，不再问配对。行的名字是 Gateway 的主机（回环地址），行尾的「移除 …」也带着它，排除掉。
         app.terminate()
         app.launch()
-        XCTAssertTrue(button(app, ["画布", "Canvas"]).waitForExistence(timeout: 60), "canvas after relaunch")
+        let picker = app.webViews.descendants(matching: .any).matching(NSPredicate(format: "label IN %@", ["选择服务", "Choose a service"])).firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout: 60), "service picker after relaunch")
+        let row = app.webViews.buttons.matching(NSPredicate(
+            format: "label CONTAINS %@ AND NOT (label BEGINSWITH %@) AND NOT (label BEGINSWITH %@)",
+            "127.0.0.1", "移除", "Remove")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 20), "the paired gateway's row")
+        row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(button(app, ["画布", "Canvas"]).waitForExistence(timeout: 60), "canvas after picking the service")
         XCTAssertFalse(button(app, ["连接", "Connect"]).exists)
         // 原生 OAuth 的深链（R-56）：App 写进 `#link=` 重载，入口收尾（本机没有挂起的流程，答失败、
         // 不发请求），结果打开「账号与安全」页（#205 设置重组后的分区名）；会话不受影响，不回连接页。

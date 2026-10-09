@@ -82,7 +82,7 @@ function pathOrRoot(value: string | null | undefined): string {
 export function install(context: CoreContext): void {
   const database = context.db.database;
   const { server, bus } = context;
-  // 粘进 Agent 节点的文件（契约 §55）：落在数据目录，不在工作区里。
+  // 粘进 Agent 节点的文件（契约 §56）：落在数据目录，不在工作区里。
   installUploads(context);
   const publish = (id: string, event: WorkspaceEvent): void => {
     bus.emit("workspace.event", { workspaceId: id, event });

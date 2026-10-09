@@ -323,7 +323,7 @@ function TerminalSurfaceImpl({
             event.stopPropagation();
             try {
               if (!hasWorkspaceFileDrag(event.dataTransfer)) {
-                // 系统文件管理器里拖来的：上传到会话所在的 core 再粘路径（§55）。
+                // 系统文件管理器里拖来的：上传到会话所在的 core 再粘路径（§56）。
                 const files = filesOf(event.dataTransfer);
                 if (files.length === 0)
                   throw new FileDragError("fileDrag.externalPathUnavailable");
@@ -335,7 +335,7 @@ function TerminalSurfaceImpl({
               toast.error(translate(fileDragMessage(error)));
             }
           }}
-          // ⌘V / Ctrl+V 粘进来的截图或文件（§55）：在 xterm 读剪贴板文字之前
+          // ⌘V / Ctrl+V 粘进来的截图或文件（§56）：在 xterm 读剪贴板文字之前
           // 截下，不然它只会粘出一个文件名，或者什么都不粘。纯文字照旧交给 xterm。
           onPasteCapture={(event) => {
             const files = filesOf(event.clipboardData);

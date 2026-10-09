@@ -165,7 +165,7 @@ export function PromptBox({
   /** 「编辑后重发」：把这句填进来，光标在末尾，不发。 */
   prefill?: PromptPrefill | null;
   /**
-   * 契约 §55：待发的附件（`usePromptAttachments`）。会话视图持有它，好让拖到
+   * 契约 §56：待发的附件（`usePromptAttachments`）。会话视图持有它，好让拖到
    * 视图任何地方的文件都进这里；不给时没有回形针、粘不进附件。
    */
   attachments?: PromptAttachments;

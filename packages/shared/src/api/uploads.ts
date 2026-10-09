@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * `POST /api/workspaces/{id}/agent-uploads?name=<file name>` — contract §55.
+ * `POST /api/workspaces/{id}/agent-uploads?name=<file name>` — contract §56.
  *
  * A file pasted or dropped onto an agent node. The body is the raw bytes with
  * the file's own `Content-Type`; the core that answers is the one the session

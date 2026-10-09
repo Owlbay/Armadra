@@ -310,7 +310,7 @@ export const ROUTE_SCOPE_RULES: readonly RouteScopeRule[] = [
     read: "terminal:create",
     write: "terminal:create",
   },
-  // 粘进 Agent 节点的文件（契约 §55）：是向 Agent 输入，与开终端同一档。
+  // 粘进 Agent 节点的文件（契约 §56）：是向 Agent 输入，与开终端同一档。
   {
     pattern: new RegExp(`^${WORKSPACE}/agent-uploads$`),
     read: "terminal:create",

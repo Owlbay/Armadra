@@ -17,6 +17,8 @@ import {
   type ThemePreference,
 } from "../../../app/preferences-store";
 import { LOCALES, type Locale } from "../../../i18n";
+import { isNativeApp } from "../../../mobile/native-bridge";
+import { ServicesSettingsGroup } from "../../../services/ServicesSettingsGroup";
 import { ScopeBadge } from "../scope-badge";
 import { SettingsGroup } from "../SettingsGroup";
 import { SettingsRow } from "../SettingsRow";
@@ -41,6 +43,8 @@ export function DefaultsPage() {
   const { member } = useAccess();
   return (
     <>
+      {/* 手机与 iPad：设置首页顶部是「服务」（A7-1）。 */}
+      {isNativeApp() && <ServicesSettingsGroup />}
       <SettingsGroup>
         {member ? null : <DefaultDriverRow />}
         <AgentDefaultRows />

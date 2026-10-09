@@ -50,6 +50,8 @@ export function descriptorOf(source: ClientSource): SourceDescriptor {
     cloudIssuer: source.cloudIssuer,
     fingerprint: source.fingerprint,
     orderIndex: source.orderIndex,
+    // 旧版 core（§55 之前）的答案里没有 `routes`：由镜像字段推出。
+    ...(source.routes === undefined ? {} : { routes: source.routes }),
   };
 }
 

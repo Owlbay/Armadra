@@ -12,7 +12,7 @@ export const MAX_UPLOAD_BODY_BYTES = MAX_AGENT_UPLOAD_BYTES + 64 * 1024;
 export const AGENT_UPLOADS_PATH = "/api/workspaces/{workspaceId}/agent-uploads";
 
 /**
- * `POST /api/workspaces/{id}/agent-uploads?name=<文件名>`（契约 §55）：体是原样的
+ * `POST /api/workspaces/{id}/agent-uploads?name=<文件名>`（契约 §56）：体是原样的
  * 字节，`Content-Type` 是文件自己的。粘进 Agent 是向它输入，所以要工作空间的
  * `execute` 授权（与开终端同一档）；字节流留在 REST，不进 procedure。
  */

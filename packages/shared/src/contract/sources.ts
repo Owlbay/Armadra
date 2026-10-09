@@ -1,5 +1,5 @@
 import {
-  clientSourceSchema,
+  clientSourceSchema as protocolClientSourceSchema,
   mountInputSchema,
   remoteAddInputSchema,
   remoteAddOutputSchema,
@@ -11,10 +11,11 @@ import {
   serviceIdInputSchema,
   sourceIdInputSchema,
   sourcesAddDirectInputSchema,
-  sourcesListOutputSchema,
-  sourcesSessionInputSchema,
+  sourcesListOutputSchema as protocolSourcesListOutputSchema,
+  sourcesSessionInputSchema as protocolSourcesSessionInputSchema,
   sourcesSessionOutputSchema,
   sourcesUpdateInputSchema,
+  viaSchema,
 } from "@armadra/platform-protocol/core-api";
 import { z } from "zod";
 
@@ -32,12 +33,48 @@ import { meta, oc } from "./meta.js";
  * 出现在任何出参里。
  */
 
-export {
-  clientSourceSchema,
-  remoteAddInputSchema,
-  remoteServiceSchema,
-  remoteSourceSummarySchema,
-};
+/**
+ * 一台主机的一条到达方式（契约 §55，迁移 0044）：直连 Gateway 或经某个中继。
+ * `origin` 是直连的 Gateway 来源或中继来源；没有凭据，只有地址与时刻。
+ */
+export const clientSourceRouteSchema = z.object({
+  via: viaSchema,
+  origin: z.string(),
+  cloudIssuer: z.string(),
+  fingerprint: z.string(),
+  preferred: z.boolean(),
+  lastOkAtMs: z.number().int(),
+});
+
+/**
+ * 源表的一行：协议包的形状加 `routes`（§55）。原有的地址字段照旧，是首选路由的
+ * 镜像。协议包是 cloud 仓的，这一处追加只在 core 契约里，字段逐个沿用协议包的。
+ */
+export const clientSourceSchema = protocolClientSourceSchema.extend({
+  routes: z.array(clientSourceRouteSchema),
+});
+
+export const sourcesListOutputSchema = protocolSourcesListOutputSchema.extend({
+  sources: z.array(clientSourceSchema),
+});
+
+/** 一条路的标识：`(via, origin)`。 */
+export const sourceRouteRefSchema = z.object({
+  via: viaSchema,
+  origin: z.string().min(1).max(2048),
+});
+
+/** `sources.session` 的入参：协议包的形状加可选的 `route`（§55）。 */
+export const sourcesSessionInputSchema =
+  protocolSourcesSessionInputSchema.extend({
+    route: sourceRouteRefSchema.optional(),
+  });
+
+export const sourceRouteInputSchema = sourceRouteRefSchema.extend({
+  sourceId: sourceIdInputSchema.shape.sourceId,
+});
+
+export { remoteAddInputSchema, remoteServiceSchema, remoteSourceSummarySchema };
 export const sourceSessionSchema = sourcesSessionOutputSchema;
 
 const empty = z.object({});
@@ -192,6 +229,38 @@ export const sources = {
       ),
     })
     .meta(write("§33.1", "POST", "/api/sources/{sourceId}/session")),
+  /** 设为首选的路（§55）：镜像随之改写。 */
+  routePrefer: oc
+    .input(sourceRouteInputSchema)
+    .output(clientSourceSchema)
+    .errors({ ...denied, ...errors.pick("not_found", "conflict") })
+    .meta(
+      meta({
+        scope: "settings:write",
+        since: "1.27",
+        contract: "§55.2",
+        legacy: {
+          method: "POST",
+          path: "/api/sources/{sourceId}/routes/prefer",
+        },
+      }),
+    ),
+  /** 删一条路与它的凭据（§55）；最后一条答 `conflict`（删源用 `remove`）。 */
+  routeRemove: oc
+    .input(sourceRouteInputSchema)
+    .output(clientSourceSchema)
+    .errors({ ...denied, ...errors.pick("not_found", "conflict") })
+    .meta(
+      meta({
+        scope: "settings:write",
+        since: "1.27",
+        contract: "§55.2",
+        legacy: {
+          method: "POST",
+          path: "/api/sources/{sourceId}/routes/remove",
+        },
+      }),
+    ),
   remoteAdd: oc
     .input(remoteAddInputSchema)
     .output(remoteAddOutputSchema)
@@ -441,6 +510,8 @@ export const sources = {
 };
 
 export type ClientSource = z.infer<typeof clientSourceSchema>;
+export type ClientSourceRoute = z.infer<typeof clientSourceRouteSchema>;
+export type SourceRouteRef = z.infer<typeof sourceRouteRefSchema>;
 export type RemoteService = z.infer<typeof remoteServiceSchema>;
 export type RemoteSourceSummary = z.infer<typeof remoteSourceSummarySchema>;
 export type SourceSession = z.infer<typeof sourceSessionSchema>;

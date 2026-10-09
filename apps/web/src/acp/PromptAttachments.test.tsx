@@ -104,7 +104,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("PromptBox attachments (§55)", () => {
+describe("PromptBox attachments (§56)", () => {
   it("adds a pasted screenshot as a removable thumbnail and sends it", async () => {
     render(<Box capabilities={{ image: true, embeddedContext: false }} />);
     paste([png()]);
@@ -177,7 +177,7 @@ describe("PromptBox attachments (§55)", () => {
   });
 });
 
-describe("SessionView sends attachments (§55)", () => {
+describe("SessionView sends attachments (§56)", () => {
   const data: TerminalNodeData = {
     kind: "terminal",
     sessionId: SESSION,

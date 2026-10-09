@@ -3831,7 +3831,99 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - `apps/mobile/scripts/app-version.mjs`：`parseMobileVersion`、`mobileVersion`、`buildNumber`、`nativeVersionFiles`、`writeNativeVersion`；环境变量 `ARMADRA_BUILD_NUMBER`。
 - web：`NativeBridge.appInfo()` → `NativeAppInfo { version, build }`；`MINIMUM_HOST_PROTOCOL`、`hostCompatibility`、`formatProtocol`；`MobileAbout`。
 
-## Agent 节点粘贴与上传图片、文件（#226，契约 §55，2026-10-10）
+## 终端选区随按键释放结束（#227，2026-10-10）
+
+根因：xterm 的选区（以及应用开鼠标上报时的松开上报）靠 `mousedown` 时挂在 `document` 上的 `mouseup` 收尾，它的 `mousemove` 不看 `buttons`。画布平移用的 d3-zoom 在 `window` 捕获相位接住 `mouseup` 并 `stopImmediatePropagation()`；手形工具下左键按在终端上、或中键按在终端上（这两种都会平移画布），按下那一下 xterm 与 d3-zoom 都收到，松开那一下只有 d3-zoom 收到，于是松开后选区仍跟着指针走、开了鼠标上报的应用一直以为键按着。窗口外松开、失焦、`pointercancel`、页面切后台是同一类「键松了，`document` 不知道」。
+
+做了什么：
+
+- 新增 `terminal/surface/pointer-release.ts` 的 `guardPointerRelease(body)`，在 `use-xterm.ts` 随 xterm 实例装卸：终端体捕获相位记下按下的键，`document` 真收到 `mouseup` 就划掉；`pointerup` 这一轮派发完仍没划掉、`mousemove` 的 `buttons` 里已没有这个键、`blur`、`visibilitychange` 到 hidden、`pointercancel` 时，在 `document` 上补派一个 `mouseup`，xterm 按自己的逻辑收尾（选区停在松开处；上报模式下应用收到松开）。只在有键按着时挂 `window` 监听；正常的节点内拖选、画布平移、应用自己的鼠标模式都不改路径。
+- e2e：`ui-features` 加场景 `terminalSelection`（`tools/probes/ui-features/terminal-selection.mjs`）；`harness.mjs` 的中键按下带上 `buttons: 4`。
+
+实测（macOS arm64，基于 main 9cd38293）：
+
+- 修复前场景 `--only=terminalSelection` 在「手形工具：松开后不按键移动，选区不变」失败（松开时无选区，晃一下出三段选区）；探索时中键拖出节点，`cat -v` 只收到 `^[[<1;5;2M`，没有松开。修复后全过：选择工具节点外 / 窗口外松开、手形工具拖动平移画布且选区不再变、`?1002h`+SGR 下中键松开收到 `^[[<1;5;2m`、节点内拖选照常、控制台 0 条 error。
+- 新增 `pointer-release.test.ts` 10 条：节点内正常拖选不补派、节点外松开、被吞的 `mouseup` 在 `pointerup` 之后补上且之后移动不改选区、无键移动先收尾、`blur` / `pointercancel` / `visibilitychange`、中键被吞仍有松开、未按键时不挂监听、拖动中卸载摘监听。
+
+没做 / 偏离：
+
+- 手形工具按在终端上仍会先被 xterm 当作一次按下（随即在松开时收尾），没有在手形工具下让终端完全不接收指针。
+- 没有在 Electron 里用真实 HID 事件复现；CDP 合成的窗口外松开在无头 Chrome 里本来就能送达。
+
+接口：
+
+- web：`guardPointerRelease(body: HTMLElement): () => void`（`terminal/surface/pointer-release.ts`）。无契约、迁移变化。
+
+## 多端入口：选择服务页与「切换服务」（A7-1，多端入口设计 §1，2026-10-10）
+
+做了什么：
+
+- 新目录 `apps/web/src/services/`：`rows.ts`（源描述 → 行，一个 `sourceId` 一行，到达方式按直连优先排，「全部」按首选路分组：本机 / 中转 · 服务名 / 直连；行数超过 3 才单列「最近使用」）、`recent.ts`（`armadra.sources.recent`，带时刻、前插去重；一次性的进入意图 `armadra.services.enter` 在 `sessionStorage`）、`probe.ts`（直连 `GET /api/identity/hello` 1.5 秒；经中继的每个远程服务一次 `GET /v1/me/sources`，`online` 覆盖组内全部源，换不到访问令牌 4xx 记「已登出」、网络断了记未知；并发 3、缓存 30 秒；进页面与回前台各探一次）、`ServicePicker.tsx`（`page` / `dialog` 两种：行 = `Item` + `StatusPill` + 「当前」`Badge`，失败 `Alert` 挂在那一行下面，可带动作；登录失效的组头「已登出」+「登录」；空表 `Empty`）、`SwitchServiceDialog.tsx`、`ServicesSettingsGroup.tsx`、`switcher.ts`。
+- 原生 App 入口（`mobile/entry.ts`）：连接表非空不再自动 `enterConnection`，缺省落在选择页（`pick: true`）；`startupTarget` 决定的三种直接进：选择页点过一行（进入意图）、推送要切连接（地址带 `#push=`）、偏好 `services.autoEnter`（`armadra.services.autoEnter`，缺省关）。进成功记进最近使用；进不去回选择页，失败带 `failedId` 挂在那一行。表为空、记着早先单连接 Gateway 的旧路径不变。配对、个人中转挂载、分享链接加入之后照旧直接进（`connect.ts::enterNext` 同时记进入意图）。
+- `ConnectScreen` 的列表态换成 `ServicePicker`（标题「选择服务」，在线状态来自 `useServiceProbe`；行上「需要重新登录」且经中继时动作「登录」，打开中转表单并预填那个远程服务；从画布回来多一个「返回」）。旧 `ConnectionList` 删掉。
+- 中继托管页面（`shell/RelaySignIn.tsx`）登录后挑主机改用同一个列表（`disableOffline`：目录答的离线行点不了；进不去的失败挂在那一行）；`remote.hosted.open` / `remote.hosted.offline` 两个键随之删掉。
+- 桌面与服务器壳：「切换服务」对话框（`ResponsiveDialog`，手机宽度是底部 Sheet）：本机 / 中转 / 直连分组，状态取各源的连接状态，行尾「切换」= `registry.setCurrent`（不带源前缀的查询经 `useSourceSwitchCacheReset` 重取）并把侧栏滚到那一组；桌面壳再多「在新窗口打开」。底部「添加连接」去设置 → 远程访问。入口：设置 → 远程访问顶部「服务」一组、命令面板 `app.switchService`（不预设键位）。
+- 手机设置首页（「常用」）顶部「服务」一组：当前服务（名字 · 到达方式）+「切换服务」（`#connections` 重载回选择页）、「启动时直接进入上次的服务」开关。
+- 推送 `unknown`（签发通知的主机不在连接表）的提示加动作「选择服务」。
+- 桌面壳 IPC `window:open { sourceId }` → `{ opened }`（`shared/ipc.ts`、`main/index.ts`、preload `windows.openSource`）：`main/window.ts::openSourceWindow` 用同一张页面另开窗口，地址带 `?source=`；它不是主窗口（`sendToWindow` 只对主窗口，关它真关），`onWindowCreated` 加 `scope`，抢占快捷键的拦截只装主窗口（它的回答经 `sendToWindow`）。页面 `use-sources-bootstrap.ts::followInitialSource` 在那个源挂上后设为当前，只设一次。
+- i18n 新模块 `i18n/services.ts`（中英同步）；设计展示页加「切换服务」对话框样本，手机列表样本换成新行模型。
+- 测试：`services/probe.test.ts` 7（直连认不认、超时、中继一服务一问、登出与网络断开、两条路、并发 3、缓存 30 秒）、`services/ServicePicker.test.tsx` 14（合并与分组、最近使用门槛、意图只取一次、整页与对话框两种、行内失败、登出组头、空态、新窗口交给壳、`?source=`）、`entry.test.ts` +6（缺省落选择页、单连接也先选、意图直进并记最近、`autoEnter`、`#push=` 不受影响、失败挂行）、`ConnectScreen.test.tsx` +3、`RelaySignIn.test.tsx` 改为按行断言、`main/window.test.ts` +4、`shared/ipc.test.ts` 登记 `window:open`。
+- 真机用例：iOS `ConnectFlowUITests` 重开后先落选择页、点那一行进画布；Android `ConnectFlowTest` 另记一个连不上的连接，走「两个连接 → 选择页 → 选配对的那一行 → 画布 → `#connections` 回选择页 → 再进」，`c_` 用例先选再进。`mobile-shell-e2e.mjs` 的步骤名同步。A 档 `multi-source` 加 2b：设置 → 远程访问 →「切换服务」切到服务器，侧栏分组与「当前服务」一致，再切回本机。
+
+实测（macOS arm64）：
+
+- `pnpm check` 通过；web 全量 vitest 单独跑通过（与 desktop 并行跑时 `SettingsDialog.test.tsx` 等十几条超时，单独重跑通过）；desktop 全量里 `parity-terminals.test.ts` 的 `afterAll` 钩子超时、`stream-queue.integration.test.ts` 一条时序断言失败，都在 core、本包没改，机器负载下复现、单独重跑 `stream-queue` 通过。
+- A 档 `multi-source`（`ARMADRA_PROBE_RELAY_IMAGE=armadra-probe-relay:r5-media-ticket`）全部通过，含 2b；用 `armadra-probe-relay:local` 那一版镜像时第 4 步探针自己取中继媒体票答 403 `forbidden`（镜像版本问题，与 2b 无关）。
+- 设计展示页 390 / 1440、明暗两套截图自查：行高 ≥ 48、行尾移除 44×44、状态胶囊文字用 `-text` token、未知只呼吸文字给读屏、无说明性文字。
+- iOS XCUITest / Android 插桩没在本机跑（夜间 `mobile-shell-e2e` 跑）。
+
+没做 / 偏离：
+
+- 空表仍直接是「添加连接」的三种方式（不另加一屏 `Empty` 再点一次）；`services.empty` 用在没有主机可列时（对话框、托管页）。
+- 移除连接沿用行尾垃圾桶 +「移除连接」确认（`mobileConnect.remove*`），没有做长按 / 右滑；`services.remove*` 两个键不新增。
+- 桌面对话框的在线状态取各源现有连接状态（桌面所有源本来就同时挂着），不另跑 `probe.ts`。
+- 侧栏组头点击切当前源没做（组头是拖动排序的把手，点和拖会抢）。
+- 新窗口里抢占的快捷键（⌘W 等）不拦截，走系统菜单（关的是那扇窗）；通知点击、内存压力推送仍只到主窗口。
+- 到达方式读 `SourceDescriptor` 的 `baseUrl` / `relayOrigin`；A7-2（一源多路，0044）合并后变基时改读 `routes`。
+- 推送 `?s=` 在 A7-2 之后按多路由选路，这里未改。
+
+接口：
+
+- web：`services/rows.ts`（`ServiceRow`、`ServiceRoute`、`serviceRowOf`、`layoutServices`、`hostOf`）、`services/recent.ts`（`loadRecent`、`recentIds`、`recordRecent`、`forgetRecent`、`setEnterIntent`、`takeEnterIntent`、`RECENT_LIMIT`）、`services/probe.ts`（`createServiceProbe`、`useServiceProbe`、`ServiceStatus`）、`services/switcher.ts`（`useServiceSwitcher`、`switchService`、`returnToPicker`、`openSourceWindow`、`initialSourceParam`）、`ServicePicker` / `SwitchServiceDialog` / `ServicesSettingsGroup`；`mobile/entry.ts::startupTarget`，`Entry` 的 `connect(native)` 加 `pick` / `recent` / `failedId`；偏好 `servicesAutoEnter`；命令 `app.switchService`；`followInitialSource`；DOM 标记 `data-slot="service-picker"`、`data-service-row`、`data-service-group`、`data-service-status`、`data-service-failure`、`data-action="switch-service"`、`data-testid="switch-service-dialog"`。
+- 桌面壳：IPC `window:open`（`window`），preload `window.armadra.windows.openSource({ sourceId })`；`main/window.ts` 的 `openSourceWindow`、`sourceWindowUrl`、`onWindowCreated(listener, scope)`。
+- 存储键：`armadra.sources.recent`、`armadra.services.autoEnter`（localStorage），`armadra.services.enter`（sessionStorage）。
+
+## 一源多路：客户端源表的路由表（A7-2，契约 §55，迁移 0044，2026-10-10）
+
+做了什么：
+
+- 迁移 `0044_client_source_routes.sql`：一台主机每种到达方式一行（`direct` / `relayed` × 来源），`client_sources` 的地址列留作首选路由的镜像。回填直连优先；旧版挂第二个中继留下的错配（旧中继来源 + 新 issuer，两者都是登记过的远程服务）拆成两条路。SecretStore 不动，凭据键就是路的来源。
+- core `sources`：`mount` / `mountByLink` 以这一次的中继来源为凭据键并 upsert 一条路，不再覆盖前一个中继的那份；`session` 加 `route`，省略时直连探测与至多 3 条中继并行要断言、第一条在线的用；新 `sources.routePrefer` / `sources.routeRemove`（最后一条答 `conflict`）；`remoteSources.mounted` 改为「经这个服务有路」；`update` 改地址即换那条路。协议 minor 26 → 27。
+- 桌面壳的远程信任放行每条路的来源（直连按路的指纹钉扎，中继沿用同名远程服务的指纹）。
+- 页面：`SourceDescriptor.routes`（缺时由镜像推出）；选路中继按首选、最近成功逐条试，桌面交给本机 core 选；凭据来源接口加可选 `origin`。手机连接表 v2：行上 `routes[]`，远程服务槽按 `(sourceId, origin)`，v1 表一次性拆路、旧槽搬到那条中继；经中继的会话只在钥匙串里那份来自同一中继时才拿来换票。
+- 探针 `multi-source` 加一条断言：经中继挂载后路由表只有这一条、首选、与镜像一致。
+- 契约 §55（55.1 表与镜像、55.2 选路与两条 procedure、55.3 其余读者），§33 的生成表随出参更新；架构指南的迁移表与 `core/sources/` 一行。
+
+实测：
+
+- 新单测：core 一源多路 11（两个中继各一槽、来回切换 6 次不再 `cloud/login`、首选不通 / 不在线时用另一条、`mounted` 按服务、`routePrefer` / `routeRemove` 与最后一条、删首选后接替、答案与路由表里没有凭据、直连 + 中继、`update` 换来源、删源连同路由）；迁移 4（回填、错配拆分、不是登记服务的中继节点不拆、升级后旧凭据直接换票不重新登录）；壳的信任 1；页面选路 4；手机连接表 5（两条中继、按来源的槽、v1 → v2 搬表搬槽、坏表不升、最近成功）；手机凭据 1（按来源选槽、别的中继的会话不拿来换票）。
+- `pnpm libs:build && pnpm -r --if-present test`：desktop 5467 / 74 跳过（整跑时 `parity-terminals`、`stream-queue.integration`、`resources/sessions` 三个文件因负载失败，单独重跑通过），web 4250、shared 384、server 98 / 4 跳、mobile 10、push-relay 9；`node --test scripts/*.test.mjs` 73 / 2 跳。`pnpm check` 通过。
+- 契约对偶：`sources.list` / `addDirect` / `mount` 的出参与 `session` 的入参改为断言「协议包形状的超集、字段逐个是同一个对象、只多 §55 的字段」——协议包（cloud 仓 0.2.1）还没有 `routes`，原先「就是同一个对象」的断言不再成立。
+
+没做 / 偏离：
+
+- 手机的原生钥匙串按 `sourceId + via` 存会话（`ConnectionVault.swift` / `ArmadraNativePlugin.java`），不是设计说的按 `(sourceId, origin)`：同一台主机经两个中继时只存得下最近那条的会话，切到另一条会用断言重新登录（源 core 上多一台设备）。页面这侧已按来源分槽、不会拿错的会话去换票；原生改键与迁移留给手机包。
+- 手机连接表的 `kind` 照 v1（有中继那条路就是 `relayed`），没有改成随首选：`me.stream` 与通知条按它认经中继的连接。`me.stream` 仍按镜像的签发方订阅，一源的其余中继不另开流。
+- 设置页没有管理路的界面（列出、设首选、删一条），只有接口；设计的 A7-1 / A7-3 再接。
+- 契约节号与 minor 取合入时 main 的最大值 +1（现为 §55 / 1.27）；与同期别的包撞号时后合的一方改号。
+
+接口：
+
+- core：`SourcesStore.routes / allRoutes / route / upsertRoute / preferRoute / deleteRoute / touchRouteOk / mirror`；`SourcesService.session(sourceId, via?, route?)`、`routePrefer`、`routeRemove`；`RELAY_RACE`。
+- shared：`clientSourceRouteSchema`、`clientSourceSchema`（加 `routes`）、`sourcesListOutputSchema`、`sourcesSessionInputSchema`（加 `route`）、`sourceRouteInputSchema`、`sources.routePrefer` / `sources.routeRemove`、类型 `ClientSourceRoute` / `SourceRouteRef`。
+- web：`SourceRoute`、`SourceDescriptor.routes?`、`routesOf`、`Route.origin`、`CredentialProvider.getAccess/refresh(…, origin?)` 与 `selectsRelay`；手机 `remoteSlotOf(sourceId, origin?)`、`setRemoteSlot(sourceId, serviceId, origin?)`、`touchRoute`。
+
+## Agent 节点粘贴与上传图片、文件（#226，契约 §56，2026-10-10）
 
 现状与根因（改之前实测与读代码）：
 
@@ -3841,7 +3933,7 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 
 做了什么：
 
-- core：`files/uploads.ts` + `upload-routes.ts`（`POST /api/workspaces/{id}/agent-uploads`，数据目录按工作空间隔离、名字只留安全字符、单文件 25 MiB、7 天与每工作空间 256 MiB 的清理）；`acp/attachments.ts` 把上传转成 `image` / 内嵌 `resource` / `resource_link`（按 `promptCapabilities` 与 SSH 判断）；`acp.prompt` 收 `attachments`，经桥的 `expectAttachments` 随同一次 `writeSubmit`（租约与授权不变）；镜像与 `acp.update` 只记链接；`acp.log` 多 `promptCapabilities`；协议 minor 升到 27。
+- core：`files/uploads.ts` + `upload-routes.ts`（`POST /api/workspaces/{id}/agent-uploads`，数据目录按工作空间隔离、名字只留安全字符、单文件 25 MiB、7 天与每工作空间 256 MiB 的清理）；`acp/attachments.ts` 把上传转成 `image` / 内嵌 `resource` / `resource_link`（按 `promptCapabilities` 与 SSH 判断）；`acp.prompt` 收 `attachments`，经桥的 `expectAttachments` 随同一次 `writeSubmit`（租约与授权不变）；镜像与 `acp.update` 只记链接；`acp.log` 多 `promptCapabilities`；协议 minor 升到 28。
 - 终端（`terminal/file-paste.ts`、`surface/use-file-drop.ts`、`TerminalSurface.tsx`）：粘贴与系统拖放的文件上传后把路径以括号粘贴插入，一个文件一段、不加回车；Agent 会话给 TUI 的写法（安全字符原样、否则加引号、Windows 路径换正斜杠），普通 shell 按它的引用规则；Agent 正等人回答、启动输入未完成、SSH 节点时不粘；桌面壳本机源拖进来的磁盘文件直接用原路径。右键「粘贴」读得到剪贴板图片。
 - 各 CLI 的实际方式（只读了本机安装包，没运行）：Claude Code 去掉引号与反斜杠转义后把以 `.png/.jpg/.jpeg/.gif/.webp` 结尾的粘贴当图片附上；Codex 把整段恰好是一个图片路径的粘贴附成图片。两家的 Ctrl+V 剪贴板图片只读 CLI 所在机器的系统剪贴板，远程源上不成立，所以统一走「上传 + 粘路径」。
 - ACP 输入框（`acp/PromptAttachments.tsx`、`PromptBox.tsx`、`SessionView.tsx`）：粘贴、拖到会话视图任何地方、回形针选文件；图片缩略图、文件徽标，都可移除；Agent 不收图片、SSH 节点打不开本机文件、超限、超过 10 个时当场提示；发送时先上传再带 id 发 prompt，上传失败不发、草稿留着；本页先画的用户消息带附件。文案进 `i18n/acp.ts`、`i18n/file-drag.ts`，中英同步；错误码进 `MESSAGE_BY_CODE`。

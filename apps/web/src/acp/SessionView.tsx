@@ -321,7 +321,7 @@ function refusedByCore(error: unknown): boolean {
   );
 }
 
-/** 附件被 core 拒绝（契约 §55）：那句话本身就说清了原因。 */
+/** 附件被 core 拒绝（契约 §56）：那句话本身就说清了原因。 */
 function attachmentRefusal(error: unknown): error is RuntimeRequestError {
   return (
     error instanceof RuntimeRequestError &&
@@ -540,7 +540,7 @@ export function SessionView({
   );
 
   /**
-   * 输入框交上来的一句（契约 §55）：有附件时先逐个上传到会话所在的 core，再带着
+   * 输入框交上来的一句（契约 §56）：有附件时先逐个上传到会话所在的 core，再带着
    * 上传 id 发 prompt。上传失败不发、输入框里的字与附件留着。
    */
   const submit = React.useCallback(
@@ -828,7 +828,7 @@ export function SessionView({
       ref={rootRef}
       data-slot="acp-session-view"
       className="nopan nodrag nowheel flex h-full w-full cursor-auto flex-col bg-[var(--card)] select-text"
-      // 拖进会话视图任何地方的文件都成输入框的附件（契约 §55），不交给画布。
+      // 拖进会话视图任何地方的文件都成输入框的附件（契约 §56），不交给画布。
       onDragOver={(event) => {
         if (!Array.from(event.dataTransfer.types).includes("Files")) return;
         event.preventDefault();

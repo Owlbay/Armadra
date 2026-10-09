@@ -1,4 +1,4 @@
-// 画布 Agent 的图片与文件（契约 §55，issue #226）端到端（A 档）。
+// 画布 Agent 的图片与文件（契约 §56，issue #226）端到端（A 档）。
 //
 // 真 core（`apps/desktop/out/core/main.js`）、真页面（Vite）、新 profile 的无头
 // Chrome；临时数据目录与 HOME，`ARMADRA_NO_GLOBAL_WRITES=1`，不用任何真实账号、

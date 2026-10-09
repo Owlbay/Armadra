@@ -18,7 +18,7 @@ import { DomainError, badRequest, notFound } from "../workspaces/support";
 import { mimeOrOctetStream } from "./mime";
 
 /**
- * 粘贴或拖进 Agent 节点的文件（契约 §55）。
+ * 粘贴或拖进 Agent 节点的文件（契约 §56）。
  *
  * 落在**这台 core 的数据目录**里，不进工作区：`<dataDir>/agent-uploads/<工作空间>/<id>/<名字>`。
  * 页面发往哪个源，字节就落在哪台机器上——经中继到达的源，core 在另一台机器，

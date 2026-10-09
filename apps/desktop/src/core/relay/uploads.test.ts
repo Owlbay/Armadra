@@ -11,7 +11,7 @@ import { ISSUER, type RelayCore, relayCore, until } from "./core.fixture";
 import type { FakeTunnel } from "./fake-relay.fixture";
 
 /**
- * 经中继到达的源上传 Agent 附件（契约 §55）：页面发往远程源，请求经隧道到那台
+ * 经中继到达的源上传 Agent 附件（契约 §56）：页面发往远程源，请求经隧道到那台
  * core，字节落在**那台 core 的数据目录**里——不是发起页面的机器。体比一个流窗口
  * 大，走完整的流控。
  */
@@ -45,7 +45,7 @@ afterEach(async () => {
   await world.close();
 });
 
-describe("agent uploads through the relay (§55)", () => {
+describe("agent uploads through the relay (§56)", () => {
   it("lands the bytes in the remote core's data directory", async () => {
     const token = world.session(ISSUER);
     const bytes = randomBytes(3 * 1024 * 1024 + 17);

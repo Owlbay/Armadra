@@ -53,7 +53,7 @@ export const acpApi = {
     ),
   /**
    * `clientTurnId`（契约 §39.9）：同一个 id 重发，core 只投递一次。`uploadIds`
-   * （§55）：先经 `uploadAgentFile` 传到这台 core 的附件。
+   * （§56）：先经 `uploadAgentFile` 传到这台 core 的附件。
    */
   prompt: async (
     sessionId: string,

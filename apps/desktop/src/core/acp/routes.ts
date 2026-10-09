@@ -179,7 +179,7 @@ function sshOf(database: DatabaseSync, nodeId: string): string | undefined {
   return sshHostOf(loadNode(database, nodeId)?.data);
 }
 
-/** 契约 §55：`attachments: [{ uploadId }]`，最多 {@link MAX_ACP_ATTACHMENTS} 个。 */
+/** 契约 §56：`attachments: [{ uploadId }]`，最多 {@link MAX_ACP_ATTACHMENTS} 个。 */
 function uploadIdsOf(value: unknown): string[] {
   if (value === undefined || value === null) return [];
   if (!Array.isArray(value) || value.length > MAX_ACP_ATTACHMENTS) {
@@ -413,7 +413,7 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
 
   /* --------------------------------- 回合 --------------------------------- */
 
-  /** 契约 §55：上传 id → 这一轮的内容块。上传按会话所在的工作空间找。 */
+  /** 契约 §56：上传 id → 这一轮的内容块。上传按会话所在的工作空间找。 */
   const attachmentsFor = (
     wiring: AcpTerminalWiring,
     row: TerminalSession,
