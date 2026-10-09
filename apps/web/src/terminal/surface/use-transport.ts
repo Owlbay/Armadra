@@ -5,6 +5,7 @@ import { useCanvasStore } from "@/store/canvas-store";
 import { bufferOffscreenChunk, drainOffscreenBuffer } from "../render-state";
 import { createTerminalTransport } from "../transport";
 import { takeWakeWithoutReset } from "./use-hibernation";
+import { flushPendingInput } from "./use-handle";
 import type { SurfaceRefs } from "./refs";
 import type { ConnectionStatus } from "./types";
 
@@ -33,10 +34,14 @@ export function useTerminalTransport(
     /** 节能休眠：进程不在，连上去只会拿到一个「已退出」。 */
     hibernated: boolean;
     attempt: number;
+    /** 显示层代次（`use-lifecycle`）：重建之后要对新实例重新 attach。 */
+    generation: number;
     setAttempt: React.Dispatch<React.SetStateAction<number>>;
     patch: (next: Partial<ConnectionStatus>) => void;
     refit: () => void;
     flushOutput: () => void;
+    /** 离屏时把灌写排到共享调度器的下一拍。 */
+    scheduleFlush: () => void;
     armLaunch: () => void;
     noteOutput: () => void;
     clearLaunchTimers: () => void;
@@ -48,10 +53,12 @@ export function useTerminalTransport(
     detached,
     hibernated,
     attempt,
+    generation,
     setAttempt,
     patch,
     refit,
     flushOutput,
+    scheduleFlush,
     armLaunch,
     noteOutput,
     clearLaunchTimers,
@@ -59,6 +66,8 @@ export function useTerminalTransport(
 
   React.useEffect(() => {
     if (!sessionId || detached || hibernated) return;
+    // 显示层已释放时没有实例：`detached` 一定也为真，上一行已经挡住；
+    // 这里再挡一次，防止重建前的那一帧连上一个写不进去的传输。
     const terminal = refs.terminalRef.current;
     if (!terminal) return;
 
@@ -90,6 +99,7 @@ export function useTerminalTransport(
       }
       bufferOffscreenChunk(refs.bufferRef.current, chunk);
       if (refs.writeThroughRef.current) flushOutput();
+      else scheduleFlush();
     };
     const log = refs.inputLogRef.current!;
     const transport = createTerminalTransport(
@@ -122,6 +132,7 @@ export function useTerminalTransport(
           refit();
           if (helloNeedsResize(hello, terminal))
             transport.resize(terminal.cols, terminal.rows);
+          refs.gridRef.current = { cols: terminal.cols, rows: terminal.rows };
 
           const store = useCanvasStore.getState();
           const node = store.document?.nodes.find((item) => item.id === nodeId);
@@ -209,6 +220,8 @@ export function useTerminalTransport(
     );
     refs.transportRef.current = transport;
     patch({ connection: "connecting", binding: null });
+    // 断开 / 释放期间排下的输入：进传输的 pre-hello 队列，attach 后按序发出。
+    flushPendingInput(refs);
 
     return () => {
       disposed = true;
@@ -229,10 +242,12 @@ export function useTerminalTransport(
     detached,
     hibernated,
     attempt,
+    generation,
     setAttempt,
     patch,
     refit,
     flushOutput,
+    scheduleFlush,
     armLaunch,
     noteOutput,
     clearLaunchTimers,

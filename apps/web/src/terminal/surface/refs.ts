@@ -49,6 +49,20 @@ export interface SurfaceRefs {
   reconnectTimerRef: React.RefObject<Timer>;
   reconnectBackoffRef: React.RefObject<Backoff>;
   statusRef: React.RefObject<ConnectionStatus>;
+  /**
+   * 最后一次对齐过的行列数（refit 发出 resize、hello 之后更新）。显示层被
+   * 释放后重建时拿它当 `new Terminal` 的初值，首帧不会因为 80×24 的缺省值
+   * 多发一次 resize、让 tmux 多重绘一次。
+   */
+  gridRef: React.RefObject<{ cols: number; rows: number } | null>;
+  /** 没有可用传输时排着的输入；传输建好后按序交给它的 pre-hello 队列。 */
+  pendingInputRef: React.RefObject<string[]>;
+  /** 生命周期的复活入口：输入到一个已断开 / 已释放的终端时先叫醒它。 */
+  reviveRef: React.RefObject<(() => void) | null>;
+  /** 显示层重建后要对新实例做的事（聚焦、粘贴）。 */
+  mountQueueRef: React.RefObject<((terminal: Terminal) => void)[]>;
+  /** 正在被 xterm 消化的那一批灌写属于哪个实例；背压用。 */
+  flushingRef: React.RefObject<Terminal | null>;
 }
 
 /**
@@ -93,6 +107,11 @@ export function useSurfaceRefs(current: {
       current: createBackoff({ baseMs: 1_000, capMs: 10_000 }),
     },
     statusRef: { current: current.status },
+    gridRef: { current: null },
+    pendingInputRef: { current: [] },
+    reviveRef: { current: null },
+    mountQueueRef: { current: [] },
+    flushingRef: { current: null },
   };
   const bundle = refs.current;
   bundle.onBellRef.current = current.onBell;
