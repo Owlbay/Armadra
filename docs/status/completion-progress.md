@@ -3605,3 +3605,40 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - core：`ProgramTap { subscribe, answer }`（`TerminalBackend.programTap?`）、`TerminalManagerOptions.onProgramStatus`、`TerminalManager.programStatus(sessionId)`、`listSessions(..., program?)`、`OscScanner` / `parseProgramReport` / `ProgramStatusTracker` / `ProgramStatusBook` / `connectProgramStatus`、`TmuxProgramTap`。
 - shared：`programStatusSchema` / `ProgramStatus`、`sessionSummarySchema.programStatus`、事件 `terminal.program`（`TerminalProgramEvent`）。
 - web：`useProgramStatusStore`、`headerStateFor`、`programHeaderState`、`reportedLive`、`programNotificationStatus`、`registerProgramOsc`。
+
+## 终端前端分阶段生命周期、共享灌写调度器与背压（性能包 P3，2026-10-09）
+
+做了什么：
+
+- 生命周期 `live → parked → detached → released`：判定在 `apps/web/src/terminal/lifecycle.ts`（纯函数），计时、内存压力订阅与复活在 `terminal/surface/use-lifecycle.ts`，`[data-slot="terminal-body"]` 加 `data-lifecycle`。断开时长：折叠 5 s、窗口后台 60 s、**平移离屏 60 s**（新增，`OFFSCREEN_DETACH_MS`，设 `null` 即关）；断开满 `armadra.terminal.releaseAfter`（5m / 10m / 30m / never，缺省 10m，只加了偏好字段，设置页的行由 P4 加）销毁 xterm 实例与观察器，会话、输入账、离屏缓冲留在 `SurfaceRefs`。`data-render` 的六个值不变，`released` 仍显示「已断开（省电）」。
+- 复活：回到可见，或输入到已断开 / 已释放的终端（`writeLine` / `sendKeys` / `paste` / `focus` / xterm `onData`）。输入在没有可用传输时排队（`deliverInput`，上限 64 Ki 码元），传输建好后进 pre-hello 队列按序发出；以前是静默丢弃。传输与 WebGL effect 以显示层代次为依赖。
+- 尺寸：`gridRef` 记最后对齐的行列数（refit 发 resize 与每次 hello 后），重建时作为 `new Terminal({ cols, rows })` 初值；`use-refit.ts` 在 `proposeDimensions()` 为 `undefined` 或小于 2×1 时不 fit、不发 resize。
+- 豁免：启动行已武装 / 等依赖、`starting` / `connecting` / 休眠接回中、10 s 内有没确认或排队的输入时不断开也不释放；聚焦模式节点与 `blocked` 的 Agent 另外不释放。命中时 5 s 后重看。
+- 内存压力：订阅 `terminal/pressure-bus.ts`；告警档释放离屏满 30 s 的、紧急档释放全部看不见的，可见的不动，降回 normal 不重建，`never` 时不响应。**`pressure-bus.ts` 是按设计接口写的本地占位**（`onMemoryPressure` / `emitMemoryPressure(level, source?)` / `currentMemoryPressure`，与 P2 已对齐），P2 合入后以它的实现为准、本包 rebase 时删掉占位。
+- B3：`terminal/flush-scheduler.ts` 全页一个 500 ms 定时器，只在有表面待灌时排，替换每表面 `setInterval`；灌写用 `terminal.write(text, callback)`，上一批没消化完不灌下一批。DOM 渲染器下渲染名额不再决定档位（`RenderInputs.webgl`），看得见即直写。离屏缓冲上限注释改正（2 Mi 码元）。释放时在 `terminal.dispose()` 前抓 canvas 并 `loseContext`。
+
+实测（macOS arm64，未打包壳，20 个 DOM 终端各 100 行/s，tmux 后端，`_shared/perf-diag-20261009/bench/terminal-memory.mjs` 加 `--release-after` / `--gc-offscreen` 两个开关；Renderer phys_footprint，MiB）：
+
+| 阶段                  | main 基线 | P3 `never`（只断开） | P3 `5m`（释放） |
+| --------------------- | --------- | -------------------- | --------------- |
+| 离屏 1 m              | 186       | 174                  | 179             |
+| 离屏 3 m（基线）/ 7 m | 207       | 174                  | 174             |
+| 同上，强制 GC 后      | —         | 165                  | **138**         |
+| 回到可见              | 386       | 210                  | 180             |
+| 往返 ×20 后强制 GC    | 319       | 335                  | 325             |
+
+- 释放后 xterm 实例 20 → 0，页面元素 2820 → 1080，DOM 节点计数 4209 → 1409；离屏 Renderer CPU 2.4% → 0.1–0.2%；回到可见 20 个全部重建并 attach。
+- 每个释放的终端在强制 GC 后约省 1.4 MiB（165 → 138），低于设计估的 4.5–5 MiB；大头来自平移离屏也断开（207 → 174）。不强制 GC 时 Blink 不立刻归还，7 m 读数与只断开相同。
+- 「活跃」一档噪声大（同一构建两次 418 / 499，基线 417）；DOM 渲染器下 20 个可见终端现在全部直写（基线 16 个直写 + 4 个批写），Renderer CPU 21–29%（基线 18.8%）。
+- 单测：`lifecycle.test.ts` 9、`flush-scheduler.test.ts` 5、`render-state.test.ts` +1、`TerminalSurface.render.test.tsx` +6（离屏 → detached → released、重建沿用行列且不多发 resize、0×0 不 resize、释放后输入先复活再按序发、调度器按拍灌写、压力两档）。
+- `pnpm libs:build && pnpm -r --if-present test`：web 4178、desktop 5435 / 67 跳、shared 382、server 98 / 4 跳、mobile 10、push-relay 9 全过；live 配置的 `passkey-cdp.live.integration.test.ts` 本机失败（同前几节，与本改动无关）。`pnpm check` 通过。
+
+没做 / 偏离：
+
+- 基准没有 `--restore-check`（`tmux capture-pane` 与页面文本、光标比对），恢复的行列由渲染测试覆盖；探针化由 P5 做。
+- 释放会丢 xterm 自己的回滚、选区与搜索高亮；direct 后端只靠回放环拿回一屏与回放。
+- 设置页 UI 与文案归 P4。
+
+接口：
+
+- web：`lifecycle.ts`（`LifecyclePhase`、`detachDelay`、`canDetach` / `canRelease`、`pressureReleases`、`releaseAfterMs`、`OFFSCREEN_DETACH_MS`、`RELEASE_AFTER_OPTIONS`）、`useSurfaceLifecycle`、`flushScheduler` / `createFlushScheduler`、`deliverInput` / `flushPendingInput`、`measurable`（use-refit）、`SurfaceRefs` 新增 `gridRef` / `pendingInputRef` / `reviveRef` / `mountQueueRef` / `flushingRef`、`TerminalPreferences.releaseAfter`（`armadra.terminal.releaseAfter`）、`RenderInputs.webgl`。
