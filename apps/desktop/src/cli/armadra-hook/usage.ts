@@ -18,7 +18,7 @@ export { HOOK_CLIENT_REVISION } from "../../hook-client/session.js";
 export const MAX_PAYLOAD_BYTES = 1024 * 1024;
 
 /** Reported by `--version`; the Rust client reports its crate version. */
-export const CLIENT_VERSION = "0.2.5";
+export const CLIENT_VERSION = "0.2.6";
 
 /** The context-link verbs the runtime exposes. */
 export const CONTEXT_VERBS = [
