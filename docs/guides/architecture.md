@@ -116,6 +116,15 @@ core 之外的同类新增：`src/hook-client/`（动词工具表，`armadra-hoo
 - **apps/desktop 的 `src/main/` 只做壳**。主进程提供目录选择、外部链接、系统
   通知与窗口，能给页面的东西只有 `src/shared/ipc.ts` 那张表。
 
+壳 ↔ 页面之间不进 core 契约的事件里，有一条是系统内存压力：主进程
+`main/memory-pressure.ts` 每 15 s 异步探一次（macOS `sysctl kern.memorystatus_vm_pressure_level`、
+Linux `/proc/pressure/memory`、Windows `getSystemMemoryInfo`），只在等级变化时推
+`memory:pressure { level }`（升档立刻、降档连续两次），preload 挂在
+`window.armadra.memory.onPressure`。页面把它与 `resource.sample` 里本机的
+`host.memory.pressure` 一起汇进 `apps/web/src/terminal/pressure-bus.ts`（取最高档、同档 20 s 节流，
+策略在 `pressure-policy.ts`），渲染名额据此 `releaseHidden()`，终端生命周期据此释放离屏实例；
+可见与聚焦的终端不动。隐藏的渲染名额平时也只暖 30 s（`RENDER_HIDDEN_RELEASE_MS`）。
+
 第四个目录 `apps/server` 是无窗口服务器壳：同一份 `apps/web` 产物、同一套 core，
 对外只有 TLS 一个面，认证走设备配对与可撤销会话。对外的那一层（TLS、本地 CA、
 准入、CSP、页面托管、配对载荷）在 core 的 Gateway 域 `core/gateway/`：服务器壳的
