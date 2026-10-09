@@ -1,6 +1,34 @@
 # 更新记录
 
-每个版本一节，按发布倒序。括号里是合入的 PR 编号（github.com/Owlbay/Armadra）。兼容范围以 `tools/release/compatibility.json` 为准，发布说明里的 `armadra-compatibility` 围栏由它渲染。
+每个版本一节，按发布倒序。括号里是合入的 PR 编号（github.com/Owlbay/Armadra）。兼容范围以 `tools/release/compatibility.json` 为准，发布说明里的 `armadra-compatibility` 围栏由它渲染。这里只记桌面 / 服务器套件；手机 / 平板 App 有自己的版本线，记在 `apps/mobile/CHANGELOG.md`（标签 `mobile-vX.Y.Z`）。
+
+## 0.2.5（2026-10-10）
+
+性能、终端与 CLI 兼容。手机端起改为独立版本线（1.0.0，见 `apps/mobile/CHANGELOG.md`）。中转仍用 armadra-cloud 0.2.1。
+
+### 性能
+
+- Runtime 资源采样改为异步加超时、每轮一张进程表，事件循环最长卡顿由 90–237 ms 降到 6–14 ms；新增 `GET /api/diagnostics/runtime`（契约 §54，#221）。
+- 离屏内存采样降频生效；系统内存压力通知页面回收；WebGL 隐藏终端 30 秒后归还名额（#219）。
+- 终端分阶段生命周期：平移离屏 60 秒断开显示连接，10 分钟释放前端实例，会话保留；离屏共享调度器与背压（#222）。
+- 渲染方式 DOM / WebGL / 自动与缩小时限帧（实验）进「终端外观」（#224）；终端内存探针与基线进夜间检查（#220）。
+
+### 终端与画布
+
+- 支持 OSC 7501 程序状态与 OSC 9;4 进度（契约 §53，#217）。
+- 连线随两端相对位置选边（#213）；小地图收起钮悬停显示、连线按画布样式绘制（#218）。
+
+### Agent CLI
+
+- Codex 启动不再出现 hook 信任与内嵌模式两条警告，不写用户配置（#214）。
+
+### 手机端
+
+- 版本号独立并修正 iOS 版本一直显示 0.2.0；关于页显示 App 与主机版本、协议兼容提示（#225）。
+
+### 工程
+
+- nightly 修复：打包后 core 关停顺序与超长 socket 路径、iOS 用例、Windows 保活探针（#208、#215）；issue / PR 中英模板与需求流程（#212、#228）。
 
 ## 0.2.4（2026-10-09）
 

@@ -11,6 +11,15 @@ export const updates: MessageModule = {
     "updates.nav": "更新",
     "updates.version": "当前版本",
     "updates.hostVersion": "主机版本",
+    "updates.appVersion": "App 版本",
+    "updates.appVersion.value": "{version}（{build}）",
+    "updates.hostProtocol": "主机协议",
+    "updates.hostProtocol.updateHost": "主机版本过旧",
+    "updates.hostProtocol.updateHost.detail":
+      "主机协议 {host}，App 需要 {minimum} 或更新。请更新电脑端或服务器端。",
+    "updates.hostProtocol.updateApp": "App 需要更新",
+    "updates.hostProtocol.updateApp.detail":
+      "主机协议 {host} 比这个 App 支持的新。请更新 App。",
     "updates.version.unknown": "未知",
     "updates.channel": "更新通道",
     "updates.channel.stable": "稳定版",
@@ -122,6 +131,15 @@ export const updates: MessageModule = {
     "updates.nav": "Updates",
     "updates.version": "Current version",
     "updates.hostVersion": "Host version",
+    "updates.appVersion": "App version",
+    "updates.appVersion.value": "{version} ({build})",
+    "updates.hostProtocol": "Host protocol",
+    "updates.hostProtocol.updateHost": "Host is out of date",
+    "updates.hostProtocol.updateHost.detail":
+      "The host speaks protocol {host}; this app needs {minimum} or later. Update the desktop or server.",
+    "updates.hostProtocol.updateApp": "Update the app",
+    "updates.hostProtocol.updateApp.detail":
+      "The host speaks protocol {host}, newer than this app supports. Update the app.",
     "updates.version.unknown": "Unknown",
     "updates.channel": "Release channel",
     "updates.channel.stable": "Stable",

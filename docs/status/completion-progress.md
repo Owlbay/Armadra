@@ -3771,6 +3771,66 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 
 - web：`TerminalPreferences.renderer` / `repaintThrottle`、`TERMINAL_RENDERERS` / `TERMINAL_REPAINT_THROTTLES`；`renderer-policy.ts`（`AUTO_WEBGL_SLOTS`、`LOW_ZOOM_THRESHOLD`、`THROTTLED_REPAINT_MS`、`rendererUsesWebgl`、`rendererGatesRender`、`wantsWebgl`、`effectiveRenderBudget`、`isLowZoom`、`repaintThrottled`）；`useWebglRenderer`、`useLowZoom`；`repaintScheduler`；`RenderBudget.writeThrough` / `throttled`；`useRenderBudget` 的选项 `webgl` 换成 `renderer` / `repaintThrottle` / `lowZoom`；DOM 属性 `data-renderer`、`data-throttled`。
 
+## 终端内存探针与基线（性能包 P5，2026-10-09）
+
+做了什么：
+
+- `tools/probes/terminal-memory.mjs`：把性能诊断时的基准脚本收进仓库。桌面壳（缺省打包产物，`--unpacked` 用开发构建）里 N 个持续输出的终端（`--terminals 5|10|20`、`--rate`、`--renderer dom|webgl`、`--backend tmux|direct`），阶段 `active → offscreen-1m → offscreen-3m → back-visible → switch-x10 → switch-x20 → after-forced-gc`；每段记各进程物理占用（macOS `top` 的 phys_footprint，Linux `smaps_rollup` 的 Pss 与 VmRSS）、Renderer 的 JS 堆 / DOM 计数 / `data-render` 与 `data-lifecycle` 直方图、tmux 进程树 RSS 与进程数、Runtime 的 `GET /api/diagnostics/runtime`（§54；接口不在时记 null 并注明），长离屏段里量 65 s 的采样轮次。可选 `--cadence-check`（新建节点 vs 重载后）、`--pressure`（经 `window.__armadraMemoryPressure.emit("warning")` 注入假压力，断言 `data-render` 不变）、`--restore-check`（停发射器、窗格打标记，离屏后回来比页面行数 / 文字 / 光标与 `tmux capture-pane`）、`--eld-preload`（只配 `--unpacked`，`terminal-memory-eld.cjs` 记同步子进程阻塞做对照）。SIGTERM 时先收拾自己的 tmux 与临时目录再退。
+- `terminal-memory-lib.mjs`：参数、读数解析、Runtime 汇总、恢复比对、`compare()`（相对阈值**且**超绝对容差才算退化；只看绝对差、下限、精确断言、GPU 在 Linux 只记录）、`--merge` 三次取中位数。规则表 `METRICS` 即设计 §2.7 的表。
+- 基线 `terminal-memory-baseline.json` 先占位（`platforms` 为空，B 档只报告不判），按 `<平台>-<架构>[-webgl][-direct]` 存，只和同一场景比；`docs/status/terminal-memory-baseline.md` 写了场景、指标、录法，环境与三次原始数待录。
+- 夜间 B 档 `tools/ci/e2e.d/terminal-memory.json`（darwin / linux，`--terminals 10 --off1 60 --off2 180 --cycles 10`，30 分钟）；`pnpm release:test` 加 `terminal-memory.test.mjs`。
+
+实测（macOS arm64，开发构建 `--unpacked --eld-preload --cadence-check`，10 个终端，`main` `7d75ea8f`，P1–P4 均未合入）：
+
+- Renderer 活跃 359 MiB、长离屏 134 MiB、强制 GC 比回到视口 +148 MiB（回到视口后 15 s 画面还没长回来）；Runtime 事件循环最大 346 ms，同步子进程 55.5 ms/s；全部离屏时每 65 s 采样 31 次，新建节点与重载后离屏 60 s 都是 28 次（徽标降速未生效，P2 要修的那个）；tmux 树 144.8 MiB / 41 个进程。
+- `--restore-check`（3 个终端）：行列、文字、光标与 `capture-pane` 全部对上（P3 未合入，离屏时 `data-lifecycle` 还没有值，这次验的是探针本身）。
+- P1 / P2 合入后的 `main`（`454a7861`，P3 / P4 未合入）同一开发构建、5 个终端、`--pressure`：Runtime 读数改由 §54 诊断接口给出——事件循环最大 81 ms、p99 中位数 4.3 ms，一轮采样最长 115 ms、无超时；垫片记的同步子进程阻塞 0 ms/s；全部离屏时每 65 s 采样 2 次（之前 31）；tmux 进程数 16 = 1 个服务器 + 5 × (shell + 发射器) + 5 个控制客户端（tap 的 `cat` 只给 Agent 会话后少了 5 个）；注入假压力后 `data-render` 不变。
+- 夜间作业在本分支手动跑一次（run 37930415539）：macOS 打包产物上 `terminal-memory` 通过（约 7.6 分钟，10 个终端，Renderer 活跃 381 / 长离屏 172 MiB），Linux `linux-unpacked` 在 xvfb 下通过（Renderer Pss 活跃 1087 / 长离屏 244 MiB，软件渲染）。
+- 基线（P1–P4 合入后的 `main` `9cd38293` 加本包，GitHub 运行器各三次夜间作业的中位数，nightly 37961973088、37964685518、37967150898）：macOS Renderer 活跃 468 / 长离屏 183 MiB，Linux 1073 / 214 MiB；两平台全部离屏每 65 s 采样 2 次，事件循环最大 82.5 / 42.2 ms，tmux 31 个进程；长离屏时十个终端都是 `detached`。六次运行各自对基线比都不报退化。原始数见[终端内存基线](terminal-memory-baseline.md) §4。
+- 探针临时目录改短前缀 `atm-`，数据目录里的 Unix socket 路径不再逼近上限（P4 报的问题）。
+- `node --test tools/probes/terminal-memory.test.mjs`：14 个全过（`compare()` 各规则、恢复断言、合并、解析、清单经 `e2e.mjs --list`）。
+
+没做 / 偏离：
+
+- Renderer 活跃读数与强制 GC 差值在 Linux 只记录（设计里只有 GPU 列如此）：软件渲染下同一提交三次是 1057 / 1073 / 2061 MiB 与 −450 / +31 / −129 MiB，按容差比会误报。
+- 多了一个文件 `tools/probes/terminal-memory-eld.cjs`（`--eld-preload` 的垫片），设计的文件边界里没列。
+- `--pressure` 依赖 P2 的 `window.__armadraMemoryPressure`，`--release-after` 写 P3 的 `armadra.terminal.releaseAfter`，渲染器同时写 P4 的 `armadra.terminal.renderer` 与旧的 `armadra.terminal.webgl`；这些包合入前探针只记录。
+- 打包产物这条路径（B 档用的）本机没跑，靠 nightly 验；GPU 列在 Linux 软件 GL 下只记录。
+
+接口：
+
+- `node tools/probes/terminal-memory.mjs [输出目录] [选项]`，产物 `result.json`（`phases[].stage`、`metrics`、`comparison`、`restore`、`pressure`、`cadence`、`runtime`）、`table.md`；`--merge r1 r2 r3 [--machine 说明]` 写基线。
+- lib：`parseArgs`、`METRICS`、`compare(current, baseline, { platform })`、`deriveMetrics(report)`、`mergeRuns(reports)`、`restoreCheck({ before, after, paneBefore, pane })`、`summarizeDiagnostics(samples)`、`baselineKey`。
+
+## 移动端独立版本线与「关于」页的协议兼容（2026-10-10）
+
+手机与 iPad（Android 手机与平板）是同一个 App，版本从桌面 / 服务器套件里拆出来，单独演进；与主机是否兼容只看协议。细节见 [CI 与发布](../guides/ci-release.md) §2.8。
+
+做了什么：
+
+- 版本线：`apps/mobile/package.json` 改为 **1.0.0**（与 0.2.x 一眼分得开，且 Android 版本号不再由 semver 推出，没有换号约束），移出 `VERSION_SITES`；`version.mjs` 加 `mobile check [--tag mobile-vX.Y.Z] | set | print`（只收纯 `X.Y.Z`）；`pnpm release:check` 两条都跑。更新记录另立 `apps/mobile/CHANGELOG.md`，根 `CHANGELOG.md` 头注明。
+- 派生：`apps/mobile/scripts/app-version.mjs write`（`sync` 第一步）写不入库的 `ios/version.generated.xcconfig` 与 `android/app/version.properties`。构建号 = `ARMADRA_BUILD_NUMBER` 或 `git rev-list --count HEAD`，浅克隆报错。iOS：`project.pbxproj` 删掉六处写死的 `MARKETING_VERSION = 0.2.0` / `CURRENT_PROJECT_VERSION = 1`（iPad 显示 0.2.0（1）的缺陷），新增 `ios/version.xcconfig` 作工程级 Release 的基础配置、`debug.xcconfig` include 它。Android：`build.gradle` 读 `version.properties`，缺文件即失败；`ARMADRA_VERSION_CODE` 与 semver 推号删除。
+- 兼容：`compatibility.json` 加 `mobile.minimumHostProtocol`（1.14，不进围栏），`compatibility.mjs::normalizeMobile` 严格校验；页面副本 `apps/web/src/mobile/host-compatibility.ts`（`hostCompatibility` → `compatible / updateHost / updateApp / unknown`），`mobile check` 核对两者与 core 的 `PROTOCOL_MAJOR` / `PROTOCOL_MINOR`。
+- 关于页：原生插件加 `appInfo`（iOS 读 `CFBundleShortVersionString` / `CFBundleVersion`，Android 读 `PackageInfo`），页面 `nativeBridge().appInfo()`；原生 App 里「设置 → 关于」显示 App 版本（构建号）、主机版本、主机协议，不兼容时 `Alert destructive` 说明更新哪一边（i18n `updates.appVersion*`、`updates.hostProtocol*` 中英）。原生 App 里不再出桌面的更新行。
+- 工作流：`nightly.yml` 两个移动端作业 `fetch-depth: 0`，版本取 `version.mjs mobile print`，iOS 不再在命令行覆盖 `MARKETING_VERSION`；产物名带移动端版本。
+
+实测：
+
+- `app-version.test.mjs` 21（版本名、构建号四种来源、两份文件、xcconfig 链解析并叠加个人签名配置、gradle 读法重放）；`version.test.mjs` +7（不在桌面清单、仓库自查、`mobile set`、标签、写死版本 / 旧推号、协议对齐、`mobile` 键严格且不进围栏）；`host-compatibility.test.ts` 5、`native-bridge.test.ts` +1、`AboutPage.test.tsx` +3。
+- 本机：`xcodebuild -showBuildSettings`（带与不带 `-xcconfig ~/armadra-ios-build/personal.xcconfig`，Debug / Release，App、NotificationService、AppUITests）全部 1.0.0 / 3185；模拟器 `xcodebuild build` 成功，App 与 NSE 的 Info.plist 都是 1.0.0（3185）；`./gradlew :app:processDebugMainManifest` 合并清单 `versionCode="3185"`、`versionName="1.0.0"`，`:app:compileDebugJavaWithJavac` 通过（JDK 21）。
+
+没做 / 偏离：
+
+- `release.yml` 不打移动端产物：商店构建要用户的签名与上传凭据，`mobile-v*` 标签之后的上架仍是人的动作；`mobile-v*` 不触发 `v*` 发布。
+- 「关于」页的 App 版本要新装的安装包（插件有 `appInfo`）；旧包显示「未知」。真机上的显示没跑。
+- 构建号取提交数，分支上的构建号可能高于之后主干上的某次构建；商店构建应只从主干 / 标签出。
+
+接口：
+
+- `version.mjs`：`mobileVersion`、`setMobileVersion`、`checkMobile`、`MOBILE_MANIFEST`、`MOBILE_CHANGELOG`、`MOBILE_TAG_PREFIX`、`MOBILE_PAGE_PROTOCOL`；`compatibility.mjs`：`readMobileCompatibility`、`normalizeMobile`。
+- `apps/mobile/scripts/app-version.mjs`：`parseMobileVersion`、`mobileVersion`、`buildNumber`、`nativeVersionFiles`、`writeNativeVersion`；环境变量 `ARMADRA_BUILD_NUMBER`。
+- web：`NativeBridge.appInfo()` → `NativeAppInfo { version, build }`；`MINIMUM_HOST_PROTOCOL`、`hostCompatibility`、`formatProtocol`；`MobileAbout`。
+
 ## 终端选区随按键释放结束（#227，2026-10-10）
 
 根因：xterm 的选区（以及应用开鼠标上报时的松开上报）靠 `mousedown` 时挂在 `document` 上的 `mouseup` 收尾，它的 `mousemove` 不看 `buttons`。画布平移用的 d3-zoom 在 `window` 捕获相位接住 `mouseup` 并 `stopImmediatePropagation()`；手形工具下左键按在终端上、或中键按在终端上（这两种都会平移画布），按下那一下 xterm 与 d3-zoom 都收到，松开那一下只有 d3-zoom 收到，于是松开后选区仍跟着指针走、开了鼠标上报的应用一直以为键按着。窗口外松开、失焦、`pointercancel`、页面切后台是同一类「键松了，`document` 不知道」。

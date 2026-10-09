@@ -44,6 +44,7 @@ export interface ArmadraNativePlugin {
   }>;
   pin(options: { origin: string; fingerprint: string }): Promise<void>;
   scan(): Promise<{ text?: string }>;
+  appInfo(): Promise<{ version?: string; build?: string }>;
   pushRegistration(): Promise<{
     registration?: {
       platform: "ios" | "android";

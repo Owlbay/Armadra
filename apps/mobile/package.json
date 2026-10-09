@@ -6,12 +6,13 @@
     "name": "YoVinchen",
     "email": "gzh298255@gmail.com"
   },
-  "version": "0.2.4",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "web:prepare": "node scripts/prepare-web.mjs",
-    "sync": "node scripts/prepare-web.mjs && cap sync",
+    "version:write": "node scripts/app-version.mjs write",
+    "sync": "node scripts/app-version.mjs write && node scripts/prepare-web.mjs && cap sync",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
