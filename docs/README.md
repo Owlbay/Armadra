@@ -103,6 +103,7 @@
 | [功能预期总表](status/feature-roadmap.md)                | 按源码核实的功能现状表（附依据节号）、需要外部条件的项与代码侧残项                                                                  |
 | [画布性能基线](status/canvas-performance-baseline.md)    | 30 个终端 + 真实会话的 fps / 帧时 / 重渲组件数，改动前后                                                                            |
 | [服务端性能基线](status/server-performance-baseline.md)  | 服务器壳 30 个终端、6 个事件流、2000 对象实时板的延迟 / 吞吐 / RSS / CPU 与热点修复                                                 |
+| [终端内存基线](status/terminal-memory-baseline.md)       | 桌面壳 10 个持续输出终端在活跃 / 离屏 / 切换 / GC 各阶段的进程内存、Runtime 事件循环与采样节奏；基线待录                            |
 | [Electron 迁移复查](status/electron-migration-review.md) | 换壳后功能总表逐行核查、UI 死角、文档漂移与测试盲区；已修复项见 §0                                                                  |
 | [TypeScript Core 进度](status/typescript-core-status.md) | R0–R7 与 2026-09-25/26 补齐轮的逐节实施记录、实测数字与验证命令                                                                     |
 | [补全进度](status/completion-progress.md)                | 补全执行计划 49 个工作包与 G5 的 31 个包逐包的「做了什么 / 实测 / 没做」；剩余用户事项见用户待办清单                                |

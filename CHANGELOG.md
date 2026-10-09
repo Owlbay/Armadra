@@ -1,6 +1,6 @@
 # 更新记录
 
-每个版本一节，按发布倒序。括号里是合入的 PR 编号（github.com/Owlbay/Armadra）。兼容范围以 `tools/release/compatibility.json` 为准，发布说明里的 `armadra-compatibility` 围栏由它渲染。
+每个版本一节，按发布倒序。括号里是合入的 PR 编号（github.com/Owlbay/Armadra）。兼容范围以 `tools/release/compatibility.json` 为准，发布说明里的 `armadra-compatibility` 围栏由它渲染。这里只记桌面 / 服务器套件；手机 / 平板 App 有自己的版本线，记在 `apps/mobile/CHANGELOG.md`（标签 `mobile-vX.Y.Z`）。
 
 ## 0.2.4（2026-10-09）
 

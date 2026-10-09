@@ -126,9 +126,9 @@ node tools/ci/e2e.mjs --tier b --list     # 只列出清单
 
 **版本住在仓库里，标签只是指向它的名字。** 这一点与许多流水线相反——常见做法是从标签
 解出版本、写进一份生成的打包配置，仓库里根本不存版本。我们不这么做，因为版本写在仓库里
-（根 `package.json` 是源；桌面、服务器、手机三壳的 manifest 与 core、armadra-hook
+（根 `package.json` 是源；桌面、服务器两壳的 manifest 与 core、armadra-hook
 的版本常量都要与它一致，`version.mjs set` 一起改、`check` 一起看，见
-`tools/release/version.mjs` 的 `VERSION_SITES`），两种壳
+`tools/release/version.mjs` 的 `VERSION_SITES`；手机 / 平板 App 不在其中，见 §2.8），两种壳
 都会自报它，更新检查比的也是它。于是方向反过来：`verify` 要求
 **标签等于仓库版本**，不等就拒绝发布，而不是让标签去覆盖代码里的版本。
 
@@ -414,6 +414,31 @@ npm 上 `latest` 仍是 26.15.3（本仓库钉的版本），`v26` 线到 26.17.
 仍然只创建 **draft**，不直接发布、不加 `--latest`。产物清单与说明要
 人审阅，更新检查会跳过 draft，所以未发布前任何客户端都看不到它。
 
+### 2.8 移动端版本
+
+手机与 iPad（Android 手机与平板）是**同一个 App**（iOS 通用二进制、Android 同一 APK），设备形态不靠版本号区分。App 有**自己的版本线**，与桌面 / 服务器套件分开演进，免得「App 0.2.4 配主机 0.2.4」被误读成必须同号：
+
+| 项       | 桌面 / 服务器套件                          | 手机 / 平板 App                                                                     |
+| -------- | ------------------------------------------ | ----------------------------------------------------------------------------------- |
+| 版本的源 | 根 `package.json`（`VERSION_SITES`）       | `apps/mobile/package.json`，只收纯 `X.Y.Z`（商店版本名不收预发布后缀）              |
+| 改版本   | `node tools/release/version.mjs set X.Y.Z` | `node tools/release/version.mjs mobile set X.Y.Z`                                   |
+| 校验     | `version.mjs check [--tag vX.Y.Z]`         | `version.mjs mobile check [--tag mobile-vX.Y.Z]`                                    |
+| 标签     | `vX.Y.Z`（触发 `release.yml`）             | `mobile-vX.Y.Z`（不触发 `release.yml` 的 `v*`）                                     |
+| 更新记录 | 根 `CHANGELOG.md`                          | `apps/mobile/CHANGELOG.md`（同样的 `## X.Y.Z` 小节，`changelog.mjs --file` 读得出） |
+
+`pnpm release:check` 两条都跑。起始版本取 **1.0.0**：与桌面的 0.2.x 一眼分得开；Android 的 `versionCode` 不再由 semver 推出，换号不受「主 × 10000 + 次 × 100 + 补丁」的约束。
+
+**构建号**单调递增：`ARMADRA_BUILD_NUMBER`（正整数，CI 想用别的序列时显式给）优先，否则是 `git rev-list --count HEAD`——同一提交本地与 CI 得到同一个数，主干往前只增不减；浅克隆数不出真实提交数，脚本直接报错（`nightly.yml` 的两个移动端作业因此 `fetch-depth: 0`）。新号远大于旧方案的 204（0.2.4），已装的 Android 包照常升级。
+
+**派生**：`apps/mobile/scripts/app-version.mjs write`（`pnpm --filter @armadra/mobile sync` 的第一步）写出两份不入库的文件：
+
+- `apps/mobile/ios/version.generated.xcconfig`：`MARKETING_VERSION`、`CURRENT_PROJECT_VERSION`。入库的 `ios/version.xcconfig` include 它，工程级 Release 以它为基础配置、`debug.xcconfig` 也 include 它；`project.pbxproj` 的工程与各目标（App、NotificationService、AppUITests）都不再写这两个键，扩展与 App 版本始终一致。命令行加的 `-xcconfig ~/armadra-ios-build/personal.xcconfig` 这类外部配置只管签名与包名，不设这两个键，叠加不冲突（2026-10-10 用 `xcodebuild -showBuildSettings` 带与不带它核过三个目标、两种配置）。
+- `apps/mobile/android/app/version.properties`：`versionName`、`versionCode`，`app/build.gradle` 读它；缺文件时构建直接失败并提示先跑脚本。旧的 `ARMADRA_VERSION_CODE` 不再认，用 `ARMADRA_BUILD_NUMBER`。
+
+**兼容性只看协议**，不看两边版本是否相等：`compatibility.json` 的 `mobile.minimumHostProtocol`（现为 1.14：手机用到的推送与对外服务动词自此都在契约上；已发布的 0.2.x 都在 1.18 及以上）是 App 内页面能用的最老 core 协议，页面副本在 `apps/web/src/mobile/host-compatibility.ts`；`mobile check` 核对两者一致、major 等于 core 的 `PROTOCOL_MAJOR`、minor 不高于 core 的 `PROTOCOL_MINOR`。它不进发布说明的围栏。App 的「设置 → 关于」显示 App 版本与构建号（原生插件 `appInfo`）、所连主机的版本与协议，主机协议不够或 major 不同时提示更新哪一边。
+
+**产物**：`nightly.yml` 的移动端产物名用移动端版本（`artifacts.mjs::mobileAssets(version mobile print)`，如 `armadra-mobile_1.0.0_android-debug.apk`）。`release.yml` 不打移动端：商店构建要用户的签名与上传凭据（客户端平台指南「真机与商店」），打 `mobile-v*` 标签之后的上架是人的动作。
+
 ## 3. 密钥清单
 
 全部是 GitHub 仓库 secret。**一个都没有时发布仍然跑得通**：产物是未签名的，
@@ -565,7 +590,7 @@ Dependabot 警报按三种办法收口，理由都写在 `pnpm-workspace.yaml` �
 ```sh
 pnpm ci:workflows      # 两份工作流的结构、runner 标签与矩阵三元组
 pnpm release:test      # tools/release 与 tools/ci 的单元测试
-pnpm release:check     # 各处版本一致、兼容范围包含本版本
+pnpm release:check     # 桌面套件各处版本一致、兼容范围包含本版本；移动端版本线单独校验（§2.8）
 pnpm release:dry-run   # 把一次完整发布落到临时目录并校验
 ```
 

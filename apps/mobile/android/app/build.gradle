@@ -1,12 +1,22 @@
-import groovy.json.JsonSlurper
-
 apply plugin: 'com.android.application'
 
-// 版本随桌面 / 服务器一起发（补全架构 §10）：版本名取 apps/mobile/package.json，
-// 版本号由它推出（主 × 10000 + 次 × 100 + 补丁），CI 可用 ARMADRA_VERSION_CODE 覆盖。
-def mobileVersion = new JsonSlurper().parse(file('../../package.json')).version as String
-def versionParts = mobileVersion.tokenize('.-')
-def derivedVersionCode = versionParts[0].toInteger() * 10000 + versionParts[1].toInteger() * 100 + versionParts[2].toInteger()
+// 移动端有自己的版本线（docs/guides/ci-release.md「移动端版本」）：版本名与版本号都来自
+// apps/mobile/scripts/app-version.mjs 写出的 version.properties（不入库）——版本名是
+// apps/mobile/package.json 的 version，版本号是单调递增的构建号（ARMADRA_BUILD_NUMBER 或提交数），
+// 与 iOS 的 MARKETING_VERSION / CURRENT_PROJECT_VERSION 同出一处。
+def appVersionFile = file('version.properties')
+if (!appVersionFile.exists()) {
+    throw new GradleException("缺 ${appVersionFile}：先跑 node apps/mobile/scripts/app-version.mjs write（pnpm --filter @armadra/mobile sync 已带）")
+}
+def appVersionProps = new Properties()
+appVersionFile.withInputStream { appVersionProps.load(it) }
+def appVersion = [
+    versionName: appVersionProps.getProperty('versionName'),
+    versionCode: appVersionProps.getProperty('versionCode')?.toInteger(),
+]
+if (!appVersion.versionName || !appVersion.versionCode) {
+    throw new GradleException("${appVersionFile} 缺 versionName 或 versionCode：重新跑 node apps/mobile/scripts/app-version.mjs write")
+}
 def releaseKeystore = System.getenv('ANDROID_UPLOAD_KEYSTORE')
 
 android {
@@ -16,8 +26,8 @@ android {
         applicationId "dev.armadra.mobile"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode((System.getenv('ARMADRA_VERSION_CODE') ?: derivedVersionCode.toString()).toInteger())
-        versionName mobileVersion
+        versionCode appVersion.versionCode
+        versionName appVersion.versionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

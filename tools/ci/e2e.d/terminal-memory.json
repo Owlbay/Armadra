@@ -1,0 +1,19 @@
+{
+  "id": "terminal-memory",
+  "tier": "b",
+  "script": "tools/probes/terminal-memory.mjs",
+  "args": [
+    "{out}",
+    "--terminals",
+    "10",
+    "--off1",
+    "60",
+    "--off2",
+    "180",
+    "--cycles",
+    "10"
+  ],
+  "requires": ["tmux"],
+  "platforms": ["darwin", "linux"],
+  "timeoutMinutes": 30
+}

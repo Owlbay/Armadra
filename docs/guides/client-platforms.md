@@ -46,7 +46,7 @@ Armadra 使用同一套 React 页面。桌面端通过 Electron 壳提供本机�
 
 ## 原生 App（Capacitor 手机壳，G3-1）
 
-`apps/mobile`（`@armadra/mobile`，Capacitor 8）把同一份 `apps/web` 生产构建**打进安装包**：不配 `server.url`、不做 OTA，版本随桌面 / 服务器一起发（`apps/mobile/package.json` 在 `tools/release/version.mjs` 的版本清单里）。商店定位是「连接你自己的 Armadra 的通用客户端」，App 里不内置任何由我们托管的服务（[外部服务](../design/external-services.md) §5.1）。页面来源固定为 iOS `capacitor://localhost`、Android `https://localhost`，Gateway 的 CORS 只放行这两个（契约 §17.4）。
+`apps/mobile`（`@armadra/mobile`，Capacitor 8）把同一份 `apps/web` 生产构建**打进安装包**：不配 `server.url`、不做 OTA。App 有自己的版本线（`apps/mobile/package.json`，与桌面 / 服务器的版本无关），iOS 与 Android 的版本名、构建号都由 `apps/mobile/scripts/app-version.mjs` 派生，与主机是否兼容只看协议（[CI 与发布](ci-release.md) §2.8）。商店定位是「连接你自己的 Armadra 的通用客户端」，App 里不内置任何由我们托管的服务（[外部服务](../design/external-services.md) §5.1）。页面来源固定为 iOS `capacitor://localhost`、Android `https://localhost`，Gateway 的 CORS 只放行这两个（契约 §17.4）。
 
 原生只补网页做不到的几件事，页面一半的约定在 `apps/web/src/mobile/native-bridge.ts` 文件头：
 
@@ -58,6 +58,7 @@ Armadra 使用同一套 React 页面。桌面端通过 Electron 壳提供本机�
 | 扫码         | AVFoundation 整屏扫码，系统「取消」                                                                                                                                                                                                         | Google 代码扫描器（Play 服务提供界面，不要相机权限）                                                                                                                     |
 | 推送         | APNs 令牌 + 设备 X25519 公钥；Notification Service Extension 用钥匙串里的私钥解开信封（契约 §19.5），换上标题、正文、深链                                                                                                                   | FCM 令牌 + 设备公钥；数据消息在 `ArmadraMessagingService` 里解开再出通知；装了 UnifiedPush 分发器时改向它要端点（契约 §27.2），消息在 `ArmadraUnifiedPushService` 里解开 |
 | 令牌轮换     | 启动时对开过推送的设备再要一次 APNs 令牌，与上次登记的不同就标「换过」并发 `pushTokenRotated`（`PushTokenLedger`）                                                                                                                          | `onNewToken` 与 UnifiedPush 的新端点标「换过」并发同一个事件（`PushRotation`）                                                                                           |
+| App 版本     | `appInfo`：`CFBundleShortVersionString` / `CFBundleVersion`（「设置 → 关于」显示）                                                                                                                                                          | `appInfo`：`versionName` / `versionCode`                                                                                                                                 |
 | 系统浏览器   | `openExternal`：`UIApplication.open`，只开 https 与回环 http                                                                                                                                                                                | `ACTION_VIEW`，同样只开 https 与回环 http                                                                                                                                |
 | 深链         | `armadra://pair?…`、`armadra://join?…` 与 `armadra://oauth?…` → 写进页面 `#link=` 并重载（配对：连接页预填，人点「连接」才配；分享链接：连接页收到就直接挂载；OAuth：入口收尾）；`armadra://w/<工作空间>/n/<节点>` → `#push=`，进节点焦点页 | 同左；冷启动带来的深链等页面加载完再交                                                                                                                                   |
 
@@ -85,7 +86,7 @@ SaaS 的添加方式没有入口，类型与分支留着。同一个源从两条
 
 ```sh
 pnpm libs:build && pnpm --filter @armadra/web build
-pnpm --filter @armadra/mobile sync          # 拷页面产物进 www/、插插件桥、cap sync
+pnpm --filter @armadra/mobile sync          # 写版本与构建号、拷页面产物进 www/、插插件桥、cap sync
 # iOS 模拟器（「Sign to Run Locally」，不要证书；关掉签名的包在模拟器上拿不到钥匙串）
 xcodebuild build -project apps/mobile/ios/App/App.xcodeproj -scheme App \
   -sdk iphonesimulator -destination 'generic/platform=iOS Simulator'

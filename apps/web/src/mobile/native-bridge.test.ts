@@ -33,6 +33,7 @@ describe("不在原生 App 里时是空实现", () => {
     await expect(bridge.scan()).resolves.toBeNull();
     await expect(bridge.pushRegistration()).resolves.toBeNull();
     await expect(bridge.pin(ORIGIN, FP)).resolves.toBeUndefined();
+    await expect(bridge.appInfo()).resolves.toBeNull();
   });
 
   it("浏览器停在 https://localhost 上也不算 App", () => {
@@ -94,6 +95,29 @@ describe("原生插件", () => {
     await expect(bridge.pin(ORIGIN, FP)).rejects.toThrow();
     inApp({});
     await expect(nativeBridge().pin(ORIGIN, FP)).rejects.toThrow();
+  });
+
+  it("App 版本：纯 X.Y.Z 加数字构建号才用；旧插件没有这个方法是 null", async () => {
+    const appInfo = vi.fn(async () => ({ version: "1.0.0", build: "3185" }));
+    inApp({ appInfo });
+    await expect(nativeBridge().appInfo()).resolves.toEqual({
+      version: "1.0.0",
+      build: "3185",
+    });
+    // Android 的 versionCode 是数字。
+    appInfo.mockResolvedValueOnce({ version: "1.2.0", build: 42 } as never);
+    await expect(nativeBridge().appInfo()).resolves.toEqual({
+      version: "1.2.0",
+      build: "42",
+    });
+    appInfo.mockResolvedValueOnce({ version: "1.0", build: "1" });
+    await expect(nativeBridge().appInfo()).resolves.toBeNull();
+    appInfo.mockResolvedValueOnce({ version: "1.0.0", build: "" });
+    await expect(nativeBridge().appInfo()).resolves.toBeNull();
+    appInfo.mockRejectedValueOnce(new Error("boom"));
+    await expect(nativeBridge().appInfo()).resolves.toBeNull();
+    inApp({});
+    await expect(nativeBridge().appInfo()).resolves.toBeNull();
   });
 
   it("扫码：取消是 null", async () => {

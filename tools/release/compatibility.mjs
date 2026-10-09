@@ -65,7 +65,7 @@ export function compareVersions(left, right) {
  * release was verified against, not which installs may move to it, so they
  * never enter the release note's fence — which stays strict.
  */
-const SIDE_KEYS = ["acp", "agent", "platform"];
+const SIDE_KEYS = ["acp", "agent", "platform", "mobile"];
 
 function readDocument(path) {
   return JSON.parse(readFileSync(path, "utf8"));
@@ -96,6 +96,7 @@ function normalizeSide(key, value) {
   if (key === "acp") return normalizeAcp(value);
   if (key === "agent") return normalizeAgentPin(value);
   if (key === "platform") return normalizePlatformPin(value);
+  if (key === "mobile") return normalizeMobile(value);
   throw new Error(`unknown compatibility key: ${key}`);
 }
 
@@ -218,6 +219,41 @@ export function normalizePlatformPin(platform) {
     tarball: { file, sha256 },
     images: { cloud: images.cloud, relay: images.relay },
   };
+}
+
+/**
+ * The `mobile` key: what the phone / tablet app needs from the host it talks
+ * to. The app has its own version line (`apps/mobile/package.json`), so its
+ * compatibility with a desktop or server core is decided by protocol, never by
+ * the two version numbers being equal. `minimumHostProtocol` is the oldest
+ * core protocol the bundled page works against; the page's copy is
+ * `apps/web/src/mobile/host-compatibility.ts`, and `version.mjs mobile check`
+ * keeps the two and the core's own protocol in step. Not part of the fence.
+ */
+export function readMobileCompatibility(path = COMPATIBILITY_FILE) {
+  return normalizeMobile(readDocument(path).mobile);
+}
+
+export function normalizeMobile(mobile) {
+  const fail = (message) => {
+    throw new Error(message);
+  };
+  if (mobile === null || typeof mobile !== "object" || Array.isArray(mobile))
+    fail("compatibility.json has no mobile entry");
+  for (const key of Object.keys(mobile)) {
+    if (key !== "minimumHostProtocol") fail(`unknown mobile key: ${key}`);
+  }
+  const protocol = mobile.minimumHostProtocol ?? {};
+  for (const key of Object.keys(protocol)) {
+    if (key !== "major" && key !== "minor")
+      fail(`unknown mobile.minimumHostProtocol key: ${key}`);
+  }
+  const { major, minor } = protocol;
+  if (!Number.isSafeInteger(major) || major < 1)
+    fail("mobile.minimumHostProtocol.major must be an integer from 1");
+  if (!Number.isSafeInteger(minor) || minor < 0)
+    fail("mobile.minimumHostProtocol.minor must be a non-negative integer");
+  return { minimumHostProtocol: { major, minor } };
 }
 
 /**

@@ -301,7 +301,7 @@ ama 的 `task(agent=<id>)` 在有宿主时只认宿主注入的 runner（第五�
 | React Native / Flutter 重写 | 否   | 第二份前端，所有功能双写                                                                                                                                                          |
 | 纯 PWA                      | 否   | iOS 推送只对加到主屏且用户授权的 PWA 可用、不可靠；自签证书无法钉扎；没有深链                                                                                                     |
 
-- 工程：`apps/mobile/`（Capacitor 7，`ios/`、`android/`、`src/` 只放插件桥）。页面产物**打进包里**（商店审核要求，[外部服务](external-services.md) §5.1），连接页就是 `apps/web/src/mobile/ConnectScreen`；API 跨源调 Gateway：配对后拿到的会话凭据存钥匙串、以 Bearer 发送，WS 用一次性票升级（§7「原生 App 的准入」）。不做 OTA，版本随桌面 / 服务器一起发。
+- 工程：`apps/mobile/`（Capacitor 7，`ios/`、`android/`、`src/` 只放插件桥）。页面产物**打进包里**（商店审核要求，[外部服务](external-services.md) §5.1），连接页就是 `apps/web/src/mobile/ConnectScreen`；API 跨源调 Gateway：配对后拿到的会话凭据存钥匙串、以 Bearer 发送，WS 用一次性票升级（§7「原生 App 的准入」）。不做 OTA。App 自 2026-10-10 起有自己的版本线（1.0.0 起，与桌面 / 服务器套件分开），与主机是否兼容只看协议（`compatibility.json` 的 `mobile.minimumHostProtocol`，[CI 与发布](../guides/ci-release.md) §2.8）。
 - 证书钉扎：iOS 在 `CAPBridgeViewController` 子类处理 `didReceiveAuthenticationChallenge`，Android 在 `WebViewClient.onReceivedSslError` 与 OkHttp 的 pinner，都只在服务端链里信任锚的指纹等于二维码 `fp` 时放行；指纹存钥匙串；失败时提示重新扫码（§7 的轮换）。
 - **推送的传输**（APNs 的 `.p8` 密钥与 FCM 的服务账号都绑定 App 发布方的账号，不能随包分发给用户的 core；[外部服务](external-services.md) §5.2 的分期）：
 
