@@ -241,6 +241,92 @@ describe.runIf(posixOnly)("the launcher, run by /bin/sh", () => {
  * 执行主机那份（docs/design/canvas-launcher.md §6.2）：同一个生成器，垫片委托
  * 给 `run/<cli>`，启动器里是远端路径；没有任何一份去碰 Codex 的信任。
  */
+describe("the environment fallback (contract §55)", () => {
+  const FALLBACK = [
+    "--settings",
+    "/data/settings.json",
+    "--plugin-dir",
+    "/data/plugin",
+  ];
+  const withFallback = (): LauncherSpec => ({
+    ...spec,
+    args: [
+      "--settings",
+      "/data/settings-permission.json",
+      "--plugin-dir",
+      "/data/plugin",
+      "--plugin-dir",
+      "/data/mod",
+    ],
+    fallback: {
+      whenEnvAny: [
+        "CLAUDE_CODE_SAFE_MODE",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+      ],
+      args: FALLBACK,
+    },
+  });
+
+  it("branches on the variables before the last exec, and only when asked", () => {
+    const text = posixLauncher(withFallback());
+    const lines = text.trimEnd().split("\n");
+    expect(lines.slice(-4)).toEqual([
+      'if [ -n "${CLAUDE_CODE_SAFE_MODE:-}" ] || [ -n "${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-}" ]; then',
+      '  exec "$@" --settings /data/settings.json --plugin-dir /data/plugin',
+      "fi",
+      'exec "$@" --settings /data/settings-permission.json --plugin-dir /data/plugin --plugin-dir /data/mod',
+    ]);
+    // After the gate: outside a canvas node the program starts bare.
+    expect(text.indexOf("CLAUDE_CODE_SAFE_MODE")).toBeGreaterThan(
+      text.indexOf("|| exec"),
+    );
+    expect(posixLauncher(spec)).not.toContain("CLAUDE_CODE_SAFE_MODE");
+    expect(() =>
+      posixLauncher({
+        ...withFallback(),
+        fallback: { whenEnvAny: ["A B"], args: [] },
+      }),
+    ).toThrow(/environment variable/);
+  });
+
+  it.runIf(posixOnly)(
+    "is valid sh and picks the argv by the node's environment",
+    () => {
+      const current = withFallback();
+      spec = current;
+      write(launcherFiles(current, posix.join));
+      const launcher = join(current.runDir, "claude");
+      execFileSync("/bin/sh", ["-n", launcher]);
+      const out = join(root, "out.json");
+      const cli = fakeCli(join(root, "bin"), "claude", out);
+      const gate = { ...baseEnv("/usr/bin:/bin"), [LAUNCH_GATE]: "node-1" };
+      expect(run([launcher, cli, "x"], gate, out).seen.argv).toEqual([
+        "x",
+        ...current.args,
+      ]);
+      for (const name of current.fallback?.whenEnvAny ?? []) {
+        expect(
+          run([launcher, cli, "x"], { ...gate, [name]: "1" }, out).seen.argv,
+          name,
+        ).toEqual(["x", ...FALLBACK]);
+      }
+      // Set but empty is not set.
+      expect(
+        run([launcher, cli, "x"], { ...gate, CLAUDE_CODE_SAFE_MODE: "" }, out)
+          .seen.argv,
+      ).toEqual(["x", ...current.args]);
+      // Outside a canvas node nothing is appended, fallback or not.
+      expect(
+        run(
+          [launcher, cli, "x"],
+          { ...baseEnv("/usr/bin:/bin"), CLAUDE_CODE_SAFE_MODE: "1" },
+          out,
+        ).seen.argv,
+      ).toEqual(["x"]);
+    },
+  );
+});
+
 describe("the copy synced to an execution host", () => {
   function remoteFiles(remoteRoot: string) {
     const release = installCollaborationSkill();

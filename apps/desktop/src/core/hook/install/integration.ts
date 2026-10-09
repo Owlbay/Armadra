@@ -5,19 +5,25 @@ import {
   SKILLS_REVISION,
 } from "./events";
 import {
+  CLAUDE_MODS_MIN,
+  type ClaudeModsReason,
   type InjectionOptions,
   artifactLayout,
   canvasInjection,
+  claudeModsGate,
   codexHooksWarning,
   currentLauncher,
   globalWritesDisabled,
   isInjected,
   prepareInjection,
   readLauncherMarker,
+  probedClaudeVersion,
   readMarker,
   removeInjection,
+  resetClaudeMod,
   shimPath,
 } from "./inject";
+import { hookService } from "../service";
 import {
   type MigrationRecord,
   migrateGlobalInstalls,
@@ -119,6 +125,56 @@ export interface IntegrationState {
   readonly warning?: string;
   /** 能不能在画布中创建 Agent（契约 §48）。 */
   readonly canvasAgents: CanvasAgents;
+  /** Claude only: whether canvas launches load the mod (contract §55.5). */
+  readonly mods?: ModsState;
+}
+
+/* ---------------------------------- mods ---------------------------------- */
+
+/** One session that said hello (`POST /node/mod`), as the page reads it. */
+export interface ModSession {
+  readonly nodeId: string;
+  readonly version: string;
+  readonly profile: "terminal" | "acp";
+  readonly transport: "socket" | "tcp" | "process";
+  readonly reportedAt: string;
+}
+
+/** `agents.integration.mods` (contract §55.5). */
+export interface ModsState {
+  readonly gate: "enabled" | "disabled";
+  readonly reason: ClaudeModsReason | null;
+  readonly minVersion: string;
+  readonly probedVersion: string | null;
+  readonly sessions: readonly ModSession[];
+}
+
+/** The gate as this machine's next launch reads it, and the hellos heard. */
+export function modsState(
+  probedVersion: string | null | undefined,
+  sessions: readonly ModSession[],
+  windows: boolean = process.platform === "win32",
+): ModsState {
+  const gate = claudeModsGate(probedVersion, { windows });
+  return {
+    gate: gate.enabled ? "enabled" : "disabled",
+    reason: gate.reason,
+    minVersion: CLAUDE_MODS_MIN,
+    probedVersion: probedVersion ?? null,
+    sessions,
+  };
+}
+
+function heardModSessions(): ModSession[] {
+  return (hookService()?.modSessions() ?? [])
+    .filter((hello) => hello.engine === "claude")
+    .map((hello) => ({
+      nodeId: hello.nodeId,
+      version: hello.version,
+      profile: hello.profile,
+      transport: hello.transport,
+      reportedAt: hello.reportedAt,
+    }));
 }
 
 /* ---------------------------- 在画布中创建 Agent ---------------------------- */
@@ -197,6 +253,8 @@ export interface IntegrationOptions {
   readonly outdatedHosts?: () => readonly OutdatedHost[];
   /** ACP 客户端能不能带 MCP；缺省问 `acpClientFeatures()`（用例注入）。 */
   readonly clientMcp?: () => boolean;
+  /** The mod hellos heard; the running hook service's when absent. */
+  readonly modSessions?: () => readonly ModSession[];
 }
 
 function requireInjected(agentId: string): void {
@@ -343,6 +401,14 @@ export function state(
       : { outdatedHosts: options.outdatedHosts() }),
     ...(warning === undefined ? {} : { warning }),
     canvasAgents,
+    ...(agentId === "claude"
+      ? {
+          mods: modsState(
+            probedClaudeVersion(),
+            (options.modSessions ?? heardModSessions)(),
+          ),
+        }
+      : {}),
   };
 }
 
@@ -410,6 +476,9 @@ export function prepareAtStartup(options: IntegrationOptions): StartupReport {
     "ama",
   ]) {
     try {
+      // The mod is rebuilt at every start (contract §55.1): whatever Claude
+      // wrote into its folder since (generated types) goes with it.
+      if (agentId === "claude") resetClaudeMod(options.dataDir);
       prepareInjection(agentId, injectionOptions(agentId, options));
       prepared.push(agentId);
     } catch (error) {

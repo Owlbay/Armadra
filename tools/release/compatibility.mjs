@@ -65,7 +65,7 @@ export function compareVersions(left, right) {
  * release was verified against, not which installs may move to it, so they
  * never enter the release note's fence — which stays strict.
  */
-const SIDE_KEYS = ["acp", "agent", "platform"];
+const SIDE_KEYS = ["acp", "agent", "platform", "claudeMods"];
 
 function readDocument(path) {
   return JSON.parse(readFileSync(path, "utf8"));
@@ -96,6 +96,7 @@ function normalizeSide(key, value) {
   if (key === "acp") return normalizeAcp(value);
   if (key === "agent") return normalizeAgentPin(value);
   if (key === "platform") return normalizePlatformPin(value);
+  if (key === "claudeMods") return normalizeClaudeMods(value);
   throw new Error(`unknown compatibility key: ${key}`);
 }
 
@@ -129,6 +130,38 @@ export function normalizeAcp(value) {
     };
   }
   return { protocolVersion: 1, adapters: result };
+}
+
+/**
+ * The `claudeMods` key (contract §55): the Claude Code version the mod gate
+ * opens at, and the range a real run of `tools/probes/claude-mod-launch.mjs`
+ * verified (`null` until one has). The minimum must equal the core's
+ * `CLAUDE_MODS_MIN`; `inject.test.ts` reads this file.
+ */
+export function readClaudeModsCompatibility(path = COMPATIBILITY_FILE) {
+  return normalizeClaudeMods(readDocument(path).claudeMods);
+}
+
+export function normalizeClaudeMods(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    throw new Error("claudeMods must be an object");
+  for (const key of Object.keys(value)) {
+    if (!["minVersion", "verified"].includes(key))
+      throw new Error(`unknown claudeMods key: ${key}`);
+  }
+  const minVersion = parseVersion(value.minVersion).text;
+  const verified = value.verified;
+  if (verified === null) return { minVersion, verified: null };
+  if (typeof verified !== "object")
+    throw new Error("claudeMods.verified must be null or a range");
+  const min = parseVersion(verified.min).text;
+  const max =
+    verified.max === undefined ? undefined : parseVersion(verified.max).text;
+  if (compareVersions(min, minVersion) < 0)
+    throw new Error("claudeMods.verified.min is below minVersion");
+  if (max && compareVersions(min, max) > 0)
+    throw new Error("claudeMods.verified.min is above max");
+  return { minVersion, verified: max ? { min, max } : { min } };
 }
 
 /** The package the `agent` key may name. */

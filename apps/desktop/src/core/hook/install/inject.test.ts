@@ -3,6 +3,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -17,9 +18,12 @@ import {
   INTEGRATION_REVISION,
 } from "./events";
 import {
+  CLAUDE_MODS_MIN,
   INJECTED_AGENTS,
   artifactLayout,
   canvasInjection,
+  claudeLoadsMods,
+  claudeModsGate,
   codexArgs,
   codexHookTrustHash,
   codexHooksWarning,
@@ -33,6 +37,7 @@ import {
   shimPath,
 } from "./inject";
 import { tempDir } from "../../testing/temp-dir";
+import { posixQuote } from "../../terminal/shell";
 import { CANVAS_MCP_NAME } from "../../acp/mcp";
 import { agentEnvironment } from "../../terminal/environment";
 import { MCP_SERVER_NAME } from "../../../cli/armadra-hook/mcp";
@@ -405,6 +410,7 @@ describe("our names", () => {
   /** File names the CLI itself fixes, or our own bookkeeping under our dir. */
   const CLI_FIXED = new Set([
     "settings.json",
+    "settings-permission.json",
     "plugin.json",
     "hooks.json",
     "SKILL.md",
@@ -419,6 +425,8 @@ describe("our names", () => {
     ".claude-plugin",
     ".github",
     "config",
+    "hooks",
+    "mod",
     "instructions",
     "plugin",
     "plugins",
@@ -477,7 +485,11 @@ describe("our names", () => {
         };
         expect(manifest.name, agentId).toMatch(PREFIX);
       }
-      for (const file of [layout.settings, layout.pluginHooks]) {
+      for (const file of [
+        layout.settings,
+        layout.settingsPermission,
+        layout.pluginHooks,
+      ]) {
         if (file === undefined) continue;
         const commands = commandsIn(JSON.parse(readFileSync(file, "utf8")));
         expect(commands.length, file).toBeGreaterThan(0);
@@ -485,10 +497,15 @@ describe("our names", () => {
           expect(programOf(command), command).toMatch(PREFIX);
         }
       }
-      if (layout.module !== undefined) {
-        expect(readFileSync(layout.module, "utf8")).toContain(
-          JSON.stringify(hookBin),
-        );
+      for (const module of [layout.module, layout.modModule]) {
+        if (module === undefined) continue;
+        expect(readFileSync(module, "utf8")).toContain(JSON.stringify(hookBin));
+      }
+      if (layout.modManifest !== undefined) {
+        const manifest = JSON.parse(
+          readFileSync(layout.modManifest, "utf8"),
+        ) as { name: string };
+        expect(manifest.name).toMatch(PREFIX);
       }
 
       const injection = inject(agentId);
@@ -720,5 +737,182 @@ describe("ama's injection (coordinator-agent §2.4)", () => {
     expect(
       JSON.parse(readFileSync(layout.profile as string, "utf8")).host,
     ).toBeUndefined();
+  });
+});
+
+describe("Claude's mod (contract §55)", () => {
+  function modArgs(layout: ReturnType<typeof artifactLayout>) {
+    return [
+      "--settings",
+      layout.settingsPermission,
+      "--plugin-dir",
+      layout.pluginDir,
+      "--plugin-dir",
+      layout.modDir,
+      "--append-system-prompt-file",
+      layout.instructions,
+    ];
+  }
+
+  it("writes the mod and the PermissionRequest-only settings beside the plugin", () => {
+    prepare("claude");
+    const layout = artifactLayout(dataDir, "claude");
+    expect(layout.modDir).toBe(join(dataDir, "integration", "claude", "mod"));
+    expect(layout.modManifest).toBe(
+      join(layout.modDir as string, ".claude-plugin", "plugin.json"),
+    );
+    expect(layout.modHooks).toBe(
+      join(layout.modDir as string, "hooks", "hooks.json"),
+    );
+    expect(layout.modModule).toBe(
+      join(layout.modDir as string, "hooks", "armadra.ts"),
+    );
+    const permission = JSON.parse(
+      readFileSync(layout.settingsPermission as string, "utf8"),
+    ) as { hooks: Record<string, { hooks: { command: string }[] }[]> };
+    expect(Object.keys(permission.hooks)).toEqual(["PermissionRequest"]);
+    expect(permission.hooks.PermissionRequest?.[0]?.hooks[0]?.command).toBe(
+      `${hookBin} claude`,
+    );
+    expect(
+      JSON.parse(readFileSync(layout.modManifest as string, "utf8")),
+    ).toMatchObject({ name: "armadra-mod" });
+    expect(JSON.parse(readFileSync(layout.modHooks as string, "utf8"))).toEqual(
+      { modules: ["./armadra.ts"] },
+    );
+    // The skill plugin is untouched: an older Claude that cannot read
+    // `modules` must not lose the skill with it.
+    expect(existsSync(join(layout.pluginDir as string, "hooks"))).toBe(false);
+  });
+
+  it("gates on the probed version: at or above the minimum, never when unknown", () => {
+    expect(CLAUDE_MODS_MIN).toBe("2.1.293");
+    // The one place the release side reads it: tools/release/compatibility.json.
+    const compatibility = JSON.parse(
+      readFileSync(
+        join(__dirname, "../../../../../../tools/release/compatibility.json"),
+        "utf8",
+      ),
+    ) as { claudeMods: { minVersion: string } };
+    expect(compatibility.claudeMods.minVersion).toBe(CLAUDE_MODS_MIN);
+    expect(claudeLoadsMods("2.1.293")).toBe(true);
+    expect(claudeLoadsMods("2.1.296 (Claude Code)")).toBe(true);
+    expect(claudeLoadsMods("2.2.0")).toBe(true);
+    expect(claudeLoadsMods("2.1.292")).toBe(false);
+    expect(claudeLoadsMods("2.1.287")).toBe(false);
+    expect(claudeLoadsMods(null)).toBe(false);
+    expect(claudeLoadsMods(undefined)).toBe(false);
+    expect(claudeLoadsMods("garbage")).toBe(false);
+    expect(claudeModsGate("2.1.300", { windows: true })).toEqual({
+      enabled: false,
+      reason: "windows_launcher",
+    });
+    expect(claudeModsGate("2.1.300", { windows: false, remote: true })).toEqual(
+      { enabled: false, reason: "remote_unprobed" },
+    );
+    expect(claudeModsGate(null, { windows: false }).reason).toBe(
+      "version_unknown",
+    );
+    expect(claudeModsGate("2.1.200", { windows: false }).reason).toBe(
+      "version_below_min",
+    );
+
+    prepare("claude");
+    const layout = artifactLayout(dataDir, "claude");
+    const plain = [
+      "--settings",
+      layout.settings,
+      "--plugin-dir",
+      layout.pluginDir,
+      "--append-system-prompt-file",
+      layout.instructions,
+    ];
+    for (const version of ["2.1.292", null]) {
+      const injection = canvasInjection({
+        dataDir,
+        agentId: "claude",
+        claudeVersion: version,
+      });
+      expect(injection.args, String(version)).toEqual(plain);
+      expect(injection.fallback).toBeUndefined();
+    }
+    const on = canvasInjection({
+      dataDir,
+      agentId: "claude",
+      claudeVersion: "2.1.293",
+    });
+    if (windows) {
+      expect(on.args).toEqual(plain);
+      return;
+    }
+    expect(on.args).toEqual(modArgs(layout));
+    expect(on.fallback).toEqual({
+      whenEnvAny: [
+        "CLAUDE_CODE_SAFE_MODE",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+      ],
+      args: plain,
+    });
+  });
+
+  it.skipIf(windows)(
+    "follows the cached probe into run/claude, with the environment fallback",
+    () => {
+      prepare("claude");
+      const layout = artifactLayout(dataDir, "claude");
+      expect(launcherText("claude")).not.toContain("settings-permission.json");
+      rememberProbe({
+        agentId: "claude",
+        launchCmd: "claude",
+        version: "2.1.293",
+        status: "ok",
+        probedAt: new Date().toISOString(),
+      });
+      expect(inject("claude").args).toEqual(modArgs(layout));
+      prepare("claude");
+      const text = launcherText("claude");
+      expect(text).toContain(
+        'if [ -n "${CLAUDE_CODE_SAFE_MODE:-}" ] || [ -n "${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-}" ]; then',
+      );
+      const lines = text.split("\n");
+      const fallback = lines.findIndex((line) =>
+        line.startsWith('if [ -n "${CLAUDE_CODE_SAFE_MODE'),
+      );
+      expect(lines[fallback + 1]).toContain(
+        `--settings ${posixQuote(layout.settings as string)} `,
+      );
+      expect(lines[fallback + 1]).not.toContain(layout.modDir);
+      expect(lines.at(-2)).toContain(
+        `--settings ${posixQuote(layout.settingsPermission as string)} `,
+      );
+      expect(lines.at(-2)).toContain(
+        `--plugin-dir ${posixQuote(layout.modDir as string)} `,
+      );
+      forgetProbes();
+      prepare("claude");
+      expect(launcherText("claude")).not.toContain("CLAUDE_CODE_SAFE_MODE");
+    },
+  );
+
+  it("is rewritten when a mod file goes missing, and lists none of Claude's own files", () => {
+    prepare("claude");
+    const layout = artifactLayout(dataDir, "claude");
+    const module = readFileSync(layout.modModule as string, "utf8");
+    rmSync(layout.modModule as string);
+    const report = prepare("claude");
+    expect(report.written).toContain(layout.modModule);
+    expect(readFileSync(layout.modModule as string, "utf8")).toBe(module);
+    // Claude 2.1.287–2.1.294 writes these into the folder; a launch neither
+    // reads nor removes them.
+    const types = join(layout.modDir as string, ".claude-plugin", "types");
+    mkdirSync(types, { recursive: true });
+    writeFileSync(join(types, "index.d.ts"), "// mcp tools\n");
+    expect(
+      prepareInjection("claude", { dataDir, env, force: true }).written,
+    ).toEqual([]);
+    expect(existsSync(types)).toBe(true);
+    expect(
+      Object.values(layout).some((path) => String(path).includes("types")),
+    ).toBe(false);
   });
 });
