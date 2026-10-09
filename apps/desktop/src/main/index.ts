@@ -68,8 +68,13 @@ import {
   markQuitting,
   onWindowCreated,
   revealWindow,
+  sendToWindow,
   setPageUrl,
 } from "./window";
+import {
+  type MemoryPressureWatch,
+  watchMemoryPressure,
+} from "./memory-pressure";
 import {
   driveConnected,
   handleRegister,
@@ -151,6 +156,8 @@ setCrashChannel(diagnostics);
 let page: PageSource | null = null;
 /** 主进程带会话打 core（`start()` 里装上）；源表变了时重读用。 */
 let coreFetch: CoreFetch | null = null;
+/** 系统内存压力的探测（`start()` 里开）；退出时停。 */
+let memoryPressure: MemoryPressureWatch | null = null;
 
 /**
  * 分享深链（`armadra://join`，客户端包 §6.2）：Windows 与 Linux 把它放进启动
@@ -397,6 +404,7 @@ async function requestQuit(): Promise<void> {
   // A global hotkey outlives the window but not the process, and the tray's
   // poll must not keep the loop alive past the last service stopping.
   releaseShortcuts();
+  memoryPressure?.stop();
   destroyTray();
   app.quit();
 }
@@ -446,6 +454,21 @@ async function start(): Promise<void> {
   // would miss the first window, and the menu is process-wide.
   onWindowCreated(installKeydownIntercept);
   installApplicationMenu();
+  // 系统内存压力（性能设计 A3）：只在等级变化时推给页面；页面重载会丢掉状态，
+  // 所以每次载入完再补一次非 normal 的当前档。
+  const pressure = watchMemoryPressure({
+    send: (level) => sendToWindow(IPC.memoryPressure.channel, { level }),
+  });
+  memoryPressure = pressure;
+  void pressure.tick();
+  onWindowCreated((window) => {
+    window.webContents.on("did-finish-load", () => {
+      const level = pressure.current();
+      if (level !== "normal") {
+        window.webContents.send(IPC.memoryPressure.channel, { level });
+      }
+    });
+  });
   // 托盘打 core 也带会话（契约 §3.2）：票经和页面同一条私有通道签，来源是
   // core 自己的回环基址，与页面的会话分开。
   const coreSession = new CoreSession({

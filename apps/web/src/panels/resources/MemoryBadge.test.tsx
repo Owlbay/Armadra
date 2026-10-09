@@ -195,4 +195,47 @@ describe("MemoryBadge", () => {
       ),
     );
   });
+  it("会话 id 晚到时也挂上观察器，离屏降到 30 秒", async () => {
+    // PTY 终端的 sessionId 要等 WS hello 之后才有：首帧徽标 `return null`，
+    // 以前观察器因此永远没挂上，离屏降速从未生效（性能核实 §1.1）。
+    const observed: Element[] = [];
+    let report: ((entries: { isIntersecting: boolean }[]) => void) | null =
+      null;
+    class FakeObserver {
+      constructor(callback: (entries: { isIntersecting: boolean }[]) => void) {
+        report = callback;
+      }
+      observe(element: Element) {
+        observed.push(element);
+      }
+      disconnect() {}
+    }
+    vi.stubGlobal("IntersectionObserver", FakeObserver);
+    try {
+      resources.mockResolvedValue(snapshot([session()]));
+      const view = mount({ sessionId: null });
+      expect(observed).toEqual([]);
+      view.rerender(
+        <MemoryBadge
+          nodeId="n-1"
+          workspaceId="w-1"
+          sessionId="s-1"
+          generation={1}
+          visible
+        />,
+      );
+      await waitFor(() => expect(observed).toHaveLength(1));
+      expect(observed[0]).toBe(screen.getByTestId("memory-badge-n-1"));
+      report!([{ isIntersecting: false }]);
+      await waitFor(() =>
+        expect(subscribeResources).toHaveBeenLastCalledWith(
+          "w-1",
+          expect.anything(),
+          SLOW_INTERVAL_MS,
+        ),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

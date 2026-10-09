@@ -228,6 +228,14 @@ export const IPC = {
    * `window`：只有这扇窗口的页面装了 preload；浏览器节点的 guest 没有这条路。
    */
   diagnosticsReport: spec("diagnostics:report", "invoke", "window"),
+
+  /**
+   * 系统内存压力变了（性能设计 A3）：主进程每 15 秒异步探一次，只在等级变化时
+   * 推 `{ level: "normal" | "warning" | "critical" }`（升档立刻，降档要连续两次，
+   * `main/memory-pressure.ts`）。页面据此把看不见的终端的渲染名额与前端实例还
+   * 回去。`shared`：说的是这台机器的状态，不是这扇窗口的。
+   */
+  memoryPressure: spec("memory:pressure", "event", "shared"),
 } as const satisfies Record<string, ChannelSpec>;
 
 export type ChannelName = (typeof IPC)[keyof typeof IPC]["channel"];

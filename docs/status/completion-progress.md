@@ -3606,6 +3606,54 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - shared：`programStatusSchema` / `ProgramStatus`、`sessionSummarySchema.programStatus`、事件 `terminal.program`（`TerminalProgramEvent`）。
 - web：`useProgramStatusStore`、`headerStateFor`、`programHeaderState`、`reportedLive`、`programNotificationStatus`、`registerProgramOsc`。
 
+## 小地图收起钮悬停才显示、连线同画布锚点与曲线（#216，2026-10-09）
+
+做了什么：
+
+- 收起钮：拆出 `MinimapToggle`。展开时是缩略图右上角里的一个 24px「−」（`Minus`），平时 `opacity: 0` 且不接指针，悬停缩略图或钮本身、键盘 `focus-visible` 时出现（`styles/canvas.css`，用 `.react-flow__minimap:hover ~ .minimap-toggle-panel` 与 `.minimap-toggle-panel:hover`）；`(hover: none), (any-pointer: coarse)` 下常显。收起后原地是常显的带边框缩略图图标（`Map`），文案沿用 `canvas.expandMinimap` / `canvas.collapseMinimap`，无新文案。
+- 连线：新文件 `flow/minimap-links.ts`。每条 `link` 边按画布同一套规则取锚（上下文线 `free`，派发线 `dispatchAnchor`，四边中点）、同一组 `bezierControls` 的三次贝塞尔，去掉箭头、标签、命中区与选中 / 闪动；颜色仍是 `linkColor`（`--link-context`、主的簇色）。所有边**按颜色合并**成几条 `<path>`（上下文一条、每个簇一条），坐标取整；线宽 = 画布线宽 ÷ 缩略图比例，夹在 1–1.5px（`vector-effect: non-scaling-stroke`）。
+- 渲染：整层只挂一次——`<MiniMap>` 的 SVG 没有插槽，于是由第一个可见节点的 `nodeComponent` 在自己的矩形前面画（`firstMinimapNodeId`），连线压在全部节点下面。原来每个节点各订阅 `nodes` / `edges` / `nodeLookup` 并各画一组 `<line>`，现在只有这一处订阅。只在节点、边、簇色、布局方向变化时重算，拖动节点时按 60ms 节流（新 `lib/use-throttled-value.ts`，尾沿一定跟上），平移缩放视口不重算。
+- 展示页「画布」：簇色样本的小地图右上角定格「−」悬停态（`reveal`），连线随动样本右下角放收起后的展开钮。`design-system.md` 小地图一行同步。
+
+实测（macOS arm64，基于 main afc8daa3）：
+
+- 新增用例：`minimap-links.test.ts`（曲线与画布 `linkCurve` 同点、四边中点、按颜色合并与先后、派发线子在下游 / 上游的锚、引用 / 隐藏 / 缺端点不画、无簇色退回品牌色、线宽比例与上下限、外接尺寸）、`use-throttled-value.test.ts`（冷却期只跟尾沿且是最新值、冷却后立刻跟）、`styles/canvas.test.ts`（展开钮默认隐藏不接指针，悬停缩略图 / 钮 / 聚焦 / 收起态显示，触屏常显）、`Minimap.test.tsx`（真 React Flow 里整层只一组、两条上下文线合成一条 path、没有 `<line>`、在第一个节点矩形之前；首节点隐藏时换下一个挂；无边不画；`−` / 缩略图图标两态）。
+- 展示页在开发服务器上看过深浅两种主题：曲线从节点四边中点出，派发线簇色、上下文线品红；真实指针悬停缩略图时钮 `opacity` 变 1、可点，移开变回 0。
+
+没做 / 偏离：
+
+- 线宽的缩略图比例只按节点外接矩形估，不含视口框（为它在平移时逐帧重算不划算）；视口远大于节点时线比真实比例略粗，仍在 1.5px 上限内。
+
+接口：
+
+- `flow/minimap-links.ts`：`minimapLinkLayer`、`minimapLinkSegment`、`minimapLinkWidth`、`boxesExtent`、`MINIMAP_LINK_THROTTLE_MS` 等常量；`Minimap.tsx`：新增 `MinimapToggle`、`MinimapLinkLayer`、`firstMinimapNodeId`，删去 `minimapLinksFrom`、`MINIMAP_LINK_WIDTH`、`MinimapLink`；`lib/use-throttled-value.ts`：`useThrottledValue`。
+
+## 性能包 P2：徽标可见性、内存压力与隐藏名额归还（A2 / A3 / A4，2026-10-09）
+
+做了什么：
+
+- A2：`useOnScreen(ref, enabled)`，effect 依赖 `[ref, enabled]`；`MemoryBadge` 传 `Boolean(sessionId)`。PTY 终端的会话 id 在 WS hello 之后才到，首帧徽标 `return null`，以前观察器永远没挂上，离屏降到 30 秒从未生效。
+- A3 壳侧：`main/memory-pressure.ts` 每 15 秒异步探一次（macOS `sysctl kern.memorystatus_vm_pressure_level` 1/2/4；Linux `/proc/pressure/memory`，`some avg10 ≥ 10` 为 warning、`full avg10 ≥ 5` 为 critical，阈值是自定的；Windows `getSystemMemoryInfo` 空闲 < 10% / < 5%），升档立刻、降档连续两次才推 `memory:pressure { level }`，页面重载后补发非 normal 的当前档。preload 挂 `window.armadra.memory.onPressure`。
+- A3 页面侧：`terminal/pressure-policy.ts`（纯函数 `decide` / `actionFor`，warning 还隐藏名额并释放离屏 ≥ 30 秒的实例，critical 释放全部不可见的，同档 20 秒节流，降回 normal 不动），`pressure-bus.ts`（壳与本机 `resource.sample` 两路取最高档，采样那一路 90 秒没报作废），`memory-pressure.ts`（壳事件进总线，诊断把手 `window.__armadraMemoryPressure.emit(level)` 供探针注入）。`sampling.ts` 只转发 `host.location === "local"` 的非空压力。渲染名额在第一个终端登记时订阅总线并 `releaseHidden()`。
+- A4：`render-budget.ts` 隐藏持有者只暖 `RENDER_HIDDEN_RELEASE_MS = 30_000`，全表一个计时器挂在最早到期那条上；`Infinity` 即旧行为。
+
+实测（macOS arm64，未打包壳，`_shared/perf-diag-20261009/bench/terminal-memory.mjs --repo <本 worktree>`，各跑 1 次）：
+
+- `--terminals 5 --cadence-check`：`fresh-nodes-offscreen-60s` 的 `ps` 31 → 5（含跨平移那个 5 秒窗口里的 3 次；平移后稳态每 30 秒 1 次），`reloaded-offscreen-60s` 30 → 2，`reloaded-visible`（重载后视口仍停在离屏处）18 → 2；同步子进程 46.5–49.1 → 4.2–6.7 ms/s。
+- `--terminals 20 --webgl --cycles 2`：GPU `offscreen-1m` / `offscreen-3m` 140 / 140 MiB（基线 3 分钟 317），回到视口 385 MiB，`data-render` 回到 visible 16 + offscreen 4。
+- 单测：`pressure-policy` 8、`pressure-bus` 7、`memory-pressure`（页面）3、`render-budget` 新增 8、`MemoryBadge` 新增 1（不改实现时失败）、`sampling` 新增 1、`main/memory-pressure` 8。
+
+没做 / 偏离：
+
+- 前端实例的释放（`released`）是 P3 的事，这里只给总线；P3 订阅 `onMemoryPressure(level)`，按 `actionFor(level)` 自己算要释放谁。
+- A4 的 GPU 是 140 MiB，比设计目标 ≤ 130 多 10 MiB（同机 20 个 DOM 终端离屏是 118–123）；没有单独测「注入假压力 → 立刻回落」，A4 的 30 秒已覆盖同一组持有者，单测覆盖了总线触发。
+- Linux / Windows 的探测只有解析与迟滞单测，没在真机上制造压力。
+
+接口：
+
+- IPC：`memory:pressure`（event，shared），载荷 `{ level: "normal" | "warning" | "critical" }`；`window.armadra.memory?.onPressure(listener) → unsubscribe`。
+- web：`pressure-bus.ts` 的 `MemoryPressureLevel`、`emitMemoryPressure(level, source?: "shell" | "sample")`、`onMemoryPressure(listener: (level) => void) → unsubscribe`（只在该回收时与变回 normal 那一次回调）、`currentMemoryPressure()`；`pressure-policy.ts` 的 `decide`、`actionFor`、`MEMORY_PRESSURE_ENABLED`、`PRESSURE_RESCAN_MS`、`WARNING_RELEASE_OFFSCREEN_MS`；`render-budget.ts` 的 `RENDER_HIDDEN_RELEASE_MS`；`useOnScreen(ref, enabled?)`。
+
 ## 终端前端分阶段生命周期、共享灌写调度器与背压（性能包 P3，2026-10-09）
 
 做了什么：
@@ -3614,7 +3662,7 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - 复活：回到可见，或输入到已断开 / 已释放的终端（`writeLine` / `sendKeys` / `paste` / `focus` / xterm `onData`）。输入在没有可用传输时排队（`deliverInput`，上限 64 Ki 码元），传输建好后进 pre-hello 队列按序发出；以前是静默丢弃。传输与 WebGL effect 以显示层代次为依赖。
 - 尺寸：`gridRef` 记最后对齐的行列数（refit 发 resize 与每次 hello 后），重建时作为 `new Terminal({ cols, rows })` 初值；`use-refit.ts` 在 `proposeDimensions()` 为 `undefined` 或小于 2×1 时不 fit、不发 resize。
 - 豁免：启动行已武装 / 等依赖、`starting` / `connecting` / 休眠接回中、10 s 内有没确认或排队的输入时不断开也不释放；聚焦模式节点与 `blocked` 的 Agent 另外不释放。命中时 5 s 后重看。
-- 内存压力：订阅 `terminal/pressure-bus.ts`；告警档释放离屏满 30 s 的、紧急档释放全部看不见的，可见的不动，降回 normal 不重建，`never` 时不响应。**`pressure-bus.ts` 是按设计接口写的本地占位**（`onMemoryPressure` / `emitMemoryPressure(level, source?)` / `currentMemoryPressure`，与 P2 已对齐），P2 合入后以它的实现为准、本包 rebase 时删掉占位。
+- 内存压力：订阅 P2 的 `terminal/pressure-bus.ts`，阈值取 `pressure-policy.ts` 的 `actionFor(level).releaseOffscreenOlderThanMs`：告警档释放离屏满 30 s 的、紧急档释放全部看不见的，可见的不动，降回 normal 不重建，`never` 时不响应。开发时先按设计接口写了本地占位，P2（#219）合入后已合并 main 并换成正式实现。
 - B3：`terminal/flush-scheduler.ts` 全页一个 500 ms 定时器，只在有表面待灌时排，替换每表面 `setInterval`；灌写用 `terminal.write(text, callback)`，上一批没消化完不灌下一批。DOM 渲染器下渲染名额不再决定档位（`RenderInputs.webgl`），看得见即直写。离屏缓冲上限注释改正（2 Mi 码元）。释放时在 `terminal.dispose()` 前抓 canvas 并 `loseContext`。
 
 实测（macOS arm64，未打包壳，20 个 DOM 终端各 100 行/s，tmux 后端，`_shared/perf-diag-20261009/bench/terminal-memory.mjs` 加 `--release-after` / `--gc-offscreen` 两个开关；Renderer phys_footprint，MiB）：
