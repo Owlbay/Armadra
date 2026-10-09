@@ -603,7 +603,7 @@ node tools/probes/mobile-shell-e2e.mjs --platform ios [--device "iPhone 16"|auto
 node tools/probes/mobile-shell-e2e.mjs --platform android [输出目录]   # 模拟器已起、adb 看得到
 ```
 
-## Claude Code mod（契约 §55）
+## Claude Code mod（契约 §57）
 
 `claude-mod-launch.mjs`：起临时 core（临时数据目录、临时 HOME 与 `CLAUDE_CONFIG_DIR`、`ARMADRA_NO_GLOBAL_WRITES=1`），把被测的 Claude Code 放在 core 的 `PATH` 最前面，等 core 自己的版本探测打开门、重新生成启动器，再在画布 Agent 终端里经 `run/claude` 跑 `claude -p`，模型是本机的假 Messages API（假 key，不登录任何账号）。断言 mod 的 hello、`hook` 来源的状态与 core 代分配的 `sourceRevision`；两个环境变量下启动器退回全套设置 hook 且没有 hello；手动起 mod 并关掉非必要网络时事件仍到达；有引擎自带类型时用它类型检查生成的模块；操作员自己的 `~/.claude/settings.json` 前后一致。Claude Code 取 `ARMADRA_CLAUDE_BIN`，否则 `PATH` 上的 `claude`，低于门槛时打印原因并以 0 退出。`--record-compat` 把通过的版本并进 `compatibility.json` 的 `claudeMods.verified`。
 

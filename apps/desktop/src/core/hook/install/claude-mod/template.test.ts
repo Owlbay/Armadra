@@ -16,7 +16,7 @@ import { MOD_CLASSIC_EVENTS } from "./status";
 import { claudeModPluginTest } from "./plugin-test";
 
 /**
- * The generated Claude Code mod (contract §55): what the engine's loader
+ * The generated Claude Code mod (contract §57): what the engine's loader
  * refuses (a computed `$.env.get` name, `import()`, `$` handed to an arrow
  * function), what our rules forbid (answering a permission prompt, steering a
  * tool call, writing into the conversation), and that it type-checks against

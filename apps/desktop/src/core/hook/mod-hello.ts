@@ -4,7 +4,7 @@ import type { HookService, ModHello } from "./service";
 
 /**
  * `POST /node/mod` on the hook surface — the hello of a Claude Code mod
- * (contract §55.3).
+ * (contract §57.3).
  *
  * The mod sends it at `session.start`, and again when its reports start
  * going another way (the host refused a fetch and the hook client took

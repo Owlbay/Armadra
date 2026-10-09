@@ -8,7 +8,7 @@ import { type Memory, newMemory } from "./reduce";
 
 /**
  * The hello a Claude Code mod sends at `session.start` (`POST /node/mod`,
- * contract §55): versions and the transport, nothing else.
+ * contract §57): versions and the transport, nothing else.
  */
 export interface ModHello {
   readonly nodeId: string;
@@ -42,7 +42,7 @@ export const MAX_MOD_HELLOS = 512;
 export class HookService {
   private readonly auth: HookAuth;
   private readonly memory = new Map<string, Memory>();
-  /** In memory only: a core restart starts with none (contract §55). */
+  /** In memory only: a core restart starts with none (contract §57). */
   private readonly modHellos = new Map<string, ModHello>();
   private currentPort: number | undefined;
 

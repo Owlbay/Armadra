@@ -11,7 +11,7 @@ import { UI_DECLARATIONS, UI_REGISTRATIONS } from "./ui";
 
 /**
  * The Claude Code mod: a plugin of function hooks Claude Code loads from a
- * second `--plugin-dir` (contract §55, docs/design/canvas-only-integration.md
+ * second `--plugin-dir` (contract §57, docs/design/canvas-only-integration.md
  * §3). Three files under `<data>/integration/claude/mod/`, the manifest named
  * `armadra-mod`, generated here and written by `inject.ts` — at every core
  * start from scratch, and byte-compared on every launch after.

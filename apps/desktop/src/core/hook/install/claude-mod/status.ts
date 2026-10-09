@@ -1,5 +1,5 @@
 /**
- * The status half of the Claude Code mod (contract §55, docs/design/claude-mods.md §3):
+ * The status half of the Claude Code mod (contract §57, docs/design/claude-mods.md §3):
  * every classic hook event the settings file used to carry, PermissionRequest
  * excepted, forwarded unchanged; and the node's name in the status line.
  *

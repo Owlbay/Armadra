@@ -1,5 +1,5 @@
 /**
- * The transport half of the Claude Code mod (contract §55, docs/design/claude-mods.md §3.1):
+ * The transport half of the Claude Code mod (contract §57, docs/design/claude-mods.md §3.1):
  * endpoint parsing, headers, the `terminalBinding` without a revision, the
  * socket → TCP → `armadra-hook` order, and the hello.
  *
@@ -108,7 +108,7 @@ async function armadraSession($: EngineInterface): Promise<ArmadraSession | unde
     }
   }
   // The binding carries no sourceRevision: the core allocates it from the
-  // same counter the hook client uses (contract §55). Only with a node token,
+  // same counter the hook client uses (contract §57). Only with a node token,
   // as the client does: an unverified report has no binding to prove.
   let binding: ArmadraSession["binding"];
   const sessionId = await $.env.get("ARMADRA_SESSION_ID");

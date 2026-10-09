@@ -68,7 +68,7 @@ export async function main(argv: string[]): Promise<number> {
       return runMcp(argv.slice(1));
     case "mod-hello":
       // Internal: the Claude Code mod's hello when its own fetch is refused
-      // (contract §55.3). Quiet and always 0, like hook mode.
+      // (contract §57.3). Quiet and always 0, like hook mode.
       return runModHello();
     case "credential":
       // Internal: the canvas launcher's credential exchange (contract §20.4);

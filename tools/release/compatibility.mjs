@@ -134,7 +134,7 @@ export function normalizeAcp(value) {
 }
 
 /**
- * The `claudeMods` key (contract §55): the Claude Code version the mod gate
+ * The `claudeMods` key (contract §57): the Claude Code version the mod gate
  * opens at, and the range a real run of `tools/probes/claude-mod-launch.mjs`
  * verified (`null` until one has). The minimum must equal the core's
  * `CLAUDE_MODS_MIN`; `inject.test.ts` reads this file.

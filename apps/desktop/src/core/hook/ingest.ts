@@ -61,7 +61,7 @@ export interface TerminalBinding {
 }
 
 /**
- * A binding as posted: `sourceRevision` may be absent (contract §55.2), and
+ * A binding as posted: `sourceRevision` may be absent (contract §57.2), and
  * the core then allocates it.
  */
 interface PostedBinding {
@@ -197,7 +197,7 @@ export function ingest(
     binding = posted as TerminalBinding;
   } else if (posted !== undefined) {
     // No revision: the core draws one from the session's own counter, after
-    // the same gates (contract §55.2). One it cannot draw (no counter file)
+    // the same gates (contract §57.2). One it cannot draw (no counter file)
     // leaves the report without a binding, as the hook client's would be.
     const usable =
       verdict === "verified" &&

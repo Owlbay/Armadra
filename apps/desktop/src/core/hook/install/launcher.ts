@@ -39,7 +39,7 @@ export interface LauncherSpec {
   /** 启动器只给 CLI 进程设的变量（`canvasInjection` 答的 `env`）。 */
   readonly env: readonly (readonly [string, string])[];
   /**
-   * 环境分支（契约 §55）：节点环境里 `whenEnvAny` 任一个非空时改接 `args`。
+   * 环境分支（契约 §57）：节点环境里 `whenEnvAny` 任一个非空时改接 `args`。
    * Claude 挂 mod 时用它在安全模式或关掉非必要网络时退回全套设置 hook。
    * 缺席时没有这一段。
    */

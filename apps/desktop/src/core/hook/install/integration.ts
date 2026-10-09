@@ -125,7 +125,7 @@ export interface IntegrationState {
   readonly warning?: string;
   /** 能不能在画布中创建 Agent（契约 §48）。 */
   readonly canvasAgents: CanvasAgents;
-  /** Claude only: whether canvas launches load the mod (contract §55.5). */
+  /** Claude only: whether canvas launches load the mod (contract §57.5). */
   readonly mods?: ModsState;
 }
 
@@ -140,7 +140,7 @@ export interface ModSession {
   readonly reportedAt: string;
 }
 
-/** `agents.integration.mods` (contract §55.5). */
+/** `agents.integration.mods` (contract §57.5). */
 export interface ModsState {
   readonly gate: "enabled" | "disabled";
   readonly reason: ClaudeModsReason | null;
@@ -476,7 +476,7 @@ export function prepareAtStartup(options: IntegrationOptions): StartupReport {
     "ama",
   ]) {
     try {
-      // The mod is rebuilt at every start (contract §55.1): whatever Claude
+      // The mod is rebuilt at every start (contract §57.1): whatever Claude
       // wrote into its folder since (generated types) goes with it.
       if (agentId === "claude") resetClaudeMod(options.dataDir);
       prepareInjection(agentId, injectionOptions(agentId, options));

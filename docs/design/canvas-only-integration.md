@@ -33,7 +33,7 @@
 
 SSH 节点的启动行不带启动器，也不带本机解析到的程序路径：那些路径都在控制端，注入由执行主机上的垫片交给远端启动器，见[远端画布注入](./remote-canvas-injection.md)。
 
-**Claude Code mod**（[Claude Code mods](./claude-mods.md)，契约 §55）：探测到的 Claude ≥ 2.1.293 时，`canvasInjection` 给 Claude 的 argv 换成 `--settings settings-permission.json`（只剩 `PermissionRequest`）加第二个 `--plugin-dir mod`（`armadra-mod`，进程内转发其余事件、画状态栏），并带一组回退 argv：启动器在节点环境里见到 `CLAUDE_CODE_SAFE_MODE` 或 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 时改用今天的全套设置 hook。版本未知、Windows 与执行主机一律是全套设置 hook。
+**Claude Code mod**（[Claude Code mods](./claude-mods.md)，契约 §57）：探测到的 Claude ≥ 2.1.293 时，`canvasInjection` 给 Claude 的 argv 换成 `--settings settings-permission.json`（只剩 `PermissionRequest`）加第二个 `--plugin-dir mod`（`armadra-mod`，进程内转发其余事件、画状态栏），并带一组回退 argv：启动器在节点环境里见到 `CLAUDE_CODE_SAFE_MODE` 或 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 时改用今天的全套设置 hook。版本未知、Windows 与执行主机一律是全套设置 hook。
 
 冻结的计划只存 agent id 与 argv，启动器路径在执行时由 core 现取，不进计划。用户在节点里退出 CLI 后手敲 `claude`，命中节点终端 `PATH` 最前面的同名垫片 `shims/<cli>`，它摘掉自己的目录后委托给启动器（尽力而为：rc 整条重设 `PATH` 时不注入）。
 

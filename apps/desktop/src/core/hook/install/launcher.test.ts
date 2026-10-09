@@ -241,7 +241,7 @@ describe.runIf(posixOnly)("the launcher, run by /bin/sh", () => {
  * 执行主机那份（docs/design/canvas-launcher.md §6.2）：同一个生成器，垫片委托
  * 给 `run/<cli>`，启动器里是远端路径；没有任何一份去碰 Codex 的信任。
  */
-describe("the environment fallback (contract §55)", () => {
+describe("the environment fallback (contract §57)", () => {
   const FALLBACK = [
     "--settings",
     "/data/settings.json",

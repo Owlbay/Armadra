@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * The Claude Code mod with a real Claude Code (contract §55, docs/design/claude-mods.md §10.3).
+ * The Claude Code mod with a real Claude Code (contract §57, docs/design/claude-mods.md §10.3).
  *
  * Starts a real core (temporary data directory, temporary HOME and
  * CLAUDE_CONFIG_DIR, `ARMADRA_NO_GLOBAL_WRITES=1`) with the Claude under test

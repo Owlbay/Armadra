@@ -740,7 +740,7 @@ describe("ama's injection (coordinator-agent §2.4)", () => {
   });
 });
 
-describe("Claude's mod (contract §55)", () => {
+describe("Claude's mod (contract §57)", () => {
   function modArgs(layout: ReturnType<typeof artifactLayout>) {
     return [
       "--settings",

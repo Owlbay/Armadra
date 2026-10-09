@@ -22,7 +22,7 @@ export const SKILLS_REVISION = 18;
 
 /**
  * The revision of the Claude Code mod (`<data>/integration/claude/mod/`,
- * contract §55): the generated hooks module, its manifest and the
+ * contract §57): the generated hooks module, its manifest and the
  * PermissionRequest-only settings beside it. Bump it whenever the generated
  * source changes, so a launcher written for the old module is not trusted.
  */
@@ -31,7 +31,7 @@ export const MOD_REVISION = 1;
 /**
  * One number for "is this CLI integrated, and is it current" — the hook
  * revision, the mod revision and the skill revision folded together
- * (docs/design/agent-integration.md §2, contract §55).
+ * (docs/design/agent-integration.md §2, contract §57).
  *
  * Hook, mod and skill are one install unit, so they have one staleness
  * question. The composition is positional rather than a sum so that a report

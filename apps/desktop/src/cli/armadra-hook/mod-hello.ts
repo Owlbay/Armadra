@@ -1,6 +1,6 @@
 /**
  * `armadra-hook mod-hello` — the Claude Code mod's hello when the host
- * refused the mod's own fetch (contract §55.3). Internal: only the mod runs
+ * refused the mod's own fetch (contract §57.3). Internal: only the mod runs
  * it, with the hello's JSON on stdin.
  *
  * Hook mode's rules: it never prints, always exits 0, and gives up quietly —

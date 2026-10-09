@@ -433,7 +433,7 @@ describe("canvasAgents", () => {
   );
 });
 
-describe("the Claude mod in the integration state (contract §55.5)", () => {
+describe("the Claude mod in the integration state (contract §57.5)", () => {
   const windows = process.platform === "win32";
 
   it("reports the gate, its reason and the hellos heard", () => {

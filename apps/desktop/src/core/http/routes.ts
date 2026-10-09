@@ -1242,14 +1242,14 @@ export const ROUTES: readonly RouteEntry[] = [
     implemented: true,
   },
   {
-    // 契约 §55.3：Claude Code mod 的 hello。只在本机 hook 通道上，节点 token 必须验过。
+    // 契约 §57.3：Claude Code mod 的 hello。只在本机 hook 通道上，节点 token 必须验过。
     path: "/node/mod",
     methods: ["POST"],
     surface: "hook",
     implemented: true,
   },
   {
-    // 契约 §55.4（M2）：mod 的横条读的计数。表里有、这一版答 501。
+    // 契约 §57.4（M2）：mod 的横条读的计数。表里有、这一版答 501。
     path: "/node/overlay",
     methods: ["GET"],
     surface: "hook",

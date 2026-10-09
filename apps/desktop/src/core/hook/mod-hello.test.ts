@@ -4,7 +4,7 @@ import { MAX_MOD_HELLOS, type ModHello } from "./service";
 import { parseModHello } from "./mod-hello";
 
 /**
- * `POST /node/mod` (contract §55.3): the hello a Claude Code mod sends when it
+ * `POST /node/mod` (contract §57.3): the hello a Claude Code mod sends when it
  * loaded. Bearer and a verified node token; kept in memory, one per node.
  */
 

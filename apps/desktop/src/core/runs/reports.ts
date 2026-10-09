@@ -56,7 +56,7 @@ const U64 = 0xffff_ffff_ffff_ffffn;
 
 /**
  * Allocates the next `sourceRevision` of a terminal session's generation on
- * behalf of a client that cannot (contract §55.2): the Claude Code mod reports
+ * behalf of a client that cannot (contract §57.2): the Claude Code mod reports
  * with a binding that names the session and generation only, its runtime
  * having no way to write the 16-byte counter. Same file, same format, same
  * `<file>.lock` sidecar as the hook client's `nextRevision`

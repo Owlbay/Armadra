@@ -664,7 +664,7 @@ describe("a report from another CLI than the node's", () => {
 
 type AnyStatus = Record<string, unknown>;
 
-describe("a terminalBinding without a sourceRevision (contract §55.2)", () => {
+describe("a terminalBinding without a sourceRevision (contract §57.2)", () => {
   const counter = (it_: HookFixture, sessionId: string, generation: number) => {
     const bytes = readFileSync(
       join(

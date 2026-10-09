@@ -85,7 +85,7 @@ export class HookServer {
       );
     });
 
-    // Contract §55.3: a Claude Code mod says it loaded.
+    // Contract §57.3: a Claude Code mod says it loaded.
     this.router.handle("POST", "/node/mod", (_match, request) => {
       const refusal = this.requireBearer(request);
       if (refusal !== undefined) return refusal;

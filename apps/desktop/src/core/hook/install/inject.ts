@@ -123,7 +123,7 @@ export interface ArtifactLayout {
   readonly settings?: string;
   /**
    * Claude's `--settings` file when the mod is loaded: PermissionRequest
-   * alone, the mod carries every other event (contract §55).
+   * alone, the mod carries every other event (contract §57).
    */
   readonly settingsPermission?: string;
   /** Claude's second `--plugin-dir`: the mod `armadra-mod`. */
@@ -715,7 +715,7 @@ export function codexArgs(
 /**
  * The first Claude Code whose `classic.*` events carry the settings hooks'
  * stdin shape (2.1.293 fixed them; 2.1.287–2.1.292 load mods but hand
- * `classic.PreToolUse` another shape). Contract §55.
+ * `classic.PreToolUse` another shape). Contract §57.
  */
 export const CLAUDE_MODS_MIN = "2.1.293";
 
@@ -1161,7 +1161,7 @@ export function removeInjection(
 
 /**
  * Takes the Claude mod's folder away so the next prepare writes it afresh:
- * what every core start does (contract §55). Claude Code 2.1.287–2.1.294
+ * what every core start does (contract §57). Claude Code 2.1.287–2.1.294
  * writes `tsconfig.json` and `.claude-plugin/types/` into a `--plugin-dir`
  * at every load, the connected MCP tools' names among them; a start leaves
  * none of that behind. Between starts the folder is only byte-compared:
@@ -1192,7 +1192,7 @@ export interface InjectionRequest {
    */
   readonly codexVersion?: string | null;
   /**
-   * Claude Code's version, for the mod gate (contract §55). The cached probe
+   * Claude Code's version, for the mod gate (contract §57). The cached probe
    * when absent; `null` = unknown, which keeps the mod off.
    */
   readonly claudeVersion?: string | null;
@@ -1284,7 +1284,7 @@ export function injectionFromLayout(
   options: {
     readonly codexHooks?: boolean;
     /**
-     * Whether Claude gets the mod (contract §55): the PermissionRequest-only
+     * Whether Claude gets the mod (contract §57): the PermissionRequest-only
      * settings and a second `--plugin-dir`, with the full settings hooks as
      * the launcher's environment fallback. Off when absent.
      */

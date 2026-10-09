@@ -161,7 +161,7 @@ describe.skipIf(!haveClient() || process.platform === "win32")(
       expect(seen).toEqual(["list:true"]);
     });
 
-    it("carries the mod's hello when the mod's own fetch was refused (§55.3)", async () => {
+    it("carries the mod's hello when the mod's own fetch was refused (§57.3)", async () => {
       const one = await fixture();
       one.service.issueNodeToken(one.nodeId);
       const answer = await run(
