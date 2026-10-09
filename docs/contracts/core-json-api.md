@@ -3436,10 +3436,11 @@ core 校验远程服务地址与指纹的写法时用具名码（状态均 400�
 
 <!-- rpc:begin contract=§43.8 -->
 
-| procedure                       | kind     | input                  | output                  | errors                                           | scope         | 自   | 原路径                               |
-| ------------------------------- | -------- | ---------------------- | ----------------------- | ------------------------------------------------ | ------------- | ---- | ------------------------------------ |
-| `diagnostics.clientErrorStatus` | query    | 可省 `{}`              | `{ enabled: boolean }`  | `unauthenticated`                                | `canvas:read` | 1.14 | `GET /api/diagnostics/client-error`  |
-| `diagnostics.reportClientError` | mutation | `Record<string, JSON>` | `{ accepted: boolean }` | `bad_request`、`unauthenticated`、`rate_limited` | `canvas:read` | 1.14 | `POST /api/diagnostics/client-error` |
+| procedure                       | kind     | input                  | output                                                                                                                                                                                                                                                                                  | errors                                           | scope         | 自   | 原路径                               |
+| ------------------------------- | -------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | ------------- | ---- | ------------------------------------ |
+| `diagnostics.clientErrorStatus` | query    | 可省 `{}`              | `{ enabled: boolean }`                                                                                                                                                                                                                                                                  | `unauthenticated`                                | `canvas:read` | 1.14 | `GET /api/diagnostics/client-error`  |
+| `diagnostics.reportClientError` | mutation | `Record<string, JSON>` | `{ accepted: boolean }`                                                                                                                                                                                                                                                                 | `bad_request`、`unauthenticated`、`rate_limited` | `canvas:read` | 1.14 | `POST /api/diagnostics/client-error` |
+| `diagnostics.runtime`           | query    | 可省 `{}`              | `{ eventLoop: { windowMs: number, p50Ms: number, p99Ms: number, maxMs: number }, sampling: { intervalMs: number, inFlight: boolean, rounds: integer, lastRoundMs: number \| null, maxRoundMs: number \| null, overlapsSkipped: integer, timeouts: {…}, lastRoundAt: string \| null } }` | `unauthenticated`、`not_found`                   | `canvas:read` | 1.26 | `GET /api/diagnostics/runtime`       |
 
 <!-- rpc:end -->
 
@@ -3618,7 +3619,7 @@ human initiator。页面不接收任何 controller 凭据；body owner/controlle
 
 自协议 1.25 起。终端里的程序可以经 pty 自报状态：Program Status Protocol（OSC 7501，规范修订 0.3，2026-10-07）与 OSC 9;4 进度。core 在程序输出这一侧解析（离屏、页面没挂终端表面时也一样），把一个终端的所有记录归约成一条摘要，广播给工作空间；页面的 xterm 只把这两种序列吞掉，不回应。实现在 `core/terminal/program-status.ts`（扫描、解析、记录）、`core/terminal/program-status-book.ts`（每会话一份、回应查询、节流）、`core/terminal/tmux/program-tap.ts`（tmux 的读取）与各后端的 `programTap`。
 
-- **读到哪里的字节**：`direct` 是 pty 的每一次读。`tmux` 会吞掉它不认识的 OSC，所以 core 对每个会话跑 `pipe-pane -O`，把 pane 收到的原始字节 `cat` 进数据目录下 `program-taps/<会话名>.fifo`（目录 0700、FIFO 0600），重启后 adopt 时重建；只动 core 自己的 tmux 服务器，不碰 `~/.tmux.conf`。程序自己用 DCS 透传包起来的（`ESC P tmux; … ESC \`）同样认。`sessionHost` 只在有附着时读得到（伪控制台归会话宿主），回放帧不算。SSH 终端里远端程序的序列随 ssh 输出一起到。
+- **读到哪里的字节**：`direct` 是 pty 的每一次读。`tmux` 会吞掉它不认识的 OSC，所以 core 对每个 Agent 会话（自 1.26 起只对 Agent 会话，见 §54）跑 `pipe-pane -O`，把 pane 收到的原始字节 `cat` 进数据目录下 `program-taps/<会话名>.fifo`（目录 0700、FIFO 0600），重启后 adopt 时重建；只动 core 自己的 tmux 服务器，不碰 `~/.tmux.conf`。程序自己用 DCS 透传包起来的（`ESC P tmux; … ESC \`）同样认。`sessionHost` 只在有附着时读得到（伪控制台归会话宿主），回放帧不算。SSH 终端里远端程序的序列随 ssh 输出一起到。
 - **解析**：照规范。终止符 BEL 或 `ESC \`；整条超过 4096 字节丢弃；坏键值对跳过、未知键忽略、重复键后者为准；`state` 缺失或不认识、`id` 不合法时整条忽略；`kind` / `progress` / `app` 不合法当作缺席；`msg` / `title` 超限、base64 解不开或解出控制字符时整条丢弃。每条报告整条替换它的记录；`clear` 删掉自己与子记录，不带 `id` 清空；每终端最多 256 条，超出淘汰最久没更新的。进程退出与 OSC 133;A（新提示符）丢掉 `working` / `blocked` / `idle`，`done` / `error` 留下；RIS（`ESC c`）清空。OSC 9;4（`st` 0 移除、1 进度、2 出错、3 不定、4 暂停按在跑）映射到根记录，收到第一条 OSC 7501 之后不再映射，RIS 后恢复。
 - **查询**：程序发 `OSC 7501 ; ?` 时 core 往它的输入里写同样的 `ESC ] 7501 ; ? ESC \`（tmux 经 `send-keys -H` 直达 pane，不经客户端；每会话 250 ms 最多一次）。direct 下回应先于页面对 DA1 的回答，所以先发查询、再发 DA1 当哨兵的程序会认出支持；tmux 自己即刻回答 DA1，这类程序在 tmux 后端下仍会判为不支持，只有不靠 DA1 哨兵、或自己按 tmux 透传包查询的程序才收得到回应。
 - **摘要**：一个终端所有记录里最急的那一条：`blocked` > `error` > `working` > `done` > `idle`，同级取最近更新的；`app` 缺席时继承最近的祖先记录。
@@ -3627,3 +3628,34 @@ human initiator。页面不接收任何 controller 凭据；body owner/controlle
 - **不外传、不作判据**：`msg` 与 `title` 是终端输出的正文，只按规范校验，不保存、不进事件、不进日志。程序自报谁都能伪造（`cat` 一个文件就够），所以它不写 `agent_status`，不满足任何空闲门、投递门、交接门或调度门；节点状态的来源仍是 Hook / 扩展 / ACP（§39.2）。
 - **页面合并**：Agent 节点有一条本进程内的上报（来源 `hook` / `extension` / `acp`，不是 `restored`）时上报说了算，程序自报只在两边都是「在跑」时补一个进度百分比；没有上报（普通终端、没装适配器的 CLI、重启后读回来的旧行）时程序自报画节点头的胶囊与光晕、小地图描边，并在窗口不在前台时按「需要你」/「已完成」提醒（各自 5 s 节流）。`done` / `error` 的光晕在用户看过节点后收起。节点头的来源点在程序自报时是 `program`。
 - 没有新 procedure，不写数据库迁移。
+
+## 54. Runtime 的健康数字：`GET /api/diagnostics/runtime` 与资源采样的异步化
+
+自协议 1.26 起。资源采样（§27.4、面板的 `resource.sample`）以前每一拍同步跑 `ps`、`tmux list-panes` 与三个平台探针，每个工作空间各跑一遍，Runtime 主线程因此每秒被挡 40–55 ms。这一版把它改成异步、有期限、一轮一张表，并让 core 自己报事件循环延迟与采样计数（打包版也量得到）。实现在 `core/resources/{sample,sessions,platform-probe,service,metrics}.ts` 与 `core/diagnostics/routes.ts`。
+
+- **路由** `GET /api/diagnostics/runtime`，同时是 procedure `diagnostics.runtime`（§43.8 的表）。门同 §30：登录即可（`SELF_GUARDED`，声明 `canvas:read`），桌面壳的本机请求算 owner，服务器壳的匿名主体 `401`。资源域没有装配时 `404 not_found`。
+- **形状**（只有数字与时间戳，没有命令行、路径、进程名）：
+
+```json
+{
+  "eventLoop": { "windowMs": 60000, "p50Ms": 1.2, "p99Ms": 8.4, "maxMs": 23.1 },
+  "sampling": {
+    "intervalMs": 2000,
+    "inFlight": false,
+    "rounds": 1310,
+    "lastRoundMs": 84,
+    "maxRoundMs": 212,
+    "overlapsSkipped": 0,
+    "timeouts": { "ps": 0, "tmux": 0, "probe": 1 },
+    "lastRoundAt": "2026-10-09T10:00:00.000Z"
+  }
+}
+```
+
+- **`eventLoop`**：`monitorEventLoopDelay`（10 ms 采样间隔，只报超出间隔的那一段，即被挡住的毫秒数），两段各 30 s 轮换，读数合并上一段与当前段：`maxMs`、`p99Ms` 取两段较大的，`p50Ms` 取样本多的那段。还没有样本时三项都是 `0`。p99 连续 3 轮采样超过 200 ms 时 core 记一条只有数字的 `warn` 日志，回落后才会再记。
+- **`sampling`**：`intervalMs` 是采样循环此刻的节奏（没有订阅时是设置值）；`inFlight` 有一轮正在读；`rounds` 成功完成的轮数；`lastRoundMs` / `maxRoundMs`（最近 60 轮）一轮从发起到表读回的毫秒数，还没有完成过时是 `null`；`overlapsSkipped` 上一拍没走完时被跳过的拍数；`timeouts` 各外部命令超时的次数；`lastRoundAt` 最近一轮 `ps` 读回的时刻。
+- **一轮一张表**：一拍只跑一次 `ps` 与一次 `tmux list-panes`，所有在看的工作空间共用；CPU% 的分母（距上一轮的毫秒数）只算一次，第 2 个以后的工作空间不再拿一个约 100 ms 的基线。下一拍在这一拍走完之后才挂。`GET /api/workspaces/{id}/resources` 与 §27.4 的阈值慢轮搭正在进行、或 500 ms 内刚完成的那一轮，不另起 `ps`。快照的 `sampledAt` 是 `ps` 读回的时刻。
+- **期限**：`ps` 与 `tmux` 各 1.5 s，平台探针 2 s，超时的子进程被 `SIGKILL`。`ps` 或 `tmux` 超时这一轮作废：不发 `resource.sample`（面板留着上一帧），`GET …/resources` 答 `503 resources_unavailable`；CPU 基线留着，过期仍按 60 s 的规矩。
+- **低频探针**：内存压力 10 s、交换区 30 s、电源 60 s 缓存；过期时先交出旧值、后台刷新，一轮永远不等探针；从来没有值时是 `null`（规矩不变）。
+- **程序状态的 tap 按需**（§53）：tmux 后端只给 Agent 会话（环境里有 `ARMADRA_AGENT_ID`）开 `pipe-pane` 的 `cat`；重启后接管时读会话自己的环境判断。普通 shell 不再有 tmux 下的程序自报状态（direct 后端照旧，每一次读都解析）。
+- `ResourceSnapshot` 形状不变；没有新设置项，不写数据库迁移。远端主机的 worker（`remote/resources-worker.ts`，另一个进程）仍用同步采样。

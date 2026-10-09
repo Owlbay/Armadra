@@ -1,5 +1,6 @@
 /**
- * 诊断域：页面错误上报（G5 计划 §3 G5-19，契约 §30）。崩溃剥离规则在
+ * 诊断域：页面错误上报（G5 计划 §3 G5-19，契约 §30）与 Runtime 的健康数字
+ * （`GET /api/diagnostics/runtime`，契约 §54；数字由资源域的 `metrics.ts` 记）。崩溃剥离规则在
  * `crash.ts`，请求体与限流在 `client-report.ts`，路由在 `routes.ts`。
  *
  * 边界：
@@ -19,6 +20,7 @@ import { completionSettings } from "../settings/schema";
 import { ClientReports } from "./client-report";
 import { parseDsn, scrubContext } from "./crash";
 import { installRoutes } from "./routes";
+import { resourceDomain } from "../resources";
 
 /**
  * 收不收：设置打开，且壳答「在发」；壳不回答（桌面壳的 core）就看设置里的 DSN
@@ -50,5 +52,6 @@ export function install(context: CoreContext): void {
     report: (error) => reportError(platform, error, { source: "page" }),
     scrub: () => scrub,
   });
-  installRoutes(context.server, reports);
+  // Runtime 的健康数字（契约 §54）由资源域记；按请求时取，不管两个域谁先装。
+  installRoutes(context.server, reports, () => resourceDomain()?.runtime());
 }

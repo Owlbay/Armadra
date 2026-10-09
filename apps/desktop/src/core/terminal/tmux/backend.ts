@@ -42,6 +42,17 @@ import {
 import { detect, ensureConf } from "./config";
 import { TmuxProgramTap } from "./program-tap";
 
+/** The variable an agent terminal carries (`terminal/environment.ts`). */
+const AGENT_ENV = "ARMADRA_AGENT_ID";
+
+/**
+ * Whether a session gets a program tap: it runs an agent (contract §54). A
+ * plain shell keeps no `cat` and costs no second read of its output.
+ */
+export function wantsTap(env: readonly (readonly [string, string])[]): boolean {
+  return env.some(([key, value]) => key === AGENT_ENV && value !== "");
+}
+
 /**
  * The primary backend: a private tmux server (contract §15.3).
  *
@@ -75,6 +86,8 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
   readonly kind: BackendKind = "tmux";
   private readonly control: TmuxControl;
   private readonly sessions = new Map<SessionKey, TmuxSession>();
+  /** tmux 会话名 → key：tap 的每一块输出按名字找会话，不再线性扫表。 */
+  private readonly byName = new Map<string, SessionKey>();
   private readonly sinks: ((notice: BackendNotice) => void)[] = [];
   private nextClientId = 1;
   private readonly options: TmuxBackendOptions;
@@ -109,17 +122,24 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
       directory: join(options.dataDir, "program-taps"),
       control: this.control,
       deliver: (name, chunk) => {
-        for (const [key, session] of this.sessions) {
-          if (session.name !== name) continue;
-          for (const listener of this.programListeners)
-            listener(key, session.generation, chunk);
-          return;
-        }
+        const key = this.byName.get(name);
+        const session = key === undefined ? undefined : this.sessions.get(key);
+        if (key === undefined || session?.name !== name) return;
+        for (const listener of this.programListeners)
+          listener(key, session.generation, chunk);
       },
     });
   }
 
-  /** Starts the program tap; a failure only costs the status channel. */
+  /**
+   * Starts the program tap; a failure only costs the status channel.
+   *
+   * Only for an agent session (contract §54, on-demand tap): every tap is one
+   * `cat` and one fd per session, and core reads all of the pane's output a
+   * second time. A plain shell is not expected to report a status; an agent
+   * CLI is. The rule lives in {@link wantsTap} so it can be widened in one
+   * place.
+   */
   private async startTap(name: string): Promise<void> {
     try {
       await this.tap.start(name);
@@ -185,13 +205,13 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
     await this.pinWindow(name);
     await this.control.stampServer(coreFingerprint(this.options.version));
 
-    this.sessions.set(spec.sessionKey, {
+    this.track(spec.sessionKey, {
       name,
       generation: spec.generation,
       clients: new Map(),
       inCopyMode: false,
     });
-    await this.startTap(name);
+    if (wantsTap(spec.env)) await this.startTap(name);
     const pid = await this.control.panePid(name);
     return {
       sessionKey: spec.sessionKey,
@@ -211,7 +231,7 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
     name: string,
     generation: number,
   ): Promise<number | undefined> {
-    this.sessions.set(key, {
+    this.track(key, {
       name,
       generation,
       clients: new Map(),
@@ -219,8 +239,42 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
     });
     // A session from an older build still follows its latest client.
     await this.pinWindow(name);
-    await this.startTap(name);
+    // The spec is gone after a restart; the session's own environment (set by
+    // `new-session -e`) still says whether it runs an agent.
+    if (await this.adoptedWantsTap(name)) await this.startTap(name);
     return this.control.panePid(name);
+  }
+
+  private track(key: SessionKey, session: TmuxSession): void {
+    const previous = this.sessions.get(key);
+    if (previous !== undefined) this.byName.delete(previous.name);
+    this.sessions.set(key, session);
+    this.byName.set(session.name, key);
+  }
+
+  private untrack(key: SessionKey): void {
+    const session = this.sessions.get(key);
+    if (session !== undefined && this.byName.get(session.name) === key) {
+      this.byName.delete(session.name);
+    }
+    this.sessions.delete(key);
+  }
+
+  private async adoptedWantsTap(name: string): Promise<boolean> {
+    const output = await this.control.tryRun([
+      "show-environment",
+      "-t",
+      name,
+      AGENT_ENV,
+    ]);
+    if (output === undefined) return false;
+    return wantsTap(
+      output
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith(`${AGENT_ENV}=`))
+        .map((line) => [AGENT_ENV, line.slice(AGENT_ENV.length + 1)] as const),
+    );
   }
 
   /**
@@ -330,7 +384,7 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
       // showing ended — only the second case is an exit.
       void this.control.hasSession(session.name).then((alive) => {
         if (alive) return;
-        this.sessions.delete(key);
+        this.untrack(key);
         this.tap.stop(session.name);
         for (const listener of exitListeners) listener(undefined);
         this.announce({
@@ -514,7 +568,7 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
     }
     session.clients.clear();
     await this.control.tryRun(["kill-session", "-t", session.name]);
-    this.sessions.delete(key);
+    this.untrack(key);
     this.tap.stop(session.name);
   }
 

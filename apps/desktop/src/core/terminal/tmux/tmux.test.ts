@@ -28,7 +28,7 @@ import {
   parseAliveLine,
   pastePlan,
 } from "./control";
-import { TmuxBackend } from "./backend";
+import { TmuxBackend, wantsTap } from "./backend";
 
 /**
  * The tmux backend's specification, ported one for one from
@@ -300,6 +300,15 @@ describe("isolation", () => {
   });
 });
 
+describe("on-demand program tap", () => {
+  it("is wanted for an agent session only", () => {
+    expect(wantsTap([["ARMADRA_AGENT_ID", "claude"]])).toBe(true);
+    expect(wantsTap([["ARMADRA_AGENT_ID", ""]])).toBe(false);
+    expect(wantsTap([["ARMADRA_NODE_ID", "n-1"]])).toBe(false);
+    expect(wantsTap([])).toBe(false);
+  });
+});
+
 /* -------------------------- a real tmux server ---------------------------- */
 
 const tmuxAvailable = detect().usable;
@@ -427,7 +436,7 @@ describe.skipIf(!tmuxAvailable)("against a real tmux", () => {
       cwd: directory,
       shell: "/bin/sh",
       args: [],
-      env: [],
+      env: [["ARMADRA_AGENT_ID", "claude"]],
       size: { cols: 80, rows: 24 },
     });
     const name = handle.backendRef!;
@@ -467,6 +476,49 @@ describe.skipIf(!tmuxAvailable)("against a real tmux", () => {
     expect(existsSync(fifo)).toBe(false);
   }, 30_000);
 
+  it("taps only agent sessions: a plain shell gets no cat, also after adopt", async () => {
+    const directory = tempDir();
+    const first = new TmuxBackend({ dataDir: directory, version: "test" });
+    const key = sessionKey("program-plain");
+    const handle = await first.create({
+      sessionKey: key,
+      workspaceId: "program-plain-workspace",
+      generation: 1,
+      cwd: directory,
+      shell: "/bin/sh",
+      args: [],
+      env: [],
+      size: { cols: 80, rows: 24 },
+    });
+    const name = handle.backendRef!;
+    const fifo = join(directory, "program-taps", `${name}.fifo`);
+    const piped = () =>
+      execFileSync(
+        "tmux",
+        [
+          "-S",
+          first.socket,
+          "display-message",
+          "-p",
+          "-t",
+          name,
+          "#{pane_pipe}",
+        ],
+        {
+          encoding: "utf8",
+          env: { ...process.env, PATH: agentPath(process.env) },
+        },
+      ).trim();
+    expect(existsSync(fifo)).toBe(false);
+    expect(piped()).toBe("0");
+    await first.detachAll();
+    const second = new TmuxBackend({ dataDir: directory, version: "test" });
+    await second.adopt(key, name, 1);
+    expect(existsSync(fifo)).toBe(false);
+    expect(piped()).toBe("0");
+    await second.terminate(key, "session");
+  }, 30_000);
+
   it("re-taps a session it adopts after a restart", async () => {
     const directory = tempDir();
     const first = new TmuxBackend({ dataDir: directory, version: "test" });
@@ -478,7 +530,7 @@ describe.skipIf(!tmuxAvailable)("against a real tmux", () => {
       cwd: directory,
       shell: "/bin/sh",
       args: [],
-      env: [],
+      env: [["ARMADRA_AGENT_ID", "codex"]],
       size: { cols: 80, rows: 24 },
     });
     await first.detachAll();

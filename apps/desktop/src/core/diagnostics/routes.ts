@@ -10,6 +10,7 @@ import { type DomainHandlers, registerProcedures } from "../http/rpc";
 import type { CoreServer } from "../http/server";
 import { requestIdentity } from "../identity/gate";
 import type { ClientReports } from "./client-report";
+import type { RuntimeReport } from "../resources/metrics";
 
 /**
  * `/api/diagnostics/client-error`（契约 §30）。
@@ -22,6 +23,9 @@ import type { ClientReports } from "./client-report";
  *   * `POST`：一条 `{ kind, name, message, stack }`；关着答 `{ accepted: false }`，
  *     不看请求体。
  *
+ * `/api/diagnostics/runtime`（契约 §54）同一道门：`GET` 答事件循环延迟与资源采样
+ * 计数，只有数字与时间戳。
+ *
  * 两个动作收成一份操作（{@link operations}），旧路径的 handler 与
  * `registerProcedures(server, "diagnostics", …)`（契约 §43.8）调同一份，拒绝都是
  * {@link CoreFailure}：码、状态与原话一样；限流的重试秒数在 `details`，HTTP 上
@@ -30,6 +34,11 @@ import type { ClientReports } from "./client-report";
  */
 
 export const CLIENT_ERROR_ROUTE = "/api/diagnostics/client-error";
+/** Runtime 的健康数字（契约 §54）。 */
+export const RUNTIME_ROUTE = "/api/diagnostics/runtime";
+
+/** 读 Runtime 的健康数字；资源域没装时是 `undefined`。 */
+export type RuntimeSource = () => RuntimeReport | undefined;
 
 /** 限流按谁算：设备优先，其次 principal；本机 owner 是固定的一只桶。 */
 function caller(): string {
@@ -46,8 +55,17 @@ function caller(): string {
 }
 
 /** 页面错误上报的操作：旧路径与 procedure 共用；拒绝抛 {@link CoreFailure}。 */
-function operations(reports: ClientReports) {
+function operations(reports: ClientReports, runtimeSource: RuntimeSource) {
   return {
+    /** 契约 §54：登录即可；只有数字与时间戳。 */
+    runtime: (): RuntimeReport => {
+      caller();
+      const report = runtimeSource();
+      if (report === undefined) {
+        throw fail("not_found", "资源采样没有装配");
+      }
+      return report;
+    },
     status: () => {
       caller();
       return { enabled: reports.enabled() };
@@ -82,9 +100,18 @@ function failed(error: unknown): HandlerResult {
 export function installRoutes(
   server: CoreServer,
   reports: ClientReports,
+  runtime: RuntimeSource = () => undefined,
 ): void {
   const { router } = server;
-  const run = operations(reports);
+  const run = operations(reports, runtime);
+
+  router.handle("GET", RUNTIME_ROUTE, () => {
+    try {
+      return { status: 200, body: run.runtime() };
+    } catch (error) {
+      return failed(error);
+    }
+  });
 
   router.handle("GET", CLIENT_ERROR_ROUTE, () => {
     try {
@@ -107,5 +134,6 @@ export function installRoutes(
   registerProcedures(server, "diagnostics", {
     clientErrorStatus: () => run.status(),
     reportClientError: (input) => run.report(() => input),
+    runtime: () => run.runtime(),
   } satisfies DomainHandlers<"diagnostics">);
 }

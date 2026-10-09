@@ -56,6 +56,11 @@ const onNotificationClick = subscribe<[{ nodeId: string }]>(
   IPC.windowNotificationClick.channel,
 );
 const onJoinLinkPending = subscribe<[]>(IPC.sourcesJoinLink.channel);
+const onMemoryPressure = subscribe<[{ level: MemoryPressureLevel }]>(
+  IPC.memoryPressure.channel,
+);
+
+type MemoryPressureLevel = "normal" | "warning" | "critical";
 
 export interface ArmadraDesktopApi {
   readonly transport: {
@@ -177,6 +182,15 @@ export interface ArmadraDesktopApi {
     }): Promise<{ accepted: boolean }>;
   };
   /**
+   * 系统内存压力等级变了（`memory:pressure`）：只在变化时推，页面重载后补一次
+   * 非 normal 的当前档。
+   */
+  readonly memory: {
+    onPressure(
+      listener: (event: { level: MemoryPressureLevel }) => void,
+    ): () => void;
+  };
+  /**
    * The absolute path of a dropped or picked `File`. The page hands the path
    * to the Runtime, which is the process allowed to read it; the bytes never
    * travel through the renderer. Replaces the Rust shell's drag-drop event, and is
@@ -263,6 +277,9 @@ const api: ArmadraDesktopApi = {
   diagnostics: {
     report: (report) =>
       ipcRenderer.invoke(IPC.diagnosticsReport.channel, report),
+  },
+  memory: {
+    onPressure: (listener) => onMemoryPressure(listener),
   },
   pathForFile: (file) => webUtils.getPathForFile(file),
 };

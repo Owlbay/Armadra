@@ -1,7 +1,7 @@
 {
   "info": {
     "title": "Armadra core",
-    "version": "1.21",
+    "version": "1.26",
     "description": "契约 procedure 的入参与出参（docs/contracts/core-json-api.md §34）。线上是 `POST /api/rpc/<域>/<动词>`，体按 `{ json }` 编码，下列 schema 是 `json` 那一格；失败一律是 `CoreError`。由 tools/contract/generate.mjs 生成，不要手改。"
   },
   "openapi": "3.1.1",
@@ -72000,6 +72000,165 @@
             "method": "POST",
             "path": "/api/diagnostics/client-error",
             "successStatus": 202
+          }
+        }
+      }
+    },
+    "/api/rpc/diagnostics/runtime": {
+      "post": {
+        "operationId": "diagnostics.runtime",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "eventLoop": {
+                      "type": "object",
+                      "properties": {
+                        "windowMs": {
+                          "type": "number"
+                        },
+                        "p50Ms": {
+                          "type": "number"
+                        },
+                        "p99Ms": {
+                          "type": "number"
+                        },
+                        "maxMs": {
+                          "type": "number"
+                        }
+                      },
+                      "required": ["windowMs", "p50Ms", "p99Ms", "maxMs"]
+                    },
+                    "sampling": {
+                      "type": "object",
+                      "properties": {
+                        "intervalMs": {
+                          "type": "number"
+                        },
+                        "inFlight": {
+                          "type": "boolean"
+                        },
+                        "rounds": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "lastRoundMs": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "maxRoundMs": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "overlapsSkipped": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "timeouts": {
+                          "type": "object",
+                          "properties": {
+                            "ps": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "tmux": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "probe": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["ps", "tmux", "probe"]
+                        },
+                        "lastRoundAt": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "intervalMs",
+                        "inFlight",
+                        "rounds",
+                        "lastRoundMs",
+                        "maxRoundMs",
+                        "overlapsSkipped",
+                        "timeouts",
+                        "lastRoundAt"
+                      ]
+                    }
+                  },
+                  "required": ["eventLoop", "sampling"]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§43.8",
+          "scope": "canvas:read",
+          "since": "1.26",
+          "legacy": {
+            "method": "GET",
+            "path": "/api/diagnostics/runtime"
           }
         }
       }
