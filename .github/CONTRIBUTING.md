@@ -4,6 +4,19 @@
 
 For the development setup, conventions and check commands, see [AGENTS.md](../AGENTS.md) and the [development guide](../docs/guides/development.md).
 
+## 需求流程 / Workflow
+
+每个需求都按同一条路径推进，结论留在 Issue 里，而不只在聊天或提交信息里。
+
+Every requirement follows the same path, and its conclusions live in the Issue rather than only in chat or commit messages.
+
+1. **建 Issue / Open an Issue**：简单梳理后用对应表单建 Issue，写清背景、目标与范围，标签 `needs-triage`。 / Sort the requirement out briefly and open an Issue with the matching form: background, goals and scope, labelled `needs-triage`.
+2. **完善 Issue 与设计 / Refine the Issue and design**：调研结论与设计方案回填到同一个 Issue（方案、批次、验收标准）；方案较大时写成仓库里的设计文档，Issue 里放链接。方案未定时标 `needs-design`，定下后改为 `ready`。 / Put research findings and the design (approach, batches, acceptance criteria) back into the same Issue; larger designs become a design document in the repository, linked from the Issue. Label `needs-design` while the approach is open and `ready` once it is settled.
+3. **开 PR 实现 / Implement in PRs**：按批次开 PR，正文按模板填写并关联 Issue——中间批次写 `Refs #N`，最后一个写 `Closes #N`；Issue 里的批次清单随 PR 勾选。 / Open one PR per batch, fill in the template and link the Issue — `Refs #N` for intermediate batches, `Closes #N` for the last one; tick the Issue's batch checklist as PRs land.
+4. **合并与收尾 / Merge and close**：CI 全部通过后用 merge commit 合并；全部批次合入后关闭 Issue，并在 Issue 里写一段结果（做了什么、实测数据、遗留项，遗留项另开 Issue）。 / Merge with a merge commit once CI is green; when every batch has landed, close the Issue with a short result (what was done, measurements, leftovers — leftovers get their own Issues).
+
+小修小补（拼写、单行修复）可以直接开 PR，但仍在 PR 里说明来源。 / Trivial fixes (typos, one-line fixes) may go straight to a PR, still stating where they came from.
+
 ## 提交 issue / Opening issues
 
 - 先搜索已有 issue，一个 issue 只写一个问题。 / Search existing issues first; one problem per issue.
