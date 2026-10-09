@@ -37,3 +37,10 @@ docs(status): completion-progress 记包 D 的重跑结果
 - 改了接口要同步 [core JSON 契约](../docs/contracts/core-json-api.md)：已有 §N 不改号，新增节往后加。 / Interface changes must update the [core JSON contract](../docs/contracts/core-json-api.md): keep existing §N numbers and append new sections.
 - 数据库只新增编号迁移并同步 `migrations.lock`，已发布迁移不得修改。 / Only add numbered migrations and update `migrations.lock`; never modify published migrations.
 - 界面文案放进 `apps/web/src/i18n/`，中英同步。 / UI copy goes into `apps/web/src/i18n/`, in both Chinese and English.
+
+## 仓库自动化 / Repository automation
+
+- **路径标签 / Path labels**：`labeler.yml` 按改动路径给 PR 打 `web`、`core`、`desktop`、`server`、`mobile`、`push-relay`、`shared`、`i18n`、`migrations`、`documentation`、`ci`、`dependencies`，映射在 [labeler.yml](labeler.yml)；新增目录时同步映射与标签。 / `labeler.yml` labels PRs by the paths they touch; the mapping lives in [labeler.yml](labeler.yml).
+- **过期 issue / Stale issues**：`stale.yml` 每天把 60 天无活动的 issue 标 `stale`，再 14 天无活动关闭；带 `security`、`ready`、`needs-design` 的不处理，PR 不处理。回复即可重新计时。 / Issues idle for 60 days are marked `stale` and closed 14 days later; `security`, `ready` and `needs-design` issues and all PRs are exempt. Any reply resets the clock.
+- **Codex 审查 / Codex review**：`codex-review.yml` 在非草稿 PR 打开、更新时只读审查，按 [AGENTS.md](../AGENTS.md)「Review guidelines」分级，结果更新在同一条 PR 评论里。它需要仓库 Actions secret `OPENAI_API_KEY`；未配置或来自 fork 的 PR 会跳过，不影响 CI。审查意见供参考，合并前仍需维护者判断。 / `codex-review.yml` reviews non-draft PRs read-only, graded by the AGENTS.md "Review guidelines", and keeps the result in one PR comment. It needs the `OPENAI_API_KEY` Actions secret and is skipped when the secret is missing or the PR comes from a fork.
+- CodeRabbit 已在 [.coderabbit.yaml](../.coderabbit.yaml) 里关闭自动审查。 / CodeRabbit auto-review is turned off in [.coderabbit.yaml](../.coderabbit.yaml).
