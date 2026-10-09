@@ -105,7 +105,11 @@ export async function enterRoute(
   /** 几条并发的 401 只续一次：刷新密钥是一次性的。 */
   const renewActive = (): Promise<boolean> => {
     renewing ??= provider
-      .refresh(descriptor.sourceId, via)
+      .refresh(
+        descriptor.sourceId,
+        via,
+        ...(route.origin === undefined ? [] : [route.origin]),
+      )
       .then(async (next) => {
         access = next;
         scheduleRenewal();
