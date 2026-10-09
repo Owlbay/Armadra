@@ -276,6 +276,38 @@
 }
 
 /*
+ * 缩略图的收起钮（#216）：平时不显示，悬停缩略图（或钮本身）、键盘聚焦时
+ * 才出现在右上角。隐藏时不接指针，那一角照常点得到缩略图；指针一进缩略图
+ * 钮就出现并接指针，指针挪到钮上时由 `.minimap-toggle-panel:hover` 接住。
+ * 触屏没有悬停，常显。收起后的展开钮（`aria-expanded="false"`）始终可见。
+ * `data-reveal` 是展示页定格「悬停时」用的。
+ */
+.canvas-stage .minimap-toggle-panel {
+  pointer-events: none;
+}
+.canvas-stage .minimap-toggle[aria-expanded="true"] {
+  opacity: 0;
+  pointer-events: none;
+}
+.canvas-stage .minimap-toggle[aria-expanded="false"],
+.canvas-stage
+  .react-flow__minimap:hover
+  ~ .minimap-toggle-panel
+  .minimap-toggle,
+.canvas-stage .minimap-toggle-panel:hover .minimap-toggle,
+.canvas-stage .minimap-toggle:focus-visible,
+.canvas-stage .minimap-toggle[data-reveal="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+@media (hover: none), (any-pointer: coarse) {
+  .canvas-stage .minimap-toggle[aria-expanded="true"] {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/*
  * 专注模式（§2.10 的 `focus`）：缩略图与收起钮一起收走，画布上只剩内容
  * 与 Dock（锁定钮现在在 Dock 里，跟着 Dock 留下）。属性由
  * `app/use-canvas-preferences.ts` 写在根元素上。

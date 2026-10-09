@@ -1,8 +1,8 @@
 import { scoped } from "../../sources/scope";
 import * as React from "react";
 import { MiniMap, Panel, useReactFlow, useStore } from "@xyflow/react";
-import type { MiniMapNodeProps } from "@xyflow/react";
-import { ChevronDown, Map } from "lucide-react";
+import type { MiniMapNodeProps, ReactFlowState } from "@xyflow/react";
+import { Map, Minus } from "lucide-react";
 
 import { useAgentStatusStore, type AgentGlow } from "@/agent/status-store";
 import {
@@ -11,11 +11,19 @@ import {
 } from "@/agent/program-status-store";
 import { useMinimapPreferences } from "@/app/minimap-preferences";
 import { useT } from "@/app/preferences-store";
+import { useLayoutDirection } from "@/canvas/layout-direction";
+import { useThrottledValue } from "@/lib/use-throttled-value";
 import { IconButton } from "@/ui/icon-button";
+import type { Box } from "../geometry";
 import { isItemId } from "../whiteboard/model";
 import { useFamilies, type Family } from "../family";
 import type { CanvasFlowEdge, CanvasFlowNode } from "../sync/project";
-import { linkColor } from "./edges/link-visual";
+import {
+  boxesExtent,
+  minimapLinkLayer,
+  MINIMAP_LINK_THROTTLE_MS,
+  type BoxLookup,
+} from "./minimap-links";
 
 /**
  * 状态缩略图（React Flow 计划 F20 / §1.2，归属 B1）。
@@ -30,7 +38,8 @@ import { linkColor } from "./edges/link-visual";
  *
  * 配色（ui-wave2 §5.2）：填充按 `familyOf`——派发簇同色、独立 Agent 标识色、
  * 其他节点按类型；描边仍是三种状态，派发簇成员无状态时描边用簇色。连线也画
- * 进来，和画布上同一套颜色：上下文线 `--link-context`、派发线取主的簇色。
+ * 进来（#216），和画布上同一套锚点、曲线与颜色：上下文线 `--link-context`、
+ * 派发线取主的簇色；按颜色合并成几条 path，见 `minimap-links.ts`。
  *
  * 保留的行为：三种状态描边、点一下定位到那个节点、可收起（收起状态在
  * `app/minimap-preferences.ts`）、位置右下角、离右边与下边各 14px，
@@ -155,9 +164,10 @@ export function MinimapNode({
   selected,
   onClick,
 }: MiniMapNodeProps) {
+  const first = useIsFirstMinimapNode(id);
   return (
     <>
-      <MinimapLinks id={id} x={x} y={y} width={width} height={height} />
+      {first ? <MinimapLinkLayer /> : null}
       <rect
         className={`react-flow__minimap-node${selected ? " selected" : ""} ${className}`}
         x={x}
@@ -178,99 +188,152 @@ export function MinimapNode({
   );
 }
 
-/** 小地图里连线的粗细（屏幕像素，不随缩略图缩放）。 */
-export const MINIMAP_LINK_WIDTH = 1.5;
+/**
+ * 第一个会被画进小地图的节点（不隐藏、量到了尺寸）。连线层挂在它前面，
+ * 于是整层连线只渲染一次，而且压在所有节点矩形下面。
+ */
+export function firstMinimapNodeId(
+  nodes: readonly { id: string; hidden?: boolean }[],
+  boxOf: BoxLookup,
+): string | undefined {
+  for (const node of nodes) {
+    if (!node.hidden && boxOf(node.id)) return node.id;
+  }
+  return undefined;
+}
 
-export interface MinimapLink {
-  key: string;
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-  color: string;
-  role: "context" | "dispatch";
+type NodeLookup = ReactFlowState["nodeLookup"];
+
+/** RF 的绝对矩形；隐藏或没量到尺寸时 `undefined`（与 `<MiniMap>` 的过滤一致）。 */
+function lookupBoxes(lookup: NodeLookup): BoxLookup {
+  return (id) => {
+    const node = lookup.get(id);
+    if (!node || node.hidden) return undefined;
+    const width = node.measured.width ?? node.width ?? node.initialWidth ?? 0;
+    const height =
+      node.measured.height ?? node.height ?? node.initialHeight ?? 0;
+    if (width <= 0 || height <= 0) return undefined;
+    const at = node.internals.positionAbsolute;
+    return { x: at.x, y: at.y, width, height };
+  };
+}
+
+function useIsFirstMinimapNode(id: string): boolean {
+  return useStore(
+    (state: ReactFlowState) =>
+      firstMinimapNodeId(state.nodes, lookupBoxes(state.nodeLookup)) === id,
+  );
 }
 
 /**
- * 从 `sourceId` 出发的上下文连线（`link` 边）→ 小地图里的线段，中心连中心。
- * 内容引用（`reference` 边）不画：它不是 Agent 之间的关系。
+ * 整张画布的连线，按颜色合并成几条 `<path>`（`minimap-links.ts`）。
+ *
+ * 只在节点、边、簇色或布局方向变化时重算；拖动节点时 `nodes` 每帧都变，按
+ * {@link MINIMAP_LINK_THROTTLE_MS} 节流。平移、缩放视口不重算。
  */
-export function minimapLinksFrom(
-  sourceId: string,
-  source: { x: number; y: number; width: number; height: number },
-  edges: readonly CanvasFlowEdge[],
-  boxOf: (
-    id: string,
-  ) => { x: number; y: number; width: number; height: number } | undefined,
-  familyColorOf: (id: string) => string | undefined,
-): MinimapLink[] {
-  const links: MinimapLink[] = [];
-  for (const edge of edges) {
-    if (edge.type !== "link" || edge.source !== sourceId) continue;
-    const target = boxOf(edge.target);
-    if (!target) continue;
-    const supervises = edge.data?.role === "supervises";
-    links.push({
-      key: edge.id,
-      x1: source.x + source.width / 2,
-      y1: source.y + source.height / 2,
-      x2: target.x + target.width / 2,
-      y2: target.y + target.height / 2,
-      color: linkColor({ supervises, familyColor: familyColorOf(sourceId) }),
-      role: supervises ? "dispatch" : "context",
-    });
-  }
-  return links;
-}
-
-/** 一个节点发出去的连线；画在它的矩形下面。 */
-function MinimapLinks({
-  id,
-  x,
-  y,
-  width,
-  height,
-}: Pick<MiniMapNodeProps, "id" | "x" | "y" | "width" | "height">) {
-  // 订阅 `nodes` 只为了在节点移动时重画；坐标从 `nodeLookup` 读绝对位置。
-  useStore((state) => state.nodes);
-  const edges = useStore((state) => state.edges) as CanvasFlowEdge[];
-  const lookup = useStore((state) => state.nodeLookup);
+export function MinimapLinkLayer() {
+  const nodes = useStore((state: ReactFlowState) => state.nodes);
+  const edges = useStore(
+    (state: ReactFlowState) => state.edges,
+  ) as CanvasFlowEdge[];
+  const lookup = useStore((state: ReactFlowState) => state.nodeLookup);
   const families = useFamilies();
-  const links = minimapLinksFrom(
-    id,
-    { x, y, width, height },
-    edges,
-    (target) => {
-      const node = lookup.get(target);
-      if (!node) return undefined;
-      const at = node.internals.positionAbsolute;
-      return {
-        x: at.x,
-        y: at.y,
-        width: node.measured.width ?? node.width ?? 0,
-        height: node.measured.height ?? node.height ?? 0,
-      };
-    },
-    (source) => families.get(source)?.color,
-  );
-  if (links.length === 0) return null;
+  const direction = useLayoutDirection();
+  const settled = useThrottledValue(nodes, MINIMAP_LINK_THROTTLE_MS);
+
+  const layer = React.useMemo(() => {
+    const boxOf = lookupBoxes(lookup);
+    const boxes: Box[] = [];
+    for (const node of settled) {
+      const box = boxOf(node.id);
+      if (box) boxes.push(box);
+    }
+    return minimapLinkLayer(
+      edges,
+      boxOf,
+      (id) => families.get(id)?.color,
+      direction,
+      boxesExtent(boxes),
+    );
+  }, [settled, edges, lookup, families, direction]);
+
+  if (layer.paths.length === 0) return null;
   return (
-    <g data-slot="minimap-links">
-      {links.map((link) => (
-        <line
-          key={link.key}
-          data-role={link.role}
-          x1={link.x1}
-          y1={link.y1}
-          x2={link.x2}
-          y2={link.y2}
-          stroke={link.color}
-          strokeWidth={MINIMAP_LINK_WIDTH}
+    <g data-slot="minimap-links" pointerEvents="none">
+      {layer.paths.map((path) => (
+        <path
+          key={path.color}
+          data-role={path.role}
+          d={path.d}
+          fill="none"
+          stroke={path.color}
+          strokeWidth={layer.width}
           strokeLinecap="round"
           vectorEffect="non-scaling-stroke"
         />
       ))}
     </g>
+  );
+}
+
+/**
+ * 缩略图的收起 / 展开钮（#216）。
+ *
+ * 不进 `<MiniMap>`（它只渲染一张 SVG，没有插槽），所以贴着缩略图右上角单独
+ * 摆一个 Panel（两边的 Panel margin 都归零，数值才是真实边距）。
+ *
+ * 展开时是缩略图右上角里的一个「−」，平时不显示，悬停缩略图或键盘聚焦时才
+ * 出现（`styles/canvas.css`；触屏没有悬停，常显）。收起后 `--minimap-w/h`
+ * 变成 36px（`App` 在 `.workspace-surface` 上写 `data-minimap-collapsed`），
+ * 原地留一个常显的缩略图图标当展开入口。
+ *
+ * `reveal` 只给展示页：把「悬停时」那一刻定格下来。
+ */
+export function MinimapToggle({
+  collapsed,
+  onToggle,
+  reveal = false,
+}: {
+  collapsed: boolean;
+  onToggle: () => void;
+  reveal?: boolean;
+}) {
+  const t = useT();
+  const label = t(
+    collapsed ? "canvas.expandMinimap" : "canvas.collapseMinimap",
+  );
+  return (
+    <Panel
+      position="bottom-right"
+      className="minimap-toggle-panel"
+      style={
+        collapsed
+          ? { margin: 0, right: 14, bottom: "var(--navigation-bottom)" }
+          : {
+              margin: 0,
+              right: 18,
+              bottom:
+                "calc(var(--navigation-bottom) + var(--minimap-h) - 28px)",
+            }
+      }
+    >
+      <IconButton
+        size={collapsed ? "cluster" : "inline"}
+        data-slot="minimap-toggle"
+        data-reveal={reveal ? "true" : undefined}
+        className={
+          collapsed
+            ? "minimap-toggle border border-border bg-[var(--panel)]/90 backdrop-blur-[12px]"
+            : "minimap-toggle bg-[var(--panel)]/90 hover:bg-[var(--hover)] hover:text-foreground"
+        }
+        label={label}
+        title={label}
+        aria-expanded={!collapsed}
+        onClick={onToggle}
+      >
+        {collapsed ? <Map /> : <Minus />}
+      </IconButton>
+    </Panel>
   );
 }
 
@@ -326,10 +389,6 @@ export function Minimap() {
     [flow],
   );
 
-  const toggleLabel = t(
-    collapsed ? "canvas.expandMinimap" : "canvas.collapseMinimap",
-  );
-
   return (
     <>
       {collapsed ? null : (
@@ -345,43 +404,10 @@ export function Minimap() {
           onNodeClick={onNodeClick}
         />
       )}
-      {/*
-       * 收起按钮不进 `<MiniMap>`（它只渲染一张 SVG，没有插槽），所以贴着
-       * 缩略图右上角单独摆一个。
-       *
-       * 用 `<Panel>` 包一层是为了与 `<MiniMap>`（它自己就是一个 Panel）
-       * 用同一个盒模型；两边的 Panel margin 都归零，数值才是真实边距。
-       *
-       * 收起时 `--minimap-w/h` 变成 36px（`App` 在 `.workspace-surface` 上写
-       * `data-minimap-collapsed`），按钮自然落到缩略图原来的位置，用量球也
-       * 跟着挪。
-       */}
-      <Panel
-        position="bottom-right"
-        style={
-          // Panel 自带 15px margin，归零后数值才是离画布边的真实距离。
-          collapsed
-            ? { margin: 0, right: 14, bottom: "var(--navigation-bottom)" }
-            : {
-                margin: 0,
-                right: 18,
-                bottom:
-                  "calc(var(--navigation-bottom) + var(--minimap-h) - 32px)",
-              }
-        }
-      >
-        <IconButton
-          size="cluster"
-          data-slot="minimap-toggle"
-          className="minimap-toggle border border-border bg-[var(--panel)]/90 backdrop-blur-[12px]"
-          label={toggleLabel}
-          title={toggleLabel}
-          aria-expanded={!collapsed}
-          onClick={() => setCollapsed(!collapsed)}
-        >
-          {collapsed ? <Map /> : <ChevronDown />}
-        </IconButton>
-      </Panel>
+      <MinimapToggle
+        collapsed={collapsed}
+        onToggle={() => setCollapsed(!collapsed)}
+      />
     </>
   );
 }
