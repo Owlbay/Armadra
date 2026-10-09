@@ -3725,3 +3725,48 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 接口：
 
 - web：`lifecycle.ts`（`LifecyclePhase`、`detachDelay`、`canDetach` / `canRelease`、`pressureReleases`、`releaseAfterMs`、`OFFSCREEN_DETACH_MS`、`RELEASE_AFTER_OPTIONS`）、`useSurfaceLifecycle`、`flushScheduler` / `createFlushScheduler`、`deliverInput` / `flushPendingInput`、`measurable`（use-refit）、`SurfaceRefs` 新增 `gridRef` / `pendingInputRef` / `reviveRef` / `mountQueueRef` / `flushingRef`、`TerminalPreferences.releaseAfter`（`armadra.terminal.releaseAfter`）、`RenderInputs.webgl`。
+
+## 性能包 P4：渲染器策略与设置页（B1 / E1 / E2，2026-10-09）
+
+做了什么：
+
+- `apps/web/src/app/preferences/terminal.ts`：删除布尔 `webgl`（`armadra.terminal.webgl` 不再读，按设计不做兼容，开过 WebGL 的用户重选一次），新增 `renderer`（`armadra.terminal.renderer`：`dom` / `webgl` / `auto`，缺省 `dom`）与 `repaintThrottle`（`armadra.terminal.repaintThrottle`：`off` / `lowZoom`，缺省 `off`）。
+- `apps/web/src/terminal/renderer-policy.ts`（纯函数）：`dom` 不装 addon；`webgl` 持有名额才装、没名额的可见终端批写（P3 的语义不变）；`auto` 把协调器上限压到 `AUTO_WEBGL_SLOTS = 4`（`syncDocumentPreferences` 里 `effectiveRenderBudget`），焦点不计上限，没名额的可见终端 DOM 直写；`repaintThrottled`：缩放 < 0.5、看得见、没焦点、没装 WebGL 的终端写入合并到 100 ms。
+- `apps/web/src/terminal/surface/use-webgl.ts`：WebGL effect 从 `TerminalSurface.tsx` 整段搬出（丢上下文上报、dispose 前抓 canvas 并 `loseContext` 照旧），返回 addon 是否真的装着；`useLowZoom` 开关关着时不订阅画布 store。`use-render-budget.ts` 加 `writeThrough` / `throttled`，限帧时排进 `flush-scheduler.ts` 新增的 `repaintScheduler`（100 ms），关掉或聚焦时立刻灌完。
+- 终端体加 `data-renderer="dom|webgl"` 与 `data-throttled` 诊断属性。
+- 设置页「终端外观 → 渲染」：渲染器（Select）、渲染名额（只在 `webgl` 档显示）、缩小时限帧重绘（实验，Switch）、离屏多久后释放终端画面（5 分钟 / 10 分钟 / 30 分钟 / 从不，带脚注）；文案在 `apps/web/src/i18n/terminal.ts`，中英同步，删掉 `terminal.settings.webgl`。
+- `docs/design/terminal-host-design.md` 加 §7.6。
+
+实测（macOS arm64，未打包壳，20 个终端各 100 行/s，tmux 后端，画布缩放 0.317；`_shared/perf-diag-20261009/bench/terminal-memory.mjs` 的副本加 `--renderer` / `--throttle` / `--run`，`--off1 60 --off2 180 --cycles 5 --memory-infra`；每档 3 次取中位数；MiB，CPU 为 `top` 的 %）：
+
+| 档位（20 个可见，active） | Renderer | GPU | 整机 | 扣 GPU | `blink_gc` | R CPU | GPU CPU | WebGL 数       |
+| ------------------------- | -------- | --- | ---- | ------ | ---------- | ----- | ------- | -------------- |
+| `dom`                     | 423      | 210 | 836  | 626    | 226        | 19.8  | 12.5    | 0              |
+| `webgl`（名额 16）        | 367      | 420 | 998  | 573    | 135        | 7.5   | 7.4     | 16             |
+| `auto`（4）               | 441      | 258 | 905  | 646    | 224        | 17.4  | 10.9    | 4              |
+| `dom` + `lowZoom`         | 440      | 197 | 841  | 644    | 239        | 20.5  | 3.3     | 0（20 个限帧） |
+
+| 档位（往返 ×10 后 / 强制 GC 后） | Renderer  | GPU       | 整机      | `blink_gc` | R CPU       |
+| -------------------------------- | --------- | --------- | --------- | ---------- | ----------- |
+| `dom`                            | 413 / 338 | 204 / 204 | 837 / 764 | 219 / 212  | 19.7 / 19.1 |
+| `webgl`                          | 252 / 184 | 391 / 387 | 865 / 811 | 40 / 37    | 7.5 / 7.5   |
+| `auto`（4）                      | 414 / 330 | 250 / 256 | 887 / 808 | 219 / 206  | 16.9 / 16.9 |
+| `dom` + `lowZoom`                | 416 / 337 | 203 / 203 | 835 / 765 | 221 / 216  | 15.9 / 14.7 |
+
+- 阈值扫描（临时把 `AUTO_WEBGL_SLOTS` 改成 8 / 16 重建，未提交；8 跑 2 次、16 跑 1 次有效）：`auto`(8) active `blink_gc` 214、GPU 312、整机 945、R CPU 15.4；`auto`(16) active 148 / 往返后 94、GPU 420、整机 1000、R CPU 13–15。
+- E1 判据（`blink_gc` < 100、R CPU < 10%、GPU ≤ DOM + 80）：4 / 8 个名额只满足 GPU 一条，16 个名额只满足 `blink_gc` 一条，任何阈值都不同时满足。只要还有持续输出的 DOM 终端，Oilpan 堆就涨到同一个 GC 水位（20 个 DOM 226，16 个 DOM 224），不随 DOM 终端数线性下降；纯 `webgl` 档的 4 个无名额终端走 500 ms 批写，所以稳态只有 40。
+- **结论：默认渲染器仍是 `dom`（整机最低）；`auto` 保留为实验档，阈值定 4**——加到 8 / 16 每个名额多约 11–13 MiB GPU，`blink_gc` 到 16 才降，那时已等于 `webgl` 档的整机成本。
+- E2：`lowZoom` 下 20 个可见终端全部限帧，GPU 进程 CPU 12.5% → 3.3%，往返阶段 Renderer CPU 19.7–25.6% → 13.3–15.9%（active 一档噪声大：20.5 / 21.1 / 12.8）；内存不降（`blink_gc` 239）。默认仍关。
+- 离屏 1 m / 3 m 四档相同（Renderer 172–185、GPU 122–142，平移离屏已断开），即 P2 的 A4 与 P3 的断开已生效。
+- 单测：`renderer-policy.test.ts` 8（三档、`auto` 的选择规则含协调器、限帧判定）、`use-webgl.test.tsx` 5（`dom` 不装、`auto` 有名额装丢名额卸、丢上下文上报、`useLowZoom`）、`TerminalLookPage.test.tsx` +3（三个新行、枚举持久化、名额只在 `webgl` 显示）、`preferences/terminal.test.ts` +2（枚举读回、旧键不读）、`TerminalSurface.render.test.tsx` +1（限帧按 100 ms 一拍、关掉立刻灌）。
+
+没做 / 偏离：
+
+- E2 判据里的「聚焦终端输入回显 p95」没在基准里量；聚焦终端不限帧由单测保证。
+- `auto` 选谁用 WebGL 按「先可见先得、隐藏持有者先让位」，不看哪个终端在忙；20 个都忙的场景下与「最近可见」无差别。
+- 基准副本没进仓库（P5 收进 `tools/probes/`）；原脚本的临时目录名带标签，标签变长后 Unix 套接字路径超长，core 起不来，副本改成短前缀，P5 收录时需注意。
+- 一次 `auto`(16) 因窗口被切到后台（`document.hidden`）卡在 rAF，按 PID 结束，只留了前四个阶段的数据。
+
+接口：
+
+- web：`TerminalPreferences.renderer` / `repaintThrottle`、`TERMINAL_RENDERERS` / `TERMINAL_REPAINT_THROTTLES`；`renderer-policy.ts`（`AUTO_WEBGL_SLOTS`、`LOW_ZOOM_THRESHOLD`、`THROTTLED_REPAINT_MS`、`rendererUsesWebgl`、`rendererGatesRender`、`wantsWebgl`、`effectiveRenderBudget`、`isLowZoom`、`repaintThrottled`）；`useWebglRenderer`、`useLowZoom`；`repaintScheduler`；`RenderBudget.writeThrough` / `throttled`；`useRenderBudget` 的选项 `webgl` 换成 `renderer` / `repaintThrottle` / `lowZoom`；DOM 属性 `data-renderer`、`data-throttled`。
