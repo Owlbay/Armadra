@@ -15,6 +15,7 @@ import {
 } from "../scrollback";
 import { terminalAppearance, terminalTheme } from "./appearance";
 import { writeClipboard } from "./clipboard";
+import { guardPointerRelease } from "./pointer-release";
 import { compensateScaledPointer } from "./scaled-pointer";
 import { applyOscTitle } from "./title";
 import { registerProgramOsc } from "./program-osc";
@@ -78,6 +79,8 @@ export function useXtermInstance(
     terminal.open(container);
     // 画布缩放时选区与鼠标上报的坐标要按缩放比折回（`scaled-pointer.ts`）。
     const restorePointer = compensateScaledPointer(terminal);
+    // 按下的键松开时一定让 xterm 收到 `mouseup`（#227，`pointer-release.ts`）。
+    const releaseGuard = guardPointerRelease(body);
     refs.terminalRef.current = terminal;
     refs.fitRef.current = fit;
 
@@ -254,6 +257,7 @@ export function useXtermInstance(
       programOsc.dispose();
       releaseIme();
       restorePointer();
+      releaseGuard();
       // WebGL 的 canvas 要在 dispose 之前抓：dispose 会把它们摘掉，而且既不
       // GC 也不弄丢上下文，不补这一刀就是一个占着名额的僵尸。
       const held = Array.from(container.querySelectorAll("canvas"));
