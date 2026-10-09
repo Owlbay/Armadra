@@ -1,0 +1,5 @@
+{
+  "$comment": "terminal-memory.mjs 的比对基线：按 <平台>-<架构>（WebGL 加 -webgl，直连后端加 -direct）一份，10 个终端、rate 100、off1 60 / off2 180 / cycles 10，同一台机器上连跑三次的中位数（--merge 三份 result.json 写进来）。比对规则见 terminal-memory-lib.mjs 的 METRICS；没有这台平台、同一场景的基线时只报告。",
+  "placeholder": "待录：性能包 P1–P4 合入 main 之后在 main 上录三次再填，记录同步进 docs/status/terminal-memory-baseline.md。占位期间 B 档只报告不判。",
+  "platforms": {}
+}
