@@ -220,6 +220,14 @@ export const IPC = {
   appShare: spec("app:share", "invoke", "window"),
 
   /**
+   * 「切换服务」对话框的「在新窗口打开」（A7-1）：`{ sourceId }`，答
+   * `{ opened }`。主进程用同一张页面另开一扇窗，地址带 `?source=<sourceId>`，
+   * 页面以它为初始当前源（`main/window.ts` 的 `openSourceWindow`）。标识不像样、
+   * 页面来源未定或正在退出时答 `false`。
+   */
+  windowOpen: spec("window:open", "invoke", "window"),
+
+  /**
    * 页面的一条 JS 错误（G5-19，契约 §30）：`{ kind, name, message, stack }`，
    * 页面已剥离过。主进程按 `diagnostics.reportPageErrors` 与 DSN 再判、限流、
    * 再剥离，才交给 `@sentry/electron`（`ipcMode` 仍是 0，SDK 不开渲染进程通道）。
@@ -277,6 +285,7 @@ export const IMPLEMENTED_CHANNELS: readonly string[] = [
   IPC.sourcesChanged.channel,
   IPC.sourcesTakeJoinLink.channel,
   IPC.appShare.channel,
+  IPC.windowOpen.channel,
   IPC.diagnosticsReport.channel,
 ];
 

@@ -63,6 +63,7 @@ import {
 import {
   applyContentSecurityPolicy,
   createMainWindow,
+  openSourceWindow,
   getMainWindow,
   loadRenderer,
   markQuitting,
@@ -215,6 +216,13 @@ function registerIpc(): void {
     [IPC.sourcesTakeJoinLink.channel]: () => joinLinks.take(),
     // 分享链接交给系统分享菜单；没有菜单的平台答 false，页面退回复制。
     [IPC.appShare.channel]: (request) => shareUrl(request, getMainWindow()),
+    // 「切换服务」的「在新窗口打开」：同一张页面另开一扇窗，`?source=` 定初始当前源。
+    [IPC.windowOpen.channel]: (request) => ({
+      opened:
+        openSourceWindow(
+          (request as { sourceId?: unknown } | null)?.sourceId,
+        ) !== null,
+    }),
     // The page answering a claimed chord. `menu.ts` owns the arbitration,
     // because it is the module that claimed the chord in the first place.
     [IPC.windowKeyIntentResult.channel]: (result) => {
@@ -452,7 +460,9 @@ async function start(): Promise<void> {
   // The system integration (W2.1). All of it is installed before the window
   // exists: the intercept is a per-window hook, so registering it afterwards
   // would miss the first window, and the menu is process-wide.
-  onWindowCreated(installKeydownIntercept);
+  // `main`: a claimed chord is answered through `sendToWindow`, which only
+  // reaches the main window; a per-source window keeps the page's own keys.
+  onWindowCreated(installKeydownIntercept, "main");
   installApplicationMenu();
   // 系统内存压力（性能设计 A3）：只在等级变化时推给页面；页面重载会丢掉状态，
   // 所以每次载入完再补一次非 normal 的当前档。

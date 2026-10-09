@@ -170,6 +170,10 @@ export interface ArmadraDesktopApi {
     readonly available: boolean;
     url(request: { title: string; url: string }): Promise<{ shared: boolean }>;
   };
+  /** 另开一扇窗口，以一个源为初始当前源（`window:open`，A7-1）。 */
+  readonly windows: {
+    openSource(request: { sourceId: string }): Promise<{ opened: boolean }>;
+  };
   /**
    * 页面的一条 JS 错误（契约 §30），页面已剥离过；主进程再判开关、限流、剥离。
    */
@@ -273,6 +277,10 @@ const api: ArmadraDesktopApi = {
     // 与 `shell-core/share-request.ts` 的 `nativeShareAvailable` 同一条：只有 macOS。
     available: process.platform === "darwin",
     url: (request) => ipcRenderer.invoke(IPC.appShare.channel, request),
+  },
+  windows: {
+    openSource: (request) =>
+      ipcRenderer.invoke(IPC.windowOpen.channel, request),
   },
   diagnostics: {
     report: (report) =>
