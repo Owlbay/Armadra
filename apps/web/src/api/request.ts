@@ -108,6 +108,10 @@ const MESSAGE_BY_CODE: Readonly<Record<string, string>> = {
   link_expired: "error.linkExpired",
   link_exhausted: "error.linkExhausted",
   link_secret_invalid: "error.linkSecretInvalid",
+  // ACP prompt 的附件（契约 §55）。
+  acp_image_unsupported: "acp.attach.imageUnsupported",
+  acp_attachment_unsupported: "acp.attach.fileUnsupported",
+  acp_attachment_too_large: "acp.attach.failed",
   // ACP 适配器的安装（契约 §39.7）。
   adapter_not_installable: "error.adapterNotInstallable",
   adapter_already_installed: "error.adapterAlreadyInstalled",

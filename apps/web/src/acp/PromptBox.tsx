@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ArrowUp, Ellipsis, Square } from "lucide-react";
+import { ArrowUp, Ellipsis, Paperclip, Square } from "lucide-react";
 import type {
   AcpAvailableCommand,
   AcpModeState,
@@ -29,7 +29,14 @@ import {
 } from "@/ui/select";
 import { Progress } from "@/ui/progress";
 import { Textarea } from "@/ui/textarea";
+import { filesOf } from "@/terminal/file-paste";
 import { acpApi } from "./api";
+import {
+  AttachmentTray,
+  type PromptAttachment,
+  type PromptAttachments,
+  usePromptAttachments,
+} from "./PromptAttachments";
 import type { AcpUsageView } from "./store";
 
 /** 用量到这个比例换警示色（文字 + 颜色）。 */
@@ -134,14 +141,18 @@ export function PromptBox({
   commands = [],
   usage = null,
   prefill = null,
+  attachments: controlled,
 }: {
   sessionId: string | null;
   disabled: boolean;
   streaming: boolean;
   modes: AcpModeState | null;
   models?: AcpModelState | null;
-  /** 返回 `false` 时保留输入框里的字。 */
-  onSubmit: (text: string) => Promise<boolean>;
+  /** 返回 `false` 时保留输入框里的字与附件。 */
+  onSubmit: (
+    text: string,
+    attachments?: readonly PromptAttachment[],
+  ) => Promise<boolean>;
   onCancel: () => void;
   onMode: (modeId: string) => void;
   onModel?: (modelId: string) => void;
@@ -153,11 +164,20 @@ export function PromptBox({
   usage?: AcpUsageView | null;
   /** 「编辑后重发」：把这句填进来，光标在末尾，不发。 */
   prefill?: PromptPrefill | null;
+  /**
+   * 契约 §55：待发的附件（`usePromptAttachments`）。会话视图持有它，好让拖到
+   * 视图任何地方的文件都进这里；不给时没有回形针、粘不进附件。
+   */
+  attachments?: PromptAttachments;
 }) {
   const t = useT();
   const narrow = useCompactLayout();
   const compact = forceCompact ?? narrow;
   const [text, setText] = React.useState("");
+  const fallback = usePromptAttachments(null, false);
+  const attachments = controlled ?? fallback;
+  const attachable = controlled?.capabilities != null;
+  const pickerRef = React.useRef<HTMLInputElement | null>(null);
   const holding = React.useRef<string | null>(null);
   const localRef = React.useRef<HTMLTextAreaElement | null>(null);
   const setRefs = React.useCallback(
@@ -214,12 +234,21 @@ export function PromptBox({
 
   const submit = async () => {
     const value = text.trim();
-    if (!value || disabled || streaming) return;
+    if ((!value && attachments.items.length === 0) || disabled || streaming)
+      return;
+    const taken = attachments.take();
     setText("");
     release();
-    const sent = await onSubmit(value);
-    if (!sent) setText(value);
+    // 没有附件时只交字：与没有附件那一版的调用形状一样。
+    const sent = await (taken.length > 0
+      ? onSubmit(value, taken)
+      : onSubmit(value));
+    if (!sent) {
+      setText(value);
+      attachments.restore(taken);
+    }
   };
+  const canSend = Boolean(text.trim()) || attachments.items.length > 0;
 
   const modeChoice = modes && modes.availableModes.length > 1 ? modes : null;
   // 只有一个模型也画：让人看得见在用哪个（契约 §26.2 只在目录非空时给）。
@@ -227,7 +256,7 @@ export function PromptBox({
     models && onModel && models.availableModels.length > 0 ? models : null;
 
   return (
-    <div className="relative flex items-end gap-1.5 border-t border-[var(--border)] p-1.5">
+    <div className="relative border-t border-[var(--border)]">
       {listOpen && (
         <Command
           shouldFilter={false}
@@ -259,178 +288,220 @@ export function PromptBox({
           </CommandList>
         </Command>
       )}
-      <Textarea
-        ref={setRefs}
-        aria-label={t("acp.prompt.label")}
-        rows={1}
-        value={text}
+      <AttachmentTray
+        items={attachments.items}
+        onRemove={attachments.remove}
         disabled={disabled}
-        className="max-h-[calc(6lh+1rem)] min-h-8 flex-1 resize-none overflow-y-auto py-1.5 text-[13px] md:text-[13px]"
-        onChange={(event) => setText(event.target.value)}
-        onFocus={take}
-        onBlur={release}
-        onKeyDown={(event) => {
-          if (listOpen && !event.nativeEvent.isComposing) {
-            const count = matches.length;
-            if (event.key === "ArrowDown" && count > 0) {
-              event.preventDefault();
-              setPicked((index) => (index + 1) % count);
-              return;
-            }
-            if (event.key === "ArrowUp" && count > 0) {
-              event.preventDefault();
-              setPicked((index) => (index - 1 + count) % count);
-              return;
-            }
-            if (
-              (event.key === "Enter" || event.key === "Tab") &&
-              !event.shiftKey &&
-              matches[picked]
-            ) {
-              event.preventDefault();
-              insert(matches[picked]);
-              return;
-            }
-            if (event.key === "Escape") {
-              event.preventDefault();
-              setDismissed(text);
-              return;
-            }
-          }
-          if (event.key === "Escape" && streaming) {
-            event.preventDefault();
-            onCancel();
-            return;
-          }
-          if (event.key !== "Enter" || event.shiftKey) return;
-          if (event.nativeEvent.isComposing) return;
-          event.preventDefault();
-          void submit();
-        }}
       />
-      {compact ? (
-        (modeChoice || modelChoice) && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                aria-label={t("acp.prompt.more")}
-                disabled={disabled}
-              >
-                <Ellipsis />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="end"
-              className="max-h-[60dvh] min-w-44 overflow-y-auto"
-            >
-              {modeChoice && (
-                <>
-                  <DropdownMenuLabel>{t("acp.prompt.mode")}</DropdownMenuLabel>
-                  <DropdownMenuRadioGroup
-                    value={modeChoice.currentModeId}
-                    onValueChange={onMode}
-                  >
-                    {modeChoice.availableModes.map((mode) => (
-                      <DropdownMenuRadioItem key={mode.id} value={mode.id}>
-                        {mode.name}
-                      </DropdownMenuRadioItem>
-                    ))}
-                  </DropdownMenuRadioGroup>
-                </>
-              )}
-              {modeChoice && modelChoice && <DropdownMenuSeparator />}
-              {modelChoice && (
-                <>
-                  <DropdownMenuLabel>{t("acp.prompt.model")}</DropdownMenuLabel>
-                  <DropdownMenuRadioGroup
-                    value={modelChoice.currentModelId}
-                    onValueChange={(id) => onModel?.(id)}
-                  >
-                    {modelChoice.availableModels.map((model) => (
-                      <DropdownMenuRadioItem
-                        key={model.modelId}
-                        value={model.modelId}
-                      >
-                        {model.name}
-                      </DropdownMenuRadioItem>
-                    ))}
-                  </DropdownMenuRadioGroup>
-                </>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )
-      ) : (
-        <>
-          {modelChoice && (
-            <Select
-              value={modelChoice.currentModelId}
+      <div className="flex items-end gap-1.5 p-1.5">
+        {attachable && (
+          <>
+            <input
+              ref={pickerRef}
+              type="file"
+              multiple
+              hidden
+              tabIndex={-1}
+              onChange={(event) => {
+                attachments.add(Array.from(event.target.files ?? []));
+                event.target.value = "";
+              }}
+            />
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              aria-label={t("acp.attach")}
               disabled={disabled}
-              onValueChange={(id) => onModel?.(id)}
+              onClick={() => pickerRef.current?.click()}
             >
-              <SelectTrigger
-                size="sm"
-                aria-label={t("acp.prompt.model")}
-                className="max-w-36 text-xs"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {modelChoice.availableModels.map((model) => (
-                  <SelectItem key={model.modelId} value={model.modelId}>
-                    {model.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-          {modeChoice && (
-            <Select
-              value={modeChoice.currentModeId}
-              disabled={disabled}
-              onValueChange={onMode}
-            >
-              <SelectTrigger
-                size="sm"
-                aria-label={t("acp.prompt.mode")}
-                className="max-w-32 text-xs"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {modeChoice.availableModes.map((mode) => (
-                  <SelectItem key={mode.id} value={mode.id}>
-                    {mode.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-        </>
-      )}
-      {usage && usage.size > 0 && <Usage usage={usage} />}
-      {streaming ? (
-        <Button
-          size="icon-sm"
-          variant="outline"
-          aria-label={t("acp.prompt.stop")}
+              <Paperclip />
+            </Button>
+          </>
+        )}
+        <Textarea
+          ref={setRefs}
+          aria-label={t("acp.prompt.label")}
+          rows={1}
+          value={text}
           disabled={disabled}
-          onClick={onCancel}
-        >
-          <Square />
-        </Button>
-      ) : (
-        <Button
-          size="icon-sm"
-          aria-label={t("acp.prompt.send")}
-          disabled={disabled || !text.trim()}
-          onClick={() => void submit()}
-        >
-          <ArrowUp />
-        </Button>
-      )}
+          className="max-h-[calc(6lh+1rem)] min-h-8 flex-1 resize-none overflow-y-auto py-1.5 text-[13px] md:text-[13px]"
+          onChange={(event) => setText(event.target.value)}
+          onPaste={(event) => {
+            const files = filesOf(event.clipboardData);
+            if (files.length === 0 || !controlled) return;
+            // 截图或复制的文件：成附件，不粘出一个文件名。
+            event.preventDefault();
+            attachments.add(files);
+          }}
+          onFocus={take}
+          onBlur={release}
+          onKeyDown={(event) => {
+            if (listOpen && !event.nativeEvent.isComposing) {
+              const count = matches.length;
+              if (event.key === "ArrowDown" && count > 0) {
+                event.preventDefault();
+                setPicked((index) => (index + 1) % count);
+                return;
+              }
+              if (event.key === "ArrowUp" && count > 0) {
+                event.preventDefault();
+                setPicked((index) => (index - 1 + count) % count);
+                return;
+              }
+              if (
+                (event.key === "Enter" || event.key === "Tab") &&
+                !event.shiftKey &&
+                matches[picked]
+              ) {
+                event.preventDefault();
+                insert(matches[picked]);
+                return;
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setDismissed(text);
+                return;
+              }
+            }
+            if (event.key === "Escape" && streaming) {
+              event.preventDefault();
+              onCancel();
+              return;
+            }
+            if (event.key !== "Enter" || event.shiftKey) return;
+            if (event.nativeEvent.isComposing) return;
+            event.preventDefault();
+            void submit();
+          }}
+        />
+        {compact ? (
+          (modeChoice || modelChoice) && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label={t("acp.prompt.more")}
+                  disabled={disabled}
+                >
+                  <Ellipsis />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                className="max-h-[60dvh] min-w-44 overflow-y-auto"
+              >
+                {modeChoice && (
+                  <>
+                    <DropdownMenuLabel>
+                      {t("acp.prompt.mode")}
+                    </DropdownMenuLabel>
+                    <DropdownMenuRadioGroup
+                      value={modeChoice.currentModeId}
+                      onValueChange={onMode}
+                    >
+                      {modeChoice.availableModes.map((mode) => (
+                        <DropdownMenuRadioItem key={mode.id} value={mode.id}>
+                          {mode.name}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </>
+                )}
+                {modeChoice && modelChoice && <DropdownMenuSeparator />}
+                {modelChoice && (
+                  <>
+                    <DropdownMenuLabel>
+                      {t("acp.prompt.model")}
+                    </DropdownMenuLabel>
+                    <DropdownMenuRadioGroup
+                      value={modelChoice.currentModelId}
+                      onValueChange={(id) => onModel?.(id)}
+                    >
+                      {modelChoice.availableModels.map((model) => (
+                        <DropdownMenuRadioItem
+                          key={model.modelId}
+                          value={model.modelId}
+                        >
+                          {model.name}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )
+        ) : (
+          <>
+            {modelChoice && (
+              <Select
+                value={modelChoice.currentModelId}
+                disabled={disabled}
+                onValueChange={(id) => onModel?.(id)}
+              >
+                <SelectTrigger
+                  size="sm"
+                  aria-label={t("acp.prompt.model")}
+                  className="max-w-36 text-xs"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {modelChoice.availableModels.map((model) => (
+                    <SelectItem key={model.modelId} value={model.modelId}>
+                      {model.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            {modeChoice && (
+              <Select
+                value={modeChoice.currentModeId}
+                disabled={disabled}
+                onValueChange={onMode}
+              >
+                <SelectTrigger
+                  size="sm"
+                  aria-label={t("acp.prompt.mode")}
+                  className="max-w-32 text-xs"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {modeChoice.availableModes.map((mode) => (
+                    <SelectItem key={mode.id} value={mode.id}>
+                      {mode.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </>
+        )}
+        {usage && usage.size > 0 && <Usage usage={usage} />}
+        {streaming ? (
+          <Button
+            size="icon-sm"
+            variant="outline"
+            aria-label={t("acp.prompt.stop")}
+            disabled={disabled}
+            onClick={onCancel}
+          >
+            <Square />
+          </Button>
+        ) : (
+          <Button
+            size="icon-sm"
+            aria-label={t("acp.prompt.send")}
+            disabled={disabled || !canSend}
+            onClick={() => void submit()}
+          >
+            <ArrowUp />
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

@@ -51,14 +51,26 @@ export const acpApi = {
     acpLogResponseSchema.parse(
       await currentClient().acp.log({ sessionId, after }),
     ),
-  /** `clientTurnId`（契约 §39.9）：同一个 id 重发，core 只投递一次。 */
-  prompt: async (sessionId: string, text: string, clientTurnId?: string) =>
+  /**
+   * `clientTurnId`（契约 §39.9）：同一个 id 重发，core 只投递一次。`uploadIds`
+   * （§55）：先经 `uploadAgentFile` 传到这台 core 的附件。
+   */
+  prompt: async (
+    sessionId: string,
+    text: string,
+    clientTurnId?: string,
+    uploadIds: readonly string[] = [],
+  ) =>
     acpPromptResponseSchema.parse(
       await currentClient().acp.prompt({
         sessionId,
-        ...acpPromptRequestSchema.parse(
-          clientTurnId === undefined ? { text } : { text, clientTurnId },
-        ),
+        ...acpPromptRequestSchema.parse({
+          text,
+          ...(clientTurnId === undefined ? {} : { clientTurnId }),
+          ...(uploadIds.length === 0
+            ? {}
+            : { attachments: uploadIds.map((uploadId) => ({ uploadId })) }),
+        }),
       }),
     ),
   cancel: async (sessionId: string) => {

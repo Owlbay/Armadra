@@ -8,7 +8,7 @@ import type {
   TerminalNodeData,
 } from "@armadra/shared";
 
-import { RuntimeRequestError } from "@/api/client";
+import { RuntimeRequestError, runtimeApi } from "@/api/client";
 import { onWorkspaceConnection, onWorkspaceEvent } from "@/api/events";
 import { useT } from "@/app/preferences-store";
 import { useCanAnswer } from "@/app/use-access";
@@ -27,7 +27,13 @@ import { PermissionCard } from "./PermissionCard";
 import type { PlanView } from "./PlanCard";
 import { PromptBox, type PromptPrefill } from "./PromptBox";
 import {
+  type PromptAttachment,
+  usePromptAttachments,
+} from "./PromptAttachments";
+import { filesOf } from "@/terminal/file-paste";
+import {
   EMPTY_SESSION,
+  type AcpAttachment,
   type AcpItem,
   acpElicitationOf,
   acpPermissionOf,
@@ -315,6 +321,22 @@ function refusedByCore(error: unknown): boolean {
   );
 }
 
+/** 附件被 core 拒绝（契约 §55）：那句话本身就说清了原因。 */
+function attachmentRefusal(error: unknown): error is RuntimeRequestError {
+  return (
+    error instanceof RuntimeRequestError &&
+    (error.code === "acp_image_unsupported" ||
+      error.code === "acp_attachment_unsupported" ||
+      error.code === "acp_attachment_too_large")
+  );
+}
+
+/** 一个主机上的绝对路径 → `file://` 地址（只用来显示）。 */
+function fileUrl(path: string): string {
+  const portable = path.replace(/\\/g, "/");
+  return `file://${portable.startsWith("/") ? "" : "/"}${encodeURI(portable)}`;
+}
+
 /** 「确认中」重读镜像的间隔：第一次立刻读，之后等连接缓一缓。 */
 const RECONCILE_DELAYS_MS = [0, 1000, 3000] as const;
 
@@ -462,7 +484,12 @@ export function SessionView({
   );
 
   const send = React.useCallback(
-    async (text: string, retryTurnId?: string) => {
+    async (
+      text: string,
+      retryTurnId?: string,
+      uploadIds: readonly string[] = [],
+      shown: readonly AcpAttachment[] = [],
+    ) => {
       if (!sessionId) {
         // 会话就绪前的第一条（契约 §51）：先画出来，等会话开好再发；请求
         // 还没发出去时随 `createSession` 的 `prompt` 一起发。再多的等它就绪。
@@ -473,15 +500,20 @@ export function SessionView({
       }
       const store = useAcpStore.getState();
       const clientTurnId = retryTurnId ?? newClientTurnId();
-      store.begin(sessionId, text, clientTurnId);
+      if (shown.length > 0) store.begin(sessionId, text, clientTurnId, shown);
+      else store.begin(sessionId, text, clientTurnId);
       try {
-        await acpApi.prompt(sessionId, text, clientTurnId);
+        await (uploadIds.length > 0
+          ? acpApi.prompt(sessionId, text, clientTurnId, uploadIds)
+          : acpApi.prompt(sessionId, text, clientTurnId));
       } catch (error) {
         if (refusedByCore(error)) {
           store.end(sessionId, nodeId, {
             error: { code: "prompt_failed", message: "" },
           });
-          toast.error(t("acp.prompt.failed"));
+          toast.error(
+            attachmentRefusal(error) ? error.message : t("acp.prompt.failed"),
+          );
           return true;
         }
         store.confirm(sessionId);
@@ -490,6 +522,66 @@ export function SessionView({
       return true;
     },
     [sessionId, nodeId, t, confirmTurn, session.failed],
+  );
+
+  const promptDisabled = !connected || session.failed;
+  const attachments = usePromptAttachments(
+    sessionId ? view.promptCapabilities : null,
+    Boolean(data.ssh),
+  );
+
+  // 附件的预览地址交给了消息里那一条：节点卸载时一起收回。
+  const previews = React.useRef<string[]>([]);
+  React.useEffect(
+    () => () => {
+      for (const url of previews.current) URL.revokeObjectURL(url);
+    },
+    [],
+  );
+
+  /**
+   * 输入框交上来的一句（契约 §55）：有附件时先逐个上传到会话所在的 core，再带着
+   * 上传 id 发 prompt。上传失败不发、输入框里的字与附件留着。
+   */
+  const submit = React.useCallback(
+    async (text: string, attachments: readonly PromptAttachment[] = []) => {
+      if (attachments.length === 0) return send(text);
+      if (!sessionId || !workspaceId) {
+        toast.error(t("acp.attach.unavailable"));
+        return false;
+      }
+      let uploads;
+      try {
+        uploads = await Promise.all(
+          attachments.map((item) =>
+            runtimeApi.uploadAgentFile(workspaceId, item.file, item.file.name),
+          ),
+        );
+      } catch {
+        toast.error(t("acp.attach.failed"));
+        return false;
+      }
+      const shown = attachments.map((item, index): AcpAttachment => {
+        const upload = uploads[index]!;
+        if (item.preview) {
+          previews.current.push(item.preview);
+          return { type: "image", mimeType: item.file.type, uri: item.preview };
+        }
+        return {
+          type: "resource_link",
+          uri: fileUrl(upload.path),
+          name: upload.name,
+          mimeType: upload.mimeType,
+        };
+      });
+      return send(
+        text,
+        undefined,
+        uploads.map((upload) => upload.id),
+        shown,
+      );
+    },
+    [send, sessionId, workspaceId, t],
   );
 
   // 会话开好、镜像读到了：把排着的那一条交出去。随 `createSession` 发出的那条
@@ -736,6 +828,20 @@ export function SessionView({
       ref={rootRef}
       data-slot="acp-session-view"
       className="nopan nodrag nowheel flex h-full w-full cursor-auto flex-col bg-[var(--card)] select-text"
+      // 拖进会话视图任何地方的文件都成输入框的附件（契约 §55），不交给画布。
+      onDragOver={(event) => {
+        if (!Array.from(event.dataTransfer.types).includes("Files")) return;
+        event.preventDefault();
+        event.stopPropagation();
+        event.dataTransfer.dropEffect = promptDisabled ? "none" : "copy";
+      }}
+      onDrop={(event) => {
+        const files = filesOf(event.dataTransfer);
+        if (files.length === 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (!promptDisabled) attachments.add(files);
+      }}
       onClick={(event) => {
         // 空态那一句话是「点一下就能说」：点空白处把焦点交给输入框。
         if (empty && event.target === event.currentTarget)
@@ -774,11 +880,12 @@ export function SessionView({
       <PromptBox
         sessionId={sessionId}
         inputRef={inputRef}
-        disabled={!connected || session.failed}
+        disabled={promptDisabled}
         streaming={view.streaming}
         modes={view.modes}
         models={view.models}
-        onSubmit={send}
+        onSubmit={submit}
+        attachments={attachments}
         onCancel={cancel}
         onMode={selectMode}
         onModel={selectModel}
