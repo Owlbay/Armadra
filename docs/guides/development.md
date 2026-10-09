@@ -145,7 +145,8 @@ TOKEN / SECRET / PASSWORD / CREDENTIAL 字样一律拒绝。
 | 服务器壳           | `pnpm --filter @armadra/server test`、`pnpm --filter @armadra/server typecheck`                                       |
 | 全部包             | `pnpm test`                                                                                                           |
 | 格式 / 类型        | `pnpm format:check`、`pnpm typecheck`                                                                                 |
-| 发布与 CI 脚本     | `pnpm release:test`、`pnpm ci:workflows`、`pnpm release:check`                                                        |
+| 发布与 CI 脚本     | `pnpm release:test`、`pnpm ci:workflows`、`pnpm release:check`（桌面套件与移动端版本线各查一遍）                      |
+| 手机壳             | `pnpm --filter @armadra/mobile test`；版本与构建号 `node apps/mobile/scripts/app-version.mjs print`（CI 与发布 §2.8） |
 | 桌面构建（不打包） | `pnpm --filter @armadra/desktop build`                                                                                |
 | 桌面打包           | `pnpm --filter @armadra/desktop dist`                                                                                 |
 
@@ -452,6 +453,7 @@ Node 直接打桌面壳起的 core 时用 `tools/probes/probe-session.mjs`（经
 | `ARMADRA_RELAY_ALLOW_INSECURE`                  | `=1` 让出站中继隧道接受 `ws://` 节点（探针与本机明文中继用）；缺省只连 `wss://`（契约 §32）                                                                                                            |
 | `ARMADRA_SECRET_MASTER_KEY_FILE`                | 服务器壳的 master key 换个位置（如 systemd `LoadCredential=`）；不设时用 `<数据目录>/secrets/master.key`，首启生成                                                                                     |
 | `ARMADRA_SMTP_URL` / `ARMADRA_SMTP_FROM`        | 服务器壳的可选邮件通道（同 `serve --smtp-url` / `--smtp-from`，契约 §28）：`smtp(s)://用户:口令@主机:端口`，口令可写 `secret://armadra-smtp`；不设则不发信、页面不显示「发送邮件」                     |
+| `ARMADRA_BUILD_NUMBER`                          | 手机 / 平板 App 的构建号（iOS `CURRENT_PROJECT_VERSION`、Android `versionCode`），正整数；不设时取 `git rev-list --count HEAD`，浅克隆报错（CI 与发布 §2.8）                                           |
 
 脚本发现 core 端口占用时直接报错。节点身份、Hook token、端点与权限等待变量由 core 注入 Agent 终端，无需手工配置。
 core 不监听 TCP 时 `hook-endpoint.env` 不写 `ARMADRA_HOOK_PORT`，Hook 客户端只走 `hook.sock`。
