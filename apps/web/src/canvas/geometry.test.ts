@@ -14,6 +14,7 @@ vi.mock("../nodes/registry", () => ({
 }));
 
 import {
+  dispatchAnchor,
   anchorPoint,
   boundingBox,
   containsPoint,
@@ -89,6 +90,74 @@ describe("anchorPoint / edgeGeometry", () => {
       sourceSide: "right",
       targetSide: "left",
     });
+  });
+});
+
+describe("facingSides free：按空隙选边（#211）", () => {
+  it("x 上重叠、y 上分开时走上下，哪怕中心横向差更大", () => {
+    // 宽 600 的终端斜下方挂一个小便签：中心 dx=350 > dy=290，但两者 x 重叠。
+    const wide = box(0, 0, 600, 400);
+    const note = box(500, 500, 100, 60);
+    expect(facingSides(wide, note, "free")).toEqual({
+      source: "bottom",
+      target: "top",
+    });
+  });
+
+  it("y 上重叠、x 上分开时走左右", () => {
+    expect(facingSides(box(0, 0, 100, 400), box(150, 350), "free")).toEqual({
+      source: "right",
+      target: "left",
+    });
+  });
+
+  it("斜着摆时空隙大的那条轴赢", () => {
+    expect(facingSides(box(0, 0), box(400, 100), "free")).toEqual({
+      source: "right",
+      target: "left",
+    });
+    expect(facingSides(box(0, 0), box(150, 400), "free")).toEqual({
+      source: "bottom",
+      target: "top",
+    });
+  });
+
+  it("叠在一起时退回比较中心", () => {
+    expect(facingSides(box(0, 0), box(-30, 10), "free")).toEqual({
+      source: "left",
+      target: "right",
+    });
+  });
+
+  it("目标绕到上方 / 左侧时两端跟着翻过来", () => {
+    expect(facingSides(box(0, 400), box(10, 0), "free")).toEqual({
+      source: "top",
+      target: "bottom",
+    });
+    expect(facingSides(box(400, 0), box(0, 10), "free")).toEqual({
+      source: "left",
+      target: "right",
+    });
+  });
+});
+
+describe("dispatchAnchor", () => {
+  it("纵向：子整个在主下方时按布局方向，横向差再大也一样", () => {
+    expect(dispatchAnchor(box(0, 0), box(900, 60), "vertical")).toBe(
+      "vertical",
+    );
+  });
+
+  it("纵向：子被拖到主上方或与主并排时改走就近边", () => {
+    expect(dispatchAnchor(box(0, 200), box(0, 0), "vertical")).toBe("free");
+    expect(dispatchAnchor(box(0, 0), box(300, 0), "vertical")).toBe("free");
+  });
+
+  it("横向：子整个在主右侧时按布局方向，被拖到左侧时改走就近边", () => {
+    expect(dispatchAnchor(box(0, 0), box(100, 500), "horizontal")).toBe(
+      "horizontal",
+    );
+    expect(dispatchAnchor(box(300, 0), box(0, 0), "horizontal")).toBe("free");
   });
 });
 

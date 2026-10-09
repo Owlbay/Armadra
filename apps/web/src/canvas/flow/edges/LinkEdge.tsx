@@ -9,7 +9,7 @@ import { useFamilyColor } from "@/canvas/family";
 import { useLayoutDirection } from "@/canvas/layout-direction";
 import { displayNameOf } from "@/canvas/supervision";
 import { formatRelativeTime } from "@/lib/format";
-import type { Box, LinkAnchor } from "../../geometry";
+import { dispatchAnchor, type Box, type LinkAnchor } from "../../geometry";
 import type { LinkFlowEdge } from "../../sync/project";
 import {
   arrowHead,
@@ -37,7 +37,9 @@ import {
  *
  * **不用把手坐标**（`EdgeProps` 给的 `sourceX/sourceY`）：节点四边都有把手，
  * 而这条曲线要根据两端的相对位置自己选边，跟用户从哪个把手拖出来无关。
- * 所以这里读 `useInternalNode` 的绝对矩形，两端一动就自动重算。
+ * 所以这里读 `useInternalNode` 的绝对矩形，两端一动就自动重算；存储层也
+ * 不记把手（边只有 `source` / `target`）。`useInternalNode` 只订阅这两个
+ * 节点，拖一个节点时只有挂在它身上的边重渲。
  */
 
 /** 一端的矩形；React Flow 还没量到尺寸时退回投影给的宽高。 */
@@ -141,10 +143,10 @@ export function LinkEdge({
   if (!sourceBox || !targetBox) return null;
 
   const supervises = role === "supervises";
+  // 两端一动就重新选边（#211）：对等线就近边；派发线子在下游时按布局方向，
+  // 被拖到主的上方 / 左侧时也改走就近边。
   const anchor: LinkAnchor = supervises
-    ? direction === "vertical"
-      ? "vertical"
-      : "horizontal"
+    ? dispatchAnchor(sourceBox, targetBox, direction)
     : "free";
   const view = linkView(
     sourceBox,
