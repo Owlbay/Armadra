@@ -110,6 +110,21 @@ export function trustFromSourceTable(answer: unknown): RemoteTrust {
       const inherited = issuerPins.get(relay.origin);
       if (inherited !== undefined) pin(relay, inherited);
     }
+    // 一源多路（契约 §55）：镜像之外的那几条路也要放行。
+    const routes = Array.isArray(row.routes) ? row.routes : [];
+    for (const entry of routes) {
+      const route = record(entry);
+      const url = httpsOrigin(text(route.origin));
+      if (url === null) continue;
+      origins.add(url.origin);
+      rewriteOrigins.add(url.origin);
+      if (text(route.via) === "direct") {
+        pin(url, text(route.fingerprint));
+      } else {
+        const inherited = issuerPins.get(url.origin);
+        if (inherited !== undefined) pin(url, inherited);
+      }
+    }
   }
   return {
     origins: [...origins].sort(),
