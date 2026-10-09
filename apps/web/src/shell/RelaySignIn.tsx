@@ -8,11 +8,11 @@ import {
   type HostedRelay,
   hostedFailureOf,
 } from "../sources/hosted";
+import type { ServiceStatus } from "../services/probe";
+import type { ServiceRow } from "../services/rows";
+import { ServicePicker } from "../services/ServicePicker";
 import { Alert, AlertTitle } from "@/ui/alert";
-import { Badge } from "@/ui/badge";
 import { BrandMark } from "@/ui/brand-mark";
-import { Button } from "@/ui/button";
-import { Item, ItemContent, ItemGroup, ItemTitle } from "@/ui/item";
 import { Spinner } from "@/ui/spinner";
 
 export interface RelaySignInProps {
@@ -45,6 +45,8 @@ export function RelaySignIn({
   );
   const [busy, setBusy] = React.useState(false);
   const [entering, setEntering] = React.useState<string | null>(null);
+  // 进不去的那一台：失败挂在它那一行下面。
+  const [failedId, setFailedId] = React.useState<string | null>(null);
   const [failure, setFailure] = React.useState<HostedFailure | null>(
     initialFailure ?? null,
   );
@@ -83,15 +85,39 @@ export function RelaySignIn({
     }
   }, [relay.issuer]);
 
+  const rows = React.useMemo(
+    (): ServiceRow[] =>
+      (hosts ?? []).map((source) => ({
+        sourceId: source.sourceId,
+        name: source.name || source.sourceId.slice(0, 8),
+        local: false,
+        routes: [{ via: "relayed", issuer: relay.issuer, serviceName: host }],
+        lastUsedAt: null,
+      })),
+    [hosts, relay.issuer, host],
+  );
+  const statuses = React.useMemo(
+    () =>
+      Object.fromEntries(
+        (hosts ?? []).map((source): [string, ServiceStatus] => [
+          source.sourceId,
+          source.online ? "online" : "offline",
+        ]),
+      ),
+    [hosts],
+  );
+
   const enter = async (source: CloudSource) => {
     setBusy(true);
     setEntering(source.sourceId);
     setFailure(null);
+    setFailedId(null);
     try {
       await relay.enter(source);
       onEntered();
     } catch (error) {
       setFailure(hostedFailureOf(error));
+      setFailedId(source.sourceId);
       setBusy(false);
       setEntering(null);
     }
@@ -100,6 +126,7 @@ export function RelaySignIn({
   const signIn = async (account: string, password: string) => {
     setBusy(true);
     setFailure(null);
+    setFailedId(null);
     let listed: CloudSource[];
     try {
       listed = await relay.signIn(account, password);
@@ -152,46 +179,28 @@ export function RelaySignIn({
           />
         ) : (
           <div className="flex flex-col gap-4">
-            {message && (
+            {message && failedId === null && (
               <Alert variant="destructive" id={errorId}>
                 <AlertTitle>{message}</AlertTitle>
               </Alert>
             )}
-            <ItemGroup className="gap-2">
-              {hosts.map((source) => {
-                const name = source.name || source.sourceId.slice(0, 8);
-                return (
-                  <Item
-                    key={source.sourceId}
-                    variant="outline"
-                    className="flex-nowrap p-0"
-                  >
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      disabled={busy || !source.online}
-                      aria-label={t("remote.hosted.open", { name })}
-                      className="h-auto min-h-12 min-w-0 flex-1 justify-start gap-2.5 rounded-lg px-3 py-2 text-left font-normal whitespace-normal"
-                      onClick={() => void enter(source)}
-                    >
-                      <ItemContent className="min-w-0">
-                        <ItemTitle className="max-w-full truncate">
-                          {name}
-                        </ItemTitle>
-                      </ItemContent>
-                      {!source.online && (
-                        <Badge variant="outline">
-                          {t("remote.hosted.offline")}
-                        </Badge>
-                      )}
-                      {entering === source.sourceId && (
-                        <Spinner aria-label={t("remote.status.connecting")} />
-                      )}
-                    </Button>
-                  </Item>
-                );
-              })}
-            </ItemGroup>
+            <ServicePicker
+              variant="page"
+              rows={rows}
+              statuses={statuses}
+              failure={
+                failedId !== null && message !== null
+                  ? { sourceId: failedId, message }
+                  : null
+              }
+              busyId={entering}
+              disabled={busy}
+              disableOffline
+              onEnter={(sourceId) => {
+                const source = hosts.find((one) => one.sourceId === sourceId);
+                if (source) void enter(source);
+              }}
+            />
           </div>
         )}
       </div>

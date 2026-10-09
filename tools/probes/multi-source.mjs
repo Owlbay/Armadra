@@ -11,6 +11,8 @@
 // 步骤，每步都有断言与截图：
 //   1. 起中继容器、两台 core 各自登记；桌面挂上两个经中继的源，页面重载；
 //   2. 侧栏：本机的工作空间在树里，两个经中继的源各一组（就绪、各列出自己的工作空间）；
+//      2b. 设置 → 远程访问 →「切换服务」对话框（A7-1）：切到服务器后侧栏与「当前服务」
+//      一致，再切回本机；
 //   3. 每个源各开一个终端并回显——先点服务器组，再点 NAT 组，最后点（此时成了一组的）
 //      本机；三个源都在侧栏里当过「组」；
 //   4. 媒体经中继（契约 §37.4、cloud-api §12）：服务器组里编辑器节点打开一段 H.264，
@@ -379,6 +381,62 @@ try {
   );
   await win.capture(join(output, "02-sidebar-groups.png"));
   await noteGroups();
+
+  /* ------ 2b. 「切换服务」对话框（A7-1）：切当前源后侧栏与当前服务一致，再切回本机 ------ */
+  await timed("2b-switch-service", async () => {
+    // 经设置 → 远程访问顶部的「服务」一组打开（重载后回到那一页，`takeSettingsReopen`）。
+    await win.evaluate(
+      `sessionStorage.setItem("armadra.settings.reopen", "remoteAccess"); return true;`,
+    );
+    await win.call("Page.reload", {});
+    await sleep(1_500);
+    await waitGroupReady(
+      serverId,
+      serverSeed.workspace.id,
+      "重载后服务器组就绪",
+    );
+    const switchButton = `return document.querySelector('[data-action="switch-service"]')`;
+    await win.clickOn(switchButton, "设置里的「切换服务」");
+    const rowButton = (id) =>
+      `return document.querySelector('[data-testid="switch-service-dialog"] [data-service-row="${id}"] [data-slot="item-actions"] button')`;
+    await win.until(
+      `return document.querySelectorAll('[data-testid="switch-service-dialog"] [data-service-row]').length === 3`,
+      "对话框列出本机与两个经中继的源",
+    );
+    await win.capture(join(output, "02b-switch-dialog.png"));
+    await win.clickOn(rowButton(serverId), "对话框里切到服务器");
+    await win.until(
+      `return !document.querySelector('[data-testid="switch-service-dialog"]') &&
+              !!document.querySelector('[data-source-group="local"]') &&
+              !document.querySelector('[data-source-group="${serverId}"]')`,
+      "切换后：对话框关上，本机成了一组、服务器不再是组",
+    );
+    const footnote = await win.evaluate(
+      `return document.querySelector('[data-action="switch-service"]')?.closest(".settings-row")?.textContent ?? ""`,
+    );
+    run.check(
+      footnote.includes("server-host"),
+      "对话框切换当前源后：侧栏分组与设置里的「当前服务」一致（查询随当前源重取）",
+      { footnote },
+    );
+    // 切回本机，后面的步骤从本机出发。
+    await win.clickOn(switchButton, "再开「切换服务」");
+    await win.clickOn(rowButton("local"), "切回本机");
+    await win.until(
+      `return !document.querySelector('[data-source-group="local"]') &&
+              !!document.querySelector('[data-source-group="${serverId}"]')`,
+      "切回本机：两个经中继的源又各是一组",
+    );
+    // 设置的关闭钮在页头最后（`SettingsDialog`）。
+    await win.clickOn(
+      `return document.querySelector('[data-testid="settings-dialog"] header button:last-of-type')`,
+      "关上设置",
+    );
+    await win.until(
+      `return !document.querySelector('[data-testid="settings-dialog"]')`,
+      "设置关上",
+    );
+  });
 
   /* -------------------- 3. 每个源各开一个终端并回显 -------------------- */
   await openFromGroup(serverId, serverSeed.workspace.id, "服务器组的工作空间");

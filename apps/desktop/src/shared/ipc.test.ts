@@ -73,6 +73,8 @@ describe("the IPC table", () => {
         "app:take-join-link",
         // P4: the page hands a share link to the system share menu.
         "app:share",
+        // A7-1: the switch-service dialog opens a source in a new window.
+        "window:open",
         // G5-19: the page's own JS errors, opt-in (contract §30).
         "diagnostics:report",
       ].sort(),

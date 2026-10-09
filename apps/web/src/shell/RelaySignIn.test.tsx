@@ -81,14 +81,19 @@ describe("中继托管页面的登录", () => {
     render(<RelaySignIn relay={target} onEntered={onEntered} />);
     signIn();
     await waitFor(() => expect(screen.getByText("选择主机")).toBeTruthy());
-    const nas = screen.getByRole("button", { name: "打开 nas" });
-    expect((nas as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "打开 laptop" }));
+    const nas = screen.getByText("nas").closest("button");
+    expect(nas?.disabled).toBe(true);
+    expect(screen.getByText("离线")).toBeTruthy();
+    fireEvent.click(screen.getByText("laptop"));
     await waitFor(() =>
       expect(screen.getByText("这台主机不在线")).toBeTruthy(),
     );
+    // 失败挂在那一行下面。
+    expect(
+      document.querySelector(`[data-service-failure="${A}"]`)?.textContent,
+    ).toContain("这台主机不在线");
     expect(onEntered).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "打开 laptop" }));
+    fireEvent.click(screen.getByText("laptop"));
     await waitFor(() => expect(onEntered).toHaveBeenCalled());
   });
 

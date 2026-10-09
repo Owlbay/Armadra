@@ -108,6 +108,11 @@ const SHOW_USAGE_KEY = "armadra.showUsage";
 /** 开屏动画（§24.1 通用页）。默认开；关掉后每次打开都直接进壳。 */
 const SPLASH_KEY = "armadra.splashAnimation";
 /**
+ * 原生 App 启动时跳过「选择服务」直接进上次的服务（A7-1）。缺省关：启动先选。
+ * 入口（`mobile/entry.ts`）在挂载前读它。
+ */
+const SERVICES_AUTO_ENTER_KEY = "armadra.services.autoEnter";
+/**
  * 文件列表里显示 `.DS_Store` 这类系统文件（用户实测反馈 F4）。
  *
  * 默认关：它们既不是用户写的，也不是用户能改的，出现在一个 240px 宽的
@@ -250,6 +255,8 @@ export interface PreferencesState {
   showUsage: boolean;
   /** 打开时播放开屏动画（§24.1 通用页）。 */
   splashAnimation: boolean;
+  /** 原生 App 启动直接进上次的服务（A7-1），缺省关。 */
+  servicesAutoEnter: boolean;
   /** 文件列表里显示 `.DS_Store` / `Thumbs.db` / `desktop.ini`（F4）。 */
   showSystemFiles: boolean;
   /** 会话内存徽标的变色阈值，字节（路线图 §4.3）。默认 2 GiB。 */
@@ -308,6 +315,7 @@ export interface PreferencesState {
   setSoundVolume: (volume: number) => void;
   setShowUsage: (enabled: boolean) => void;
   setSplashAnimation: (enabled: boolean) => void;
+  setServicesAutoEnter: (enabled: boolean) => void;
   setShowSystemFiles: (enabled: boolean) => void;
   setSessionMemoryWarnBytes: (bytes: number) => void;
   setRenderBudget: (limit: number) => void;
@@ -369,6 +377,7 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   soundVolume: storedNumber(SOUND_VOLUME_KEY, 60, ...SOUND_VOLUME_RANGE),
   showUsage: storedBoolean(SHOW_USAGE_KEY, true),
   splashAnimation: storedBoolean(SPLASH_KEY, true),
+  servicesAutoEnter: storedBoolean(SERVICES_AUTO_ENTER_KEY, false),
   showSystemFiles: storedBoolean(SHOW_SYSTEM_FILES_KEY, false),
   sessionMemoryWarnBytes: storedNumber(
     SESSION_MEMORY_WARN_KEY,
@@ -524,6 +533,10 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   setSplashAnimation(splashAnimation) {
     writeStored(SPLASH_KEY, String(splashAnimation));
     set({ splashAnimation });
+  },
+  setServicesAutoEnter(servicesAutoEnter) {
+    writeStored(SERVICES_AUTO_ENTER_KEY, String(servicesAutoEnter));
+    set({ servicesAutoEnter });
   },
   setShowSystemFiles(showSystemFiles) {
     writeStored(SHOW_SYSTEM_FILES_KEY, String(showSystemFiles));

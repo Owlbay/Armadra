@@ -41,6 +41,7 @@ public class ArmadraNativePlugin: CAPPlugin, CAPBridgedPlugin, NotificationHandl
         CAPPluginMethod(name: "pushRotated", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "ackPushRotation", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "openExternal", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "appInfo", returnType: CAPPluginReturnPromise),
     ]
 
     private static let installedFlag = "dev.armadra.mobile.installed"
@@ -377,6 +378,16 @@ public class ArmadraNativePlugin: CAPPlugin, CAPBridgedPlugin, NotificationHandl
                 opened ? call.resolve() : call.reject("no browser")
             }
         }
+    }
+
+    /// App 自己的版本名与构建号（`MARKETING_VERSION` / `CURRENT_PROJECT_VERSION`，来自
+    /// `ios/version.generated.xcconfig`）。移动端有独立的版本线，与所连主机的版本无关。
+    @objc func appInfo(_ call: CAPPluginCall) {
+        let info = Bundle.main.infoDictionary ?? [:]
+        call.resolve([
+            "version": info["CFBundleShortVersionString"] as? String ?? "",
+            "build": info["CFBundleVersion"] as? String ?? "",
+        ])
     }
 
     // 前台也出横幅；点开按载荷里的深链进节点焦点页（NSE 解开后写进 `url`）。

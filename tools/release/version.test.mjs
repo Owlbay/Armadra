@@ -12,12 +12,18 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  MOBILE_CHANGELOG,
+  MOBILE_MANIFEST,
+  MOBILE_PAGE_PROTOCOL,
   VERSION_SITES,
   checkAgentPin,
+  checkMobile,
   checkDesktopServe,
   checkPlatformPin,
   checkVersions,
+  mobileVersion,
   readVersions,
+  setMobileVersion,
   setVersion,
   workspaceVersion,
 } from "./version.mjs";
@@ -27,10 +33,12 @@ import {
   normalize,
   normalizeAcp,
   normalizeAgentPin,
+  normalizeMobile,
   normalizePlatformPin,
   readAcpCompatibility,
   readAgentPin,
   readCompatibility,
+  readMobileCompatibility,
   readPlatformPin,
   releaseNote,
   renderFence,
@@ -373,4 +381,193 @@ test("the desktop package carries the server shell behind the serve gate", () =>
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
+});
+
+/** The files the mobile check reads, copied out of the repository. */
+const MOBILE_FILES = [
+  MOBILE_MANIFEST,
+  MOBILE_CHANGELOG,
+  MOBILE_PAGE_PROTOCOL,
+  "apps/mobile/ios/App/App.xcodeproj/project.pbxproj",
+  "apps/mobile/ios/version.xcconfig",
+  "apps/mobile/ios/debug.xcconfig",
+  "apps/mobile/android/app/build.gradle",
+  "apps/desktop/src/core/identity/protocol.ts",
+];
+
+function mobileWorkspace() {
+  const base = mkdtempSync(join(tmpdir(), "armadra-mobile-version-")) + "/";
+  for (const path of MOBILE_FILES) {
+    mkdirSync(dirname(base + path), { recursive: true });
+    cpSync(root + path, base + path);
+  }
+  return base;
+}
+
+function edit(base, path, from, to) {
+  const text = readFileSync(base + path, "utf8");
+  assert.ok(
+    from.test ? from.test(text) : text.includes(from),
+    `${path} has ${from}`,
+  );
+  writeFileSync(base + path, text.replace(from, to));
+}
+
+const mobileRange = (minor = 14) =>
+  normalizeMobile({ minimumHostProtocol: { major: 1, minor } });
+
+test("the mobile app is not in the desktop suite's version sites", () => {
+  assert.ok(
+    !VERSION_SITES.some((site) => site.path.startsWith("apps/mobile/")),
+  );
+  assert.notEqual(mobileVersion(), workspaceVersion());
+  // The desktop check stays green whatever the mobile version is.
+  assert.deepEqual(checkVersions({}).problems, []);
+});
+
+test("the repository's own mobile version line checks out", () => {
+  const { version, problems } = checkMobile({});
+  assert.deepEqual(problems, []);
+  assert.equal(version, mobileVersion());
+  assert.deepEqual(readMobileCompatibility().minimumHostProtocol, {
+    major: 1,
+    minor: 14,
+  });
+});
+
+test("mobile set writes only the mobile manifest and refuses a pre-release", () => {
+  const base = mobileWorkspace();
+  try {
+    const { changed } = setMobileVersion("1.4.2", base);
+    assert.equal(mobileVersion(base), "1.4.2");
+    assert.match(changed[0], /apps\/mobile\/package\.json: .* -> 1\.4\.2/);
+    assert.throws(
+      () => setMobileVersion("1.5.0-beta.1", base),
+      /plain X\.Y\.Z/,
+    );
+    assert.throws(() => setMobileVersion("1.5", base), /plain X\.Y\.Z/);
+    // 1.4.2 has no changelog section yet.
+    assert.match(
+      checkMobile({ base, mobile: mobileRange() }).problems.join("\n"),
+      /CHANGELOG\.md has no "## 1\.4\.2" section/,
+    );
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("a mobile tag must be mobile-v plus the mobile version", () => {
+  const base = mobileWorkspace();
+  const version = mobileVersion(base);
+  try {
+    assert.deepEqual(
+      checkMobile({ base, tag: `mobile-v${version}`, mobile: mobileRange() })
+        .problems,
+      [],
+    );
+    assert.match(
+      checkMobile({ base, tag: "mobile-v9.9.9", mobile: mobileRange() })
+        .problems[0],
+      /does not name the mobile version/,
+    );
+    assert.match(
+      checkMobile({ base, tag: `v${version}`, mobile: mobileRange() })
+        .problems[0],
+      /does not start with "mobile-v"/,
+    );
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("a hard-coded iOS version or an Android derivation from semver fails", () => {
+  const base = mobileWorkspace();
+  try {
+    edit(
+      base,
+      "apps/mobile/ios/App/App.xcodeproj/project.pbxproj",
+      "INFOPLIST_FILE = App/Info.plist;",
+      "INFOPLIST_FILE = App/Info.plist;\n\t\t\t\tMARKETING_VERSION = 0.2.0;",
+    );
+    edit(
+      base,
+      "apps/mobile/android/app/build.gradle",
+      "versionCode appVersion.versionCode",
+      "versionCode((System.getenv('ARMADRA_VERSION_CODE') ?: '1').toInteger())",
+    );
+    edit(
+      base,
+      "apps/mobile/ios/debug.xcconfig",
+      '#include "version.xcconfig"',
+      "",
+    );
+    const problems = checkMobile({ base, mobile: mobileRange() }).problems;
+    assert.equal(problems.length, 3, problems.join("\n"));
+    assert.match(problems[0], /hard-codes MARKETING_VERSION/);
+    assert.match(
+      problems[1],
+      /debug\.xcconfig does not include version\.xcconfig/,
+    );
+    assert.match(problems[2], /build\.gradle does not take versionName/);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("compatibility.json mobile follows the core's protocol and the page's copy", () => {
+  const base = mobileWorkspace();
+  try {
+    const core = readFileSync(
+      root + "apps/desktop/src/core/identity/protocol.ts",
+      "utf8",
+    );
+    const coreMinor = Number(/PROTOCOL_MINOR = (\d+)/.exec(core)[1]);
+    assert.match(
+      checkMobile({ base, mobile: mobileRange(coreMinor + 1) }).problems.join(
+        "\n",
+      ),
+      /above the core's own 1\./,
+    );
+    assert.match(
+      checkMobile({
+        base,
+        mobile: normalizeMobile({
+          minimumHostProtocol: { major: 2, minor: 0 },
+        }),
+      }).problems.join("\n"),
+      /the core speaks major 1/,
+    );
+    edit(base, MOBILE_PAGE_PROTOCOL, /minor: 14/, "minor: 15");
+    assert.match(
+      checkMobile({ base, mobile: mobileRange() }).problems[0],
+      /host-compatibility\.ts says 1\.15, compatibility\.json .* says 1\.14/,
+    );
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("the mobile entry is strict and stays out of the fence", () => {
+  assert.throws(() => normalizeMobile(undefined), /no mobile entry/);
+  assert.throws(
+    () =>
+      normalizeMobile({ minimumHostProtocol: { major: 1, minor: 1 }, x: 1 }),
+    /unknown mobile key/,
+  );
+  assert.throws(
+    () => normalizeMobile({ minimumHostProtocol: { major: 0, minor: 1 } }),
+    /major/,
+  );
+  assert.throws(
+    () => normalizeMobile({ minimumHostProtocol: { major: 1, minor: -1 } }),
+    /minor/,
+  );
+  const fence = extractFence(
+    releaseNote({
+      version: "0.2.4",
+      notes: "x",
+      compatibility: readCompatibility(),
+    }),
+  );
+  assert.deepEqual(Object.keys(fence), ["minimumInstalled"]);
 });

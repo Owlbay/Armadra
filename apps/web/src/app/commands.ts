@@ -8,6 +8,7 @@ import { usePreferencesStore, useT } from "./preferences-store";
 import { useCanvasStore } from "../store/canvas-store";
 import { useEnabledAgents } from "./use-agents";
 import { openQuickOpen } from "../panels/quick-open-seed";
+import { switchService } from "../services/switcher";
 
 /** Git 工具窗口的提交页监听它来触发提交（⌘⏎，§13.5）。 */
 export const SCM_COMMIT_EVENT = "armadra:scm-commit";
@@ -88,6 +89,9 @@ export function useCommandDispatch(): CommandDispatch {
           return;
         case "app.quickOpen":
           setPanel("quickOpen", !panels.quickOpen);
+          return;
+        case "app.switchService":
+          switchService();
           return;
         // 项目搜索住在资源管理器抽屉的第二个页签。面板自己不知道该切到
         // 哪一页，所以这里开抽屉之后广播一次——和 `scm.commit` 同一套。

@@ -6,6 +6,7 @@ import { LOCAL_SOURCE_ID } from "../api/source";
 import { useT } from "../app/preferences-store";
 import { useOpenWorkspace } from "../app/workspace-actions";
 import { PUSH_OPEN_MESSAGE } from "../push/service-worker";
+import { returnToPicker } from "../services/switcher";
 import { sourceRegistry } from "../sources/registry";
 import { useCanvasStore } from "../store/canvas-store";
 import {
@@ -192,7 +193,13 @@ export function usePushOpen(): void {
       cancelFocus();
       const route = pushRouteOf(target.sourceId, routeContext());
       if (route.kind === "unknown") {
-        toast(tRef.current("mobile.push.unknownSource"));
+        // 签发它的主机不在连接表里：给一个回选择页的动作（多端入口设计 §1.5）。
+        toast(tRef.current("mobile.push.unknownSource"), {
+          action: {
+            label: tRef.current("services.pick"),
+            onClick: () => returnToPicker(),
+          },
+        });
         return;
       }
       if (route.kind === "switch") {

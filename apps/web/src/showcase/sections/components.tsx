@@ -29,6 +29,10 @@ import {
   ResponsiveDialogTrigger,
 } from "@/panels/ResponsiveDialog";
 import { TABS_CONTENT_FOCUS } from "@/panels/tabs-focus";
+import { SwitchServiceDialog } from "@/services/SwitchServiceDialog";
+import { useServiceSwitcher } from "@/services/switcher";
+import { SourcesProvider } from "@/sources/context";
+import { showcaseSourceRegistry } from "../fixtures/services";
 import { AgentAvatar } from "@/ui/agent-avatar";
 import { Alert, AlertDescription, AlertTitle } from "@/ui/alert";
 import { Avatar, AvatarFallback, AvatarGroup } from "@/ui/avatar";
@@ -753,6 +757,20 @@ function Gallery() {
           {t("settings.title")}
         </Button>
         <SettingsDialog />
+      </Sample>
+      {/* 桌面「切换服务」对话框（A7-1）：样本源表，连接是假的。 */}
+      <Sample name="switch-service-dialog">
+        <Button
+          variant="outline"
+          size="sm"
+          data-showcase-switch-service
+          onClick={() => useServiceSwitcher.getState().setOpen(true)}
+        >
+          {t("services.switch")}
+        </Button>
+        <SourcesProvider registry={showcaseSourceRegistry()}>
+          <SwitchServiceDialog />
+        </SourcesProvider>
       </Sample>
       <Sample name="popover · hover-card · brand-mark">
         <Popover>

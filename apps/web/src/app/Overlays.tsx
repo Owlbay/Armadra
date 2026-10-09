@@ -18,6 +18,7 @@ import {
   ResourceDrawer,
   QuickOpen,
   SettingsDialog,
+  SwitchServiceDialog,
   GitToolWindow,
   SshPromptDialog,
   UsageDashboard,
@@ -30,6 +31,7 @@ import { JoinedSourceOpener } from "./joined-source";
 import { useMountedOnce, useOverlayRequested } from "./overlay-gates";
 import { useLinkFragments } from "./use-link-fragments";
 import { useSourcesBootstrap } from "./use-sources-bootstrap";
+import { useServiceSwitcher } from "@/services/switcher";
 
 /**
  * 所有浮层的挂载点。
@@ -60,6 +62,7 @@ export function Overlays() {
   const codeAction = useOverlayRequested("codeAction");
   const editPreview = useOverlayRequested("editPreview");
   const merge = useOverlayRequested("merge");
+  const switchService = useServiceSwitcher((state) => state.open);
   useLinkFragments();
   useSourcesBootstrap();
 
@@ -101,6 +104,9 @@ export function Overlays() {
       </Gate>
       <Gate open={panels.settings}>
         <SettingsDialog />
+      </Gate>
+      <Gate open={switchService}>
+        <SwitchServiceDialog />
       </Gate>
       <Gate open={panels.palette}>
         <CommandPalette />

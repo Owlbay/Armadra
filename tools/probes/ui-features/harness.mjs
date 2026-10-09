@@ -517,7 +517,9 @@ async function createPage(
             ? (extra.buttons ?? 0)
             : extra.button === "right"
               ? 2
-              : 1,
+              : extra.button === "middle"
+                ? 4
+                : 1,
         clickCount: extra.clickCount ?? 1,
         pointerType: "mouse",
         modifiers: extra.modifiers ?? 0,
