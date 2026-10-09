@@ -11,6 +11,7 @@ import {
   type BackendNotice,
   type BackendRef,
   type ForegroundInfo,
+  type ProgramTap,
   type SessionKey,
   type TerminalBackend,
   type TerminalHandle,
@@ -39,6 +40,7 @@ import {
   pastePlan,
 } from "./control";
 import { detect, ensureConf } from "./config";
+import { TmuxProgramTap } from "./program-tap";
 
 /**
  * The primary backend: a private tmux server (contract §15.3).
@@ -77,11 +79,53 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
   private nextClientId = 1;
   private readonly options: TmuxBackendOptions;
   private detection: ReturnType<typeof detect> | undefined;
+  private readonly tap: TmuxProgramTap;
+  private readonly programListeners: ((
+    key: SessionKey,
+    generation: number,
+    chunk: Buffer,
+  ) => void)[] = [];
+
+  /**
+   * The pane's raw output through `pipe-pane` (contract §53): tmux itself
+   * swallows the OSC strings this channel is about.
+   */
+  readonly programTap: ProgramTap = {
+    subscribe: (listener) => {
+      this.programListeners.push(listener);
+    },
+    // Straight to the pane: through a client pty tmux would parse the reply
+    // as keys.
+    answer: async (key, bytes) => {
+      await this.control.sendKeysBytes(this.require(key).name, bytes);
+    },
+  };
 
   constructor(options: TmuxBackendOptions) {
     this.options = options;
     this.control = new TmuxControl(options.dataDir);
     ensureConf(this.control.conf);
+    this.tap = new TmuxProgramTap({
+      directory: join(options.dataDir, "program-taps"),
+      control: this.control,
+      deliver: (name, chunk) => {
+        for (const [key, session] of this.sessions) {
+          if (session.name !== name) continue;
+          for (const listener of this.programListeners)
+            listener(key, session.generation, chunk);
+          return;
+        }
+      },
+    });
+  }
+
+  /** Starts the program tap; a failure only costs the status channel. */
+  private async startTap(name: string): Promise<void> {
+    try {
+      await this.tap.start(name);
+    } catch {
+      this.tap.stop(name);
+    }
   }
 
   /** The socket this backend binds. Tests assert it is under their tempdir. */
@@ -147,6 +191,7 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
       clients: new Map(),
       inCopyMode: false,
     });
+    await this.startTap(name);
     const pid = await this.control.panePid(name);
     return {
       sessionKey: spec.sessionKey,
@@ -174,6 +219,7 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
     });
     // A session from an older build still follows its latest client.
     await this.pinWindow(name);
+    await this.startTap(name);
     return this.control.panePid(name);
   }
 
@@ -285,6 +331,7 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
       void this.control.hasSession(session.name).then((alive) => {
         if (alive) return;
         this.sessions.delete(key);
+        this.tap.stop(session.name);
         for (const listener of exitListeners) listener(undefined);
         this.announce({
           type: "exited",
@@ -468,6 +515,7 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
     session.clients.clear();
     await this.control.tryRun(["kill-session", "-t", session.name]);
     this.sessions.delete(key);
+    this.tap.stop(session.name);
   }
 
   async list(): Promise<BackendRef[]> {
@@ -477,12 +525,16 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
       "-F",
       LIST_ALIVE_FORMAT,
     ]);
-    if (output === undefined) return [];
+    if (output === undefined) {
+      this.tap.prune(new Set());
+      return [];
+    }
     const refs: BackendRef[] = [];
     for (const line of output.split("\n")) {
       const parsed = parseAliveLine(line, SESSION_PREFIX);
       if (parsed !== undefined) refs.push(parsed);
     }
+    this.tap.prune(new Set(refs.map((ref) => ref.name)));
     return refs;
   }
 
@@ -491,6 +543,8 @@ export class TmuxBackend implements TerminalBackend, AdoptableBackend {
    * reason tmux is the primary backend.
    */
   async detachAll(): Promise<void> {
+    // The panes keep running; their `cat` exits on its next write.
+    this.tap.stopAll();
     for (const session of this.sessions.values()) {
       for (const client of session.clients.values()) {
         releasePty(client.pty);
