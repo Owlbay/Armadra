@@ -37,7 +37,11 @@ import {
 import { terminalAppearance } from "./surface/appearance";
 import { pasteIntoTerminal, writeClipboard } from "./surface/clipboard";
 import { useSurfaceRefs } from "./surface/refs";
-import { useFileDropPaste } from "./surface/use-file-drop";
+import {
+  useExternalFilePaste,
+  useFileDropPaste,
+} from "./surface/use-file-drop";
+import { filesOf } from "./file-paste";
 import { useSurfaceHandle } from "./surface/use-handle";
 import { useLaunchSequence } from "./surface/use-launch";
 import { useSurfaceLifecycle } from "./surface/use-lifecycle";
@@ -159,6 +163,7 @@ function TerminalSurfaceImpl({
   }, [onStatusChange, status, render]);
 
   const pasteDroppedFiles = useFileDropPaste(refs, nodeId);
+  const pasteExternalFiles = useExternalFilePaste(refs, nodeId);
 
   /* -------------------------------- fit 守卫 ------------------------------ */
 
@@ -317,12 +322,27 @@ function TerminalSurfaceImpl({
             event.preventDefault();
             event.stopPropagation();
             try {
-              if (!hasWorkspaceFileDrag(event.dataTransfer))
-                throw new FileDragError("fileDrag.externalPathUnavailable");
+              if (!hasWorkspaceFileDrag(event.dataTransfer)) {
+                // 系统文件管理器里拖来的：上传到会话所在的 core 再粘路径（§56）。
+                const files = filesOf(event.dataTransfer);
+                if (files.length === 0)
+                  throw new FileDragError("fileDrag.externalPathUnavailable");
+                pasteExternalFiles(files);
+                return;
+              }
               pasteDroppedFiles(readWorkspaceFileDrag(event.dataTransfer));
             } catch (error) {
               toast.error(translate(fileDragMessage(error)));
             }
+          }}
+          // ⌘V / Ctrl+V 粘进来的截图或文件（§56）：在 xterm 读剪贴板文字之前
+          // 截下，不然它只会粘出一个文件名，或者什么都不粘。纯文字照旧交给 xterm。
+          onPasteCapture={(event) => {
+            const files = filesOf(event.clipboardData);
+            if (files.length === 0) return;
+            event.preventDefault();
+            event.stopPropagation();
+            pasteExternalFiles(files);
           }}
           // 只聚焦，不写任何字节给 PTY（§18.3 鼠标行）。休眠着的终端点一下就
           // 是唤醒（宿主设计 §7.2）。
@@ -383,7 +403,9 @@ function TerminalSurfaceImpl({
           {t("terminal.copy")}
         </ContextMenuItem>
         <ContextMenuItem
-          onSelect={() => void pasteIntoTerminal(refs.terminalRef.current)}
+          onSelect={() =>
+            void pasteIntoTerminal(refs.terminalRef.current, pasteExternalFiles)
+          }
         >
           {t("terminal.paste")}
         </ContextMenuItem>

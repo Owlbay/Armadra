@@ -19,6 +19,10 @@ export const fileDrag: MessageModule = {
       "请从应用内文件树拖入；此处不会把外部文件名当作终端路径。",
     "fileDrag.canvasLocked": "请先解锁画布，再拖入文件预览。",
     "fileDrag.failed": "无法打开文件或插入路径，请确认文件仍可访问。",
+    "fileDrag.uploading": "正在上传…",
+    "fileDrag.uploadFailed": "文件没有上传成功。",
+    "fileDrag.tooLarge": "文件超过 {size}，未上传。",
+    "fileDrag.awaitingAnswer": "Agent 正在等你回答，答完再粘贴文件。",
   },
   en: {
     "fileDrag.hint":
@@ -45,5 +49,10 @@ export const fileDrag: MessageModule = {
       "Unlock the canvas before dropping a file preview.",
     "fileDrag.failed":
       "The file could not be previewed or its path inserted. Check that it is still accessible.",
+    "fileDrag.uploading": "Uploading…",
+    "fileDrag.uploadFailed": "The file could not be uploaded.",
+    "fileDrag.tooLarge": "The file is over {size} and was not uploaded.",
+    "fileDrag.awaitingAnswer":
+      "The agent is waiting for an answer. Answer it before pasting files.",
   },
 };

@@ -37,6 +37,7 @@ import {
   type TerminalSpec,
   type TerminateMode,
 } from "../terminal/backend";
+import type { AttachmentBlocks } from "./attachments";
 import { AcpError, type AcpExit } from "./client";
 import type { AcpSession } from "./session";
 
@@ -63,6 +64,8 @@ interface Entry {
   lastTurn?: string;
   /** 下一条经输入路径发出的 prompt 带的页面回合 id（§39.9），用一次就清。 */
   clientTurnId?: string;
+  /** 下一条 prompt 带的附件（§56），用一次就清。 */
+  attachments?: AttachmentBlocks;
 }
 
 /** 括号粘贴加回车 → 正文；不是这个形状答 `undefined`。 */
@@ -132,6 +135,22 @@ export class AcpBackend implements TerminalBackend {
     if (entry === undefined) return;
     if (clientTurnId === undefined) delete entry.clientTurnId;
     else entry.clientTurnId = clientTurnId;
+  }
+
+  /**
+   * 下一条经输入路径发出的 prompt 带这些附件（契约 §56）。与
+   * {@link expectClientTurn} 同一个用法：路由在 `writeSubmit` 之前设、之后清，
+   * 租约与授权仍由输入路径判。有附件时正文可以是空的。
+   */
+  expectAttachments(
+    key: string,
+    attachments: AttachmentBlocks | undefined,
+  ): void {
+    const entry = this.entries.get(key as SessionKey);
+    if (entry === undefined) return;
+    if (attachments === undefined || attachments.blocks.length === 0) {
+      delete entry.attachments;
+    } else entry.attachments = attachments;
   }
 
   async create(spec: TerminalSpec): Promise<TerminalHandle> {
@@ -213,8 +232,11 @@ export class AcpBackend implements TerminalBackend {
       return;
     }
     const text = submittedText(data);
-    if (text === undefined || text.trim() === "") throw noRawWrite();
-    entry.lastTurn = this.promptOn(entry, text);
+    if (text === undefined) throw noRawWrite();
+    if (text.trim() === "" && entry.attachments === undefined) {
+      throw noRawWrite();
+    }
+    entry.lastTurn = this.promptOn(entry, text.trim() === "" ? "" : text);
   }
 
   async paste(
@@ -297,9 +319,11 @@ export class AcpBackend implements TerminalBackend {
 
   private promptOn(entry: Entry, text: string): string {
     const clientTurnId = entry.clientTurnId;
+    const attachments = entry.attachments;
     delete entry.clientTurnId;
+    delete entry.attachments;
     try {
-      return entry.session.prompt(text, clientTurnId);
+      return entry.session.prompt(text, clientTurnId, attachments);
     } catch (error) {
       if (error instanceof AcpError) {
         throw new TerminalError(409, error.code, error.message);

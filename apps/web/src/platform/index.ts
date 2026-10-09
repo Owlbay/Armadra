@@ -99,6 +99,20 @@ export async function revealPath(path: string): Promise<RevealOutcome> {
   }
 }
 
+/**
+ * 桌面壳里一个 `File` 在磁盘上的绝对路径（`webUtils.getPathForFile`）；浏览器
+ * 里、或这个 `File` 不是磁盘上的文件（剪贴板里的截图）时答空串。
+ */
+export function localFilePath(file: File): string {
+  const shell = bridge();
+  if (!shell) return "";
+  try {
+    return shell.pathForFile(file);
+  } catch {
+    return "";
+  }
+}
+
 export type FileDropPosition = { x: number; y: number };
 export type FileDropHandler = (
   paths: string[],

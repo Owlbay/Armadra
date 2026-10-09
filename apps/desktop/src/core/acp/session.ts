@@ -25,6 +25,7 @@
  */
 
 import type { WorkspaceEvent } from "../bus";
+import type { AttachmentBlocks, PromptCapabilities } from "./attachments";
 import { AcpError } from "./client";
 import type {
   AcpElicitationSettlement,
@@ -45,6 +46,7 @@ import type { AcpHostSession, AcpUpdateMeta } from "./host";
 import type { AcpMirror } from "./mirror";
 import type { AcpSignal } from "./normalize";
 import type {
+  AcpContentBlock,
   AcpElicitationResult,
   AcpPermissionOption,
   AcpSessionModeState,
@@ -105,6 +107,8 @@ export interface AcpSessionOptions extends AcpSessionIdentity {
   readonly resumeSessionId?: string | undefined;
   /** 适配器自己退了（不是我们要它退的）。 */
   readonly onExit?: (exit: AcpExit) => void;
+  /** SSH 节点：适配器在执行主机上，本机路径对它没有意义（契约 §56）。 */
+  readonly remote?: boolean;
 }
 
 /** 页面重载时要画的那张卡。 */
@@ -289,6 +293,21 @@ export class AcpSession implements AcpSessionIdentity {
     return this.mirror?.path;
   }
 
+  /** `initialize` 里声明的 `promptCapabilities`（契约 §56）；会话没开好时为 `null`。 */
+  get promptCapabilities(): PromptCapabilities | null {
+    const capabilities = this.host?.capabilities;
+    if (capabilities === undefined) return null;
+    return {
+      image: capabilities.images,
+      embeddedContext: capabilities.embeddedContext,
+    };
+  }
+
+  /** SSH 节点的会话（适配器不在这台机器上）。 */
+  get remote(): boolean {
+    return this.options.remote === true;
+  }
+
   /** 镜像渲染出的最后几行（桥的 `capture`）。 */
   capture(lines: number): string {
     return this.mirror?.capture(lines) ?? "";
@@ -406,7 +425,11 @@ export class AcpSession implements AcpSessionIdentity {
    * 不在了就当场拒绝。`clientTurnId` 是页面给这一轮起的 id（§39.9），随回合
    * 记下、随 `acp.turn` 带回；去重在路由那一层。
    */
-  prompt(text: string, clientTurnId?: string): string {
+  prompt(
+    text: string,
+    clientTurnId?: string,
+    attachments?: AttachmentBlocks,
+  ): string {
     if (!this.alive) {
       throw new AcpError("acp_exited", "the ACP agent is not running");
     }
@@ -421,12 +444,16 @@ export class AcpSession implements AcpSessionIdentity {
     this.queued += 1;
     this.queue = this.queue.then(async () => {
       this.queued -= 1;
-      await this.runTurn(turnId, text);
+      await this.runTurn(turnId, text, attachments);
     });
     return turnId;
   }
 
-  private async runTurn(turnId: string, text: string): Promise<void> {
+  private async runTurn(
+    turnId: string,
+    text: string,
+    attachments?: AttachmentBlocks,
+  ): Promise<void> {
     const host = this.host;
     if (host === undefined || !this.alive) {
       this.endTurn(turnId, {
@@ -436,21 +463,27 @@ export class AcpSession implements AcpSessionIdentity {
     }
     this.running = turnId;
     this.record(turnId, { state: "running" });
-    // 我方这条也是对话的一部分：先进镜像，再让别的设备看见。
-    this.mirror?.prompt(text);
-    this.sink.publish({
-      type: "acp.update",
-      sessionId: this.rowId,
-      nodeId: this.nodeId,
-      update: {
-        sessionUpdate: "user_message_chunk",
-        content: { type: "text", text },
-      },
-    });
+    // 我方这条也是对话的一部分：先进镜像，再让别的设备看见。附件只记链接
+    // （契约 §56）：图片与文件正文不进镜像与事件。
+    const links = attachments?.links ?? [];
+    this.mirror?.prompt(text, links);
+    const shown: AcpContentBlock[] = [
+      ...(text === "" ? [] : [{ type: "text" as const, text }]),
+      ...links,
+    ];
+    for (const content of shown) {
+      this.sink.publish({
+        type: "acp.update",
+        sessionId: this.rowId,
+        nodeId: this.nodeId,
+        update: { sessionUpdate: "user_message_chunk", content },
+      });
+    }
     this.sink.signal({ signal: "prompt", text });
     try {
       const result = await host.process.prompt(host.sessionId, [
-        { type: "text", text },
+        ...(text === "" ? [] : [{ type: "text" as const, text }]),
+        ...(attachments?.blocks ?? []),
       ]);
       this.endTurn(turnId, { stopReason: result.stopReason });
     } catch (error) {
