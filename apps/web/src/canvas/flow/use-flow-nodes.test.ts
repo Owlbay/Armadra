@@ -147,4 +147,30 @@ describe("useFlowNodes", () => {
       release();
     }
   });
+
+  /**
+   * 连线两端的边由几何按相对位置现算（#211），从哪个把手拖出来不入库：
+   * 存下来的边只有 `source` / `target`，节点移动后线自己换边。
+   */
+  it("连线时不把起笔与落点的把手写进边", () => {
+    const { result } = renderHook(() => useFlowNodes());
+    act(() => {
+      useCanvasStore.getState().addNode("sticky", { id: "c" } as never);
+    });
+    const created = useCanvasStore.getState().document!.nodes.at(-1)!.id;
+    act(() => {
+      result.current.onConnect({
+        source: "a",
+        target: created,
+        sourceHandle: "top",
+        targetHandle: "left",
+      });
+    });
+    const edge = useCanvasStore
+      .getState()
+      .document!.edges.find((item) => item.target === created)!;
+    expect(edge).toBeDefined();
+    expect("sourceHandle" in edge).toBe(false);
+    expect("targetHandle" in edge).toBe(false);
+  });
 });
