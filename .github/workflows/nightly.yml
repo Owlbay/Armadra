@@ -209,13 +209,18 @@ jobs:
 
   # 手机壳（补全计划 G3-1）：原生层单测、不签名的模拟器 / debug 构建，再在模拟器里
   # 跑「连接 → 配对 → 画布」（tools/probes/mobile-shell-e2e.mjs）。产物名见
-  # tools/release/artifacts.mjs 的 mobileAssets；真机、签名与商店上传要用户的证书。
+  # tools/release/artifacts.mjs 的 mobileAssets，带的是移动端自己的版本
+  # （version.mjs mobile print，与桌面套件无关）；版本名与构建号由 sync 里的
+  # app-version.mjs 写给两个原生工程。真机、签名与商店上传要用户的证书。
   mobile-ios:
     name: mobile (ios simulator)
     runs-on: macos-latest
     timeout-minutes: 90
     steps:
+      # 构建号是提交数（apps/mobile/scripts/app-version.mjs），浅克隆数不出来。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
         with:
           version: ${{ env.PNPM_VERSION }}
@@ -240,11 +245,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version=$(node -p "require('./apps/mobile/package.json').version")
+          version=$(node tools/release/version.mjs mobile print)
           xcodebuild build -project apps/mobile/ios/App/App.xcodeproj -scheme App \
             -configuration Debug -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath target/mobile/ios MARKETING_VERSION="$version"
+            -derivedDataPath target/mobile/ios
           name=$(node --input-type=module -e "import { mobileAssets } from './tools/release/artifacts.mjs'; console.log(mobileAssets('$version')[1].name)")
           ditto -c -k --keepParent \
             target/mobile/ios/Build/Products/Debug-iphonesimulator/App.app \
@@ -268,7 +273,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
+      # 构建号是提交数（apps/mobile/scripts/app-version.mjs），浅克隆数不出来。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
         with:
           version: ${{ env.PNPM_VERSION }}
@@ -296,7 +304,7 @@ jobs:
         run: |
           set -euo pipefail
           ./gradlew :armadra-native-core:test :app:assembleDebug --no-daemon --stacktrace
-          version=$(node -p "require('../package.json').version")
+          version=$(node ../../../tools/release/version.mjs mobile print)
           name=$(node --input-type=module -e "import { mobileAssets } from '../../../tools/release/artifacts.mjs'; console.log(mobileAssets('$version')[0].name)")
           mkdir -p ../../../target/mobile
           cp app/build/outputs/apk/debug/app-debug.apk "../../../target/mobile/$name"

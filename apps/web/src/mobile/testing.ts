@@ -70,6 +70,7 @@ export function fakeBridge(
     ackPushRotation: vi.fn(async () => undefined),
     onPushRotated: () => () => undefined,
     openExternal: vi.fn(async () => false),
+    appInfo: vi.fn(async () => null),
     ...rest,
   } as unknown as NativeBridge;
   return { bridge, sessions, remotes, pins };

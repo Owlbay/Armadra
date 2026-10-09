@@ -2,6 +2,8 @@ package dev.armadra.mobile;
 
 import android.Manifest;
 import android.content.Intent;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.util.Log;
@@ -528,6 +530,24 @@ public class ArmadraNativePlugin extends Plugin {
             call.resolve();
         } catch (Exception noBrowser) {
             call.reject("no browser");
+        }
+    }
+
+    /**
+     * App 自己的版本名与构建号（{@code versionName} / {@code versionCode}，来自
+     * {@code app/version.properties}）。移动端有独立的版本线，与所连主机的版本无关。
+     */
+    @PluginMethod
+    public void appInfo(PluginCall call) {
+        try {
+            PackageInfo info = getContext().getPackageManager().getPackageInfo(getContext().getPackageName(), 0);
+            long code = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P ? info.getLongVersionCode() : info.versionCode;
+            JSObject result = new JSObject();
+            result.put("version", info.versionName == null ? "" : info.versionName);
+            result.put("build", String.valueOf(code));
+            call.resolve(result);
+        } catch (PackageManager.NameNotFoundException missing) {
+            call.reject("no package info");
         }
     }
 

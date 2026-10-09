@@ -45,7 +45,7 @@ checkpoint 和质量门见[真实双 Agent 入口](../../docs/guides/local-cli-p
 | 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                                                                                                                                                                                                 | 何时跑                              | 失败时       |
 | --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |
 | A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`core-terminal-program-status`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`overlay-safe-area`、`realtime-e2e`、`join-no-refresh`、`ws-mux-e2e`、`acp-e2e`、`push-e2e`、`workflow-e2e`、`agent-e2e-self-test`（场景 11 / 12 的 `--self-test`） | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
-| B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`server-e2e --container`、`server-e2e --proxy=caddy`、`crash-report-e2e`、`mobile-shell-e2e`、`windows-acceptance`（windows runner 作业）                                                                                                      | `nightly.yml`                       | 开 issue     |
+| B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`terminal-memory`、`update-e2e`、`server-e2e --container`、`server-e2e --proxy=caddy`、`crash-report-e2e`、`mobile-shell-e2e`、`windows-acceptance`（windows runner 作业）                                                                                   | `nightly.yml`                       | 开 issue     |
 | C   | `agent-e2e`（真 CLI 与额度，`ARMADRA_E2E_REAL=1`，见「C 档运行手册」）、`canvas-stress`（真实会话）、`windows-acceptance`（Windows 真机）                                                                                                                                                                                              | 手动；清单在执行计划 §5             | 记进状态文档 |
 
 其余脚本（`browser-cdp`、`git-tool-window`、`forge-panel`、`connection-drag`、`canvas-tidy`、`browser-agent-e2e`、`timezone-picker`、`language-load`、`launch-concurrency`）是单项核验，本地按需手动跑；`relay-web-e2e` 要 armadra-cloud 的检出，也是本地手动跑（见「中继托管页面端到端」）。平台探针 `personal-roundtrip`、`multi-source`、`link-join`（A 档）与 `nat-core-offline`、`webkit-roundtrip`（B 档）同样要 armadra-cloud 的检出（CI 上记 skipped）；后两者与 `multi-source` 的中继在容器里（要 Docker），`pnpm platform:e2e` 一次跑完，共用件在 `platform-lib.mjs`。
@@ -465,6 +465,24 @@ node tools/probes/server-perf.mjs [输出目录] [--cpu-prof 目录] [--no-basel
 ```
 
 产物 `result.json` 与 `table.md`。与 `server-perf-baseline.json` 里这台平台的基线比，差 20% 以上且超过该项绝对容差即失败；没有这台平台的基线时只报告。`--cpu-prof` 让服务器壳退出时写 `.cpuprofile`，找热点用。数字与解读见 [服务端性能基线](../../docs/status/server-performance-baseline.md)。
+
+## 终端内存基线
+
+`terminal-memory.mjs`（终端性能的回归探针）：桌面壳里 N 个持续输出的终端节点（每个一个 `perl` 发射器，缺省 100 行 / 秒），按「活跃 → 平移离屏 1 分钟 → 长时间离屏（缺省 3 分钟）→ 回到视口 → 反复切换 ×10 / ×20 → 强制 GC」量各进程的物理占用（macOS `top` 的 phys_footprint，Linux `smaps_rollup` 的 Pss 与 VmRSS）、Renderer 的 DOM 计数 / JS 堆 / `data-render` 与 `data-lifecycle` 直方图（CDP）、tmux 进程树的 RSS 与进程数，以及 Runtime 的事件循环延迟与采样轮次（`GET /api/diagnostics/runtime`，契约 §54；core 还没有这个接口时记 null）。长离屏段里量 65 s 内的采样轮次（全部离屏时的节奏）。
+
+```sh
+pnpm libs:build && pnpm --filter @armadra/desktop dist          # 缺省起打包产物
+node tools/probes/terminal-memory.mjs [输出目录] [--terminals 5|10|20] [--rate 100] [--renderer dom|webgl] \
+     [--backend tmux|direct] [--off1 60] [--off2 180] [--cycles 10] [--cadence-check] [--pressure] \
+     [--restore-check [--restore-wait 60] [--release-after 5m]] [--app 产物 | --unpacked [--eld-preload]] [--vmmap]
+node tools/probes/terminal-memory.mjs --merge r1/result.json r2/result.json r3/result.json --machine "说明"
+```
+
+- 起法：缺省是 `dist` 的产物（macOS `apps/desktop/release/mac*/Armadra.app`，Linux `linux-unpacked` 或 AppImage，DISPLAY 由调用方给），`--remote-debugging-port` 接 CDP；`--unpacked` 用 `apps/desktop/out`（先 `pnpm --filter @armadra/desktop build`），只有它能加 `--eld-preload`——经 `NODE_OPTIONS` 注入 `terminal-memory-eld.cjs`，记同步子进程每秒阻塞多少毫秒，做诊断接口之外的对照。
+- `--cadence-check`：新建节点与重载后各离屏 60 s，比采样轮次。`--pressure`：长离屏后经 `window.__armadraMemoryPressure.emit("warning")` 注入假压力，断言 `data-render` 不变、记下 `data-lifecycle`。`--restore-check`（DOM 渲染器）：停掉发射器、每个窗格打一行自己的名字，离屏 `--restore-wait` 秒后回到视口，断言页面行数与 tmux 窗格一致、画面文字等于 `capture-pane`、光标位置一致；`--release-after` 写页面的 `armadra.terminal.releaseAfter`。
+- 隔离：临时 HOME、`ARMADRA_DATA_DIR`、`--user-data-dir`、`ARMADRA_NO_GLOBAL_WRITES=1`、文件密钥后端与 mock 钥匙串；只按 PID 结束自己起的进程，tmux 只对自己数据目录里的 socket 发 `kill-server`。
+- 产物 `result.json`、`table.md`、`app.log`（`--eld-preload` 时还有 `eld.jsonl`）。与 `terminal-memory-baseline.json` 里这台平台、同一场景（终端数、速率、渲染器、后端、时长）的那份比：差超过相对阈值**且**超过该项绝对容差才算退化，各项规则在 `terminal-memory-lib.mjs` 的 `METRICS`；GPU 列、Renderer 活跃读数与强制 GC 差值在 Linux 只记录（软件渲染，噪声比容差大）；`--restore-check` 的两项是功能断言。没有对应基线时只报告。纯函数在 `terminal-memory-lib.mjs`，测试 `terminal-memory.test.mjs` 在 `pnpm release:test` 里。
+- B 档：`tools/ci/e2e.d/terminal-memory.json`，darwin 与 linux，10 个终端、`--off2 180 --cycles 10`，30 分钟。基线怎么录、三次的原始数见 [终端内存基线](../../docs/status/terminal-memory-baseline.md)。
 
 ## 语言会话负载基线
 

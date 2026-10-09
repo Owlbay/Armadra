@@ -40,3 +40,6 @@ apps/mobile/android/app/src/main/assets/public/
 apps/mobile/android/capacitor-cordova-android-plugins/
 apps/mobile/ios/ArmadraNativeKit/.build/
 apps/mobile/ios/ArmadraNativeKit/.swiftpm/
+# 移动端版本与构建号，sync 前由 apps/mobile/scripts/app-version.mjs 写出
+apps/mobile/ios/version.generated.xcconfig
+apps/mobile/android/app/version.properties

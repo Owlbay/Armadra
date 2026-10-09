@@ -2,6 +2,13 @@ import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { runtimeApi } from "../../../api/client";
+import { identityHello } from "../../../api/identity";
+import {
+  formatProtocol,
+  hostCompatibility,
+  MINIMUM_HOST_PROTOCOL,
+} from "../../../mobile/host-compatibility";
+import { nativeBridge } from "../../../mobile/native-bridge";
 import { usePreferencesStore, useT } from "../../../app/preferences-store";
 import { useAccess } from "../../../app/use-access";
 import { useCanvasStore } from "../../../store/canvas-store";
@@ -70,9 +77,16 @@ export function loadThirdPartyNotices(): Promise<string> {
 export function AboutPage() {
   const { remote } = useRemoteAccess();
   const { member } = useAccess();
+  const native = React.useMemo(() => nativeBridge(), []);
   return (
     <>
-      {remote || member ? <RemoteUpdates /> : <LocalUpdates />}
+      {native.available ? (
+        <MobileAbout bridge={native} />
+      ) : remote || member ? (
+        <RemoteUpdates />
+      ) : (
+        <LocalUpdates />
+      )}
       <LicensesGroup />
     </>
   );
@@ -117,6 +131,78 @@ function LicensesGroup() {
           )}
         </ResponsiveDialogContent>
       </ResponsiveDialog>
+    </>
+  );
+}
+
+/**
+ * 原生 App（手机与平板同一个 App）：App 自己的版本与构建号、所连主机的版本与
+ * 协议。两边版本线各自独立，合不合得来只看协议（`mobile/host-compatibility.ts`），
+ * 不合时说清楚该更新哪一边。App 没有自更新（商店分发），这里不出更新动作。
+ */
+export function MobileAbout({
+  bridge,
+}: {
+  bridge: Pick<ReturnType<typeof nativeBridge>, "appInfo">;
+}) {
+  const t = useT();
+  const app = useQuery({
+    queryKey: ["native-app-info"],
+    queryFn: () => bridge.appInfo(),
+    staleTime: Infinity,
+  });
+  const health = useQuery({
+    queryKey: ["health"],
+    queryFn: runtimeApi.health,
+    retry: false,
+  });
+  const hello = useQuery({
+    queryKey: ["identity-hello"],
+    queryFn: ({ signal }) => identityHello(signal),
+    retry: false,
+  });
+  const protocol = hello.data?.protocol;
+  const verdict = hostCompatibility(protocol);
+  const unknown = t("updates.version.unknown");
+  return (
+    <>
+      <SettingsGroup>
+        <SettingsRow label={t("updates.appVersion")}>
+          <span className="text-[13px] tabular-nums text-muted-foreground">
+            {app.data
+              ? t("updates.appVersion.value", {
+                  version: app.data.version,
+                  build: app.data.build,
+                })
+              : unknown}
+          </span>
+        </SettingsRow>
+        <SettingsRow label={t("updates.hostVersion")}>
+          <span className="text-[13px] tabular-nums text-muted-foreground">
+            {health.data?.version || unknown}
+          </span>
+        </SettingsRow>
+        <SettingsRow label={t("updates.hostProtocol")}>
+          <span className="text-[13px] tabular-nums text-muted-foreground">
+            {protocol && verdict !== "unknown"
+              ? formatProtocol(protocol)
+              : unknown}
+          </span>
+        </SettingsRow>
+      </SettingsGroup>
+      {protocol && (verdict === "updateHost" || verdict === "updateApp") && (
+        <Alert variant="destructive" data-slot="host-protocol">
+          <AlertTitle className="font-normal">
+            {t(`updates.hostProtocol.${verdict}`)}
+          </AlertTitle>
+          <AlertDescription>
+            {t(`updates.hostProtocol.${verdict}.detail`, {
+              host: formatProtocol(protocol),
+              minimum: formatProtocol(MINIMUM_HOST_PROTOCOL),
+            })}
+          </AlertDescription>
+        </Alert>
+      )}
     </>
   );
 }
