@@ -3923,6 +3923,34 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - shared：`clientSourceRouteSchema`、`clientSourceSchema`（加 `routes`）、`sourcesListOutputSchema`、`sourcesSessionInputSchema`（加 `route`）、`sourceRouteInputSchema`、`sources.routePrefer` / `sources.routeRemove`、类型 `ClientSourceRoute` / `SourceRouteRef`。
 - web：`SourceRoute`、`SourceDescriptor.routes?`、`routesOf`、`Route.origin`、`CredentialProvider.getAccess/refresh(…, origin?)` 与 `selectsRelay`；手机 `remoteSlotOf(sourceId, origin?)`、`setRemoteSlot(sourceId, serviceId, origin?)`、`touchRoute`。
 
+## Agent 节点粘贴与上传图片、文件（#226，契约 §56，2026-10-10）
+
+现状与根因（改之前实测与读代码）：
+
+- 终端节点：⌘V / Ctrl+V 只走 xterm 的 `paste` 事件，它只读 `text/plain`——截图粘不进任何东西，Finder 复制的文件只粘出一个文件名；从系统拖进来的文件被直接拒绝（`fileDrag.externalPathUnavailable`），只认应用内文件树的拖放；右键「粘贴」只读文字。
+- ACP 节点：`acp.prompt` 只收 `text`，`session.ts` 永远只发一个 `text` 块；`initialize` 的 `promptCapabilities` 记在 core 里但页面拿不到；输入框没有附件入口，拖进来的文件落到画布上成了节点。
+- 浏览器页面、桌面壳与经中继的远程源同一份前端，问题相同；远程源上「本机路径」对 Agent 没有意义，所以必须上传到会话所在的 core。
+
+做了什么：
+
+- core：`files/uploads.ts` + `upload-routes.ts`（`POST /api/workspaces/{id}/agent-uploads`，数据目录按工作空间隔离、名字只留安全字符、单文件 25 MiB、7 天与每工作空间 256 MiB 的清理）；`acp/attachments.ts` 把上传转成 `image` / 内嵌 `resource` / `resource_link`（按 `promptCapabilities` 与 SSH 判断）；`acp.prompt` 收 `attachments`，经桥的 `expectAttachments` 随同一次 `writeSubmit`（租约与授权不变）；镜像与 `acp.update` 只记链接；`acp.log` 多 `promptCapabilities`；协议 minor 升到 28。
+- 终端（`terminal/file-paste.ts`、`surface/use-file-drop.ts`、`TerminalSurface.tsx`）：粘贴与系统拖放的文件上传后把路径以括号粘贴插入，一个文件一段、不加回车；Agent 会话给 TUI 的写法（安全字符原样、否则加引号、Windows 路径换正斜杠），普通 shell 按它的引用规则；Agent 正等人回答、启动输入未完成、SSH 节点时不粘；桌面壳本机源拖进来的磁盘文件直接用原路径。右键「粘贴」读得到剪贴板图片。
+- 各 CLI 的实际方式（只读了本机安装包，没运行）：Claude Code 去掉引号与反斜杠转义后把以 `.png/.jpg/.jpeg/.gif/.webp` 结尾的粘贴当图片附上；Codex 把整段恰好是一个图片路径的粘贴附成图片。两家的 Ctrl+V 剪贴板图片只读 CLI 所在机器的系统剪贴板，远程源上不成立，所以统一走「上传 + 粘路径」。
+- ACP 输入框（`acp/PromptAttachments.tsx`、`PromptBox.tsx`、`SessionView.tsx`）：粘贴、拖到会话视图任何地方、回形针选文件；图片缩略图、文件徽标，都可移除；Agent 不收图片、SSH 节点打不开本机文件、超限、超过 10 个时当场提示；发送时先上传再带 id 发 prompt，上传失败不发、草稿留着；本页先画的用户消息带附件。文案进 `i18n/acp.ts`、`i18n/file-drag.ts`，中英同步；错误码进 `MESSAGE_BY_CODE`。
+
+实测：
+
+- 单测 / 组件测试：`core/files/uploads.test.ts` 9、`core/acp/attachments.test.ts` 5（含真假 ACP Agent 子进程的路由用例：链接到达、正文不进镜像与事件、图片按能力拒绝、只有附件可发）、`core/relay/uploads.test.ts` 2（经假中继隧道上传 3 MiB，落在那台 core 的数据目录；匿名 401、超限 413）、`route-scopes.test.ts` +1；`terminal/file-paste.test.ts` 10、`TerminalSurface.file-drop.test.tsx` +4、`acp/PromptAttachments.test.tsx` 7。
+- 探针 `tools/probes/agent-attachments-e2e.mjs`（`tools/ci/e2e.d/agent-attachments-e2e.json`，darwin / linux）：真 core + Vite + 无头 Chrome，假终端 Agent（`fixtures/fake-paste-cli.mjs`，开 2004、报每段粘贴与回车）收到恰好一段括号粘贴的上传路径、没有回车；普通 shell 拖入文件，路径插入未执行；假 ACP Agent（`fixtures/fake-acp-attach.mjs`，声明收图片与内嵌正文）收到 `text`、`image`（字节数对得上）与 `resource`，镜像只有两条链接；无控制台错误。本机 macOS 跑通。
+- 开发构建的 Electron（隔离数据目录、HOME 与 profile，跑完按 PID 结束）：合成的截图粘贴上传并插入路径。
+
+没做 / 限制：
+
+- Electron 里「从 Finder 拖入、按原路径插入」只有单测覆盖：CDP 的 `Input.dispatchDragEvent` 没能在壳里触发文件拖放，真实拖放没有自动化；也没有用系统剪贴板测真 ⌘V（会覆盖使用者的剪贴板）。
+- 经真个人中转的页面级探针没加：中转上传由假中继隧道上的用例覆盖（同一个 HTTP 接口）。
+- 重发 / 编辑后重发只带文字，不带上一轮的附件；SSH 终端节点不支持粘文件。
+- 用户消息里的图片缩略图只在本页内存里（`blob:`）；重载后是带名字的链接徽标。
+
 ## Claude Code mod M1：状态上报改走 mod、状态栏、版本门与环境回退（契约 §57，2026-10-10）
 
 做了什么：

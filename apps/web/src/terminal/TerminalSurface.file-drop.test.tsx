@@ -30,6 +30,7 @@ const fixture = vi.hoisted(() => ({
   disarm: vi.fn(),
   getTerminal: vi.fn(),
   fileInfo: vi.fn(),
+  upload: vi.fn(),
 }));
 vi.mock("@/store/canvas-store", () => ({
   useCanvasStore: {
@@ -53,6 +54,7 @@ vi.mock("@/api/client", () => ({
   runtimeApi: {
     getTerminal: (...args: unknown[]) => fixture.getTerminal(...args),
     fileInfo: (...args: unknown[]) => fixture.fileInfo(...args),
+    uploadAgentFile: (...args: unknown[]) => fixture.upload(...args),
     listFiles: vi.fn(),
     agents: vi.fn(async () => []),
   },
@@ -92,7 +94,11 @@ vi.mock("./transport", () => ({
   },
 }));
 vi.mock("sonner", () => ({
-  toast: { error: (...args: unknown[]) => fixture.error(...args) },
+  toast: {
+    error: (...args: unknown[]) => fixture.error(...args),
+    loading: () => "loading",
+    dismiss: () => undefined,
+  },
 }));
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
@@ -159,6 +165,13 @@ beforeEach(() => {
     agentId: fixture.data.agent?.id ?? null,
   }));
   fixture.fileInfo.mockResolvedValue({ path: "safe file.txt" });
+  fixture.upload.mockImplementation(async (_w: string, file: File) => ({
+    id: "0".repeat(32),
+    name: file.name,
+    path: `/data/agent-uploads/workspace/u1/${file.name}`,
+    mimeType: file.type,
+    bytes: file.size,
+  }));
 });
 afterEach(cleanup);
 
@@ -319,6 +332,61 @@ describe("TerminalSurface file input guards", () => {
     });
     drop(target);
     await waitFor(() => expect(fixture.error).toHaveBeenCalled());
+    expect(fixture.paste).not.toHaveBeenCalled();
+  });
+});
+
+describe("TerminalSurface external files (§56)", () => {
+  const shot = () =>
+    new File([new Uint8Array(4)], "image.png", { type: "image/png" });
+
+  it("uploads a pasted screenshot and pastes its path without Enter", async () => {
+    fixture.data.agent = { id: "claude" };
+    const body = await mounted();
+    fireEvent.paste(body, { clipboardData: { files: [shot()], items: [] } });
+    await waitFor(() =>
+      expect(fixture.paste).toHaveBeenCalledWith(
+        "/data/agent-uploads/workspace/u1/image.png",
+      ),
+    );
+    expect(fixture.upload).toHaveBeenCalledWith(
+      "workspace",
+      expect.any(File),
+      "image.png",
+      expect.anything(),
+    );
+    expect(fixture.input).not.toHaveBeenCalled();
+  });
+
+  it("uploads a file dropped from the system and pastes it for the shell", async () => {
+    const body = await mounted();
+    const file = new File(["x"], "notes.txt", { type: "text/plain" });
+    fireEvent.drop(body, {
+      dataTransfer: { types: ["Files"], files: [file], items: [] },
+    });
+    await waitFor(() =>
+      expect(fixture.paste).toHaveBeenCalledWith(
+        "/data/agent-uploads/workspace/u1/notes.txt ",
+      ),
+    );
+  });
+
+  it("leaves plain text to xterm", async () => {
+    const body = await mounted();
+    fireEvent.paste(body, {
+      clipboardData: { files: [], items: [], getData: () => "hello" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(fixture.upload).not.toHaveBeenCalled();
+  });
+
+  it("does not paste while the agent waits for an answer", async () => {
+    fixture.data.agent = { id: "claude" };
+    fixture.statuses[scoped("node")] = { state: "blocked", pendingId: "p1" };
+    const body = await mounted();
+    fireEvent.paste(body, { clipboardData: { files: [shot()], items: [] } });
+    await waitFor(() => expect(fixture.error).toHaveBeenCalled());
+    expect(fixture.upload).not.toHaveBeenCalled();
     expect(fixture.paste).not.toHaveBeenCalled();
   });
 });

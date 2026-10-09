@@ -244,9 +244,13 @@ export class AcpMirror {
   }
 
   /** 我方发出的一条 prompt。 */
-  prompt(text: string): void {
-    if (text === "") return;
-    this.append({ role: "user", blocks: [{ type: "text", text }] });
+  prompt(text: string, links: readonly MirrorBlock[] = []): void {
+    const blocks: MirrorBlock[] = [
+      ...(text === "" ? [] : [{ type: "text" as const, text }]),
+      ...links,
+    ];
+    if (blocks.length === 0) return;
+    this.append({ role: "user", blocks });
   }
 
   /**

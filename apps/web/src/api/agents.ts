@@ -33,6 +33,7 @@ import {
   type LaunchSlotRequest,
   suggestTitleResponseSchema,
   agentTranscriptSchema,
+  agentUploadResponseSchema,
   uploadAssetRequestSchema,
   uploadAssetResponseSchema,
   type ContextLink,
@@ -334,6 +335,30 @@ export const agentsApiFor = (rpc: (source?: Source) => ArmadraClient) => ({
             headers: { "Content-Type": source.type },
           },
         ),
+
+  /**
+   * 粘贴或拖进 Agent 节点的文件（契约 §56）：原样 POST 到当前源，落在会话所在
+   * 那台 core 的数据目录里（经中继的远程源就在远端）。答复的 `path` 是那台机器上
+   * 的绝对路径，`id` 给 ACP prompt 的 `attachments` 用。
+   */
+  uploadAgentFile: (
+    workspaceId: string,
+    file: Blob,
+    name: string,
+    source?: Source,
+  ) =>
+    request(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/agent-uploads?name=${query(name)}`,
+      agentUploadResponseSchema,
+      {
+        method: "POST",
+        body: file,
+        headers: {
+          "Content-Type": file.type || "application/octet-stream",
+        },
+      },
+      source,
+    ),
 
   /**
    * 按路径导入资产（旧画布契约 §8 Phase 3）。

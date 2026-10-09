@@ -41,6 +41,7 @@ import {
   type AcpTranscriptEntry,
   type AcpTurnEvent,
   type AcpTurnRecord,
+  type AcpPromptCapabilities,
 } from "@armadra/shared";
 import { z } from "zod";
 
@@ -153,6 +154,11 @@ export interface AcpSessionView {
   readonly confirming: boolean;
   /** 对账确认 core 没收到（或无从确认）：重试沿用同一个 `clientTurnId`。 */
   readonly undelivered: boolean;
+  /**
+   * 契约 §56：活进程声明的 `promptCapabilities`。`null`：还没读到，或 core 太旧
+   * （不收附件）。
+   */
+  readonly promptCapabilities: AcpPromptCapabilities | null;
 }
 
 export interface AcpPermissionView {
@@ -185,6 +191,7 @@ export const EMPTY_SESSION: AcpSessionView = {
   clientTurnId: null,
   confirming: false,
   undelivered: false,
+  promptCapabilities: null,
 };
 
 /* --------------------------------- 归约 ---------------------------------- */
@@ -521,6 +528,7 @@ export function beginTurn(
   view: AcpSessionView,
   text: string,
   clientTurnId: string | null = null,
+  attachments: readonly AcpAttachment[] = [],
 ): AcpSessionView {
   if (
     view.undelivered &&
@@ -548,6 +556,7 @@ export function beginTurn(
         role: "user",
         text,
         turn,
+        ...(attachments.length > 0 ? { attachments } : {}),
         at: nowIso(),
         local: true,
       },
@@ -780,7 +789,12 @@ interface AcpStoreState {
   >;
   hydrate: (sessionId: string, nodeId: string, log: AcpLogResponse) => void;
   update: (sessionId: string, update: AcpSessionUpdate) => void;
-  begin: (sessionId: string, text: string, clientTurnId?: string) => void;
+  begin: (
+    sessionId: string,
+    text: string,
+    clientTurnId?: string,
+    attachments?: readonly AcpAttachment[],
+  ) => void;
   end: (
     sessionId: string,
     nodeId: string,
@@ -858,6 +872,8 @@ export const useAcpStore = create<AcpStoreState>((set) => ({
             ? null
             : previous.models,
         endOffset: log.endOffset,
+        promptCapabilities:
+          log.promptCapabilities ?? previous.promptCapabilities,
       };
       const pending = (log.pending ?? []).map((item: AcpPendingPermission) => ({
         pendingId: item.pendingId,
@@ -884,10 +900,10 @@ export const useAcpStore = create<AcpStoreState>((set) => ({
     set((state) =>
       patchSession(state, sessionId, (view) => applyUpdate(view, update)),
     ),
-  begin: (sessionId, text, clientTurnId) =>
+  begin: (sessionId, text, clientTurnId, attachments) =>
     set((state) =>
       patchSession(state, sessionId, (view) =>
-        beginTurn(view, text, clientTurnId ?? null),
+        beginTurn(view, text, clientTurnId ?? null, attachments),
       ),
     ),
   confirm: (sessionId) =>

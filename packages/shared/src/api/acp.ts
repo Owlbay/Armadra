@@ -5,6 +5,7 @@ import {
   agentIdSchema,
   permissionModeSchema,
 } from "../domain/index.js";
+import { MAX_ACP_ATTACHMENTS } from "./uploads.js";
 
 /**
  * ACP — the Agent Client Protocol surface (contract §14,
@@ -364,10 +365,30 @@ export const createAcpSessionRequestSchema = z.object({
  * own id for this turn: the same id on the same session is delivered once and
  * answers the same `turnId`, so a retry after a lost answer cannot send twice.
  */
-export const acpPromptRequestSchema = z.object({
-  text: z.string().min(1),
-  clientTurnId: z.string().min(1).max(128).optional(),
+export const acpPromptAttachmentSchema = z.object({
+  /** An `agent-uploads` id (§56) on the session's core. */
+  uploadId: z.string().regex(/^[0-9a-f]{32}$/),
 });
+
+/**
+ * `attachments` (§56): uploads sent with the text — an image as an `image`
+ * block (only when the agent declared `promptCapabilities.image`), any other
+ * file as an embedded `resource` or a `resource_link`. With attachments the
+ * text may be empty.
+ */
+export const acpPromptRequestSchema = z
+  .object({
+    text: z.string(),
+    clientTurnId: z.string().min(1).max(128).optional(),
+    attachments: z
+      .array(acpPromptAttachmentSchema)
+      .max(MAX_ACP_ATTACHMENTS)
+      .optional(),
+  })
+  .refine(
+    (body) => body.text.trim() !== "" || (body.attachments?.length ?? 0) > 0,
+    { message: "text or attachments are required", path: ["text"] },
+  );
 export const acpPromptResponseSchema = z.looseObject({ turnId: z.string() });
 
 /**
@@ -558,6 +579,12 @@ export const acpLogSnapshotSchema = z.looseObject({
 
 export type AcpLogSnapshot = z.infer<typeof acpLogSnapshotSchema>;
 
+/** §56: what the agent said it accepts in a prompt (`initialize`). */
+export const acpPromptCapabilitiesSchema = z.looseObject({
+  image: z.boolean(),
+  embeddedContext: z.boolean(),
+});
+
 /** One normalised record (`core/history/types.ts::TranscriptEntry`). */
 export const acpTranscriptEntrySchema = z.looseObject({
   role: z.enum(["user", "assistant", "system"]),
@@ -585,6 +612,11 @@ export const acpLogResponseSchema = z.looseObject({
   turns: z.array(acpTurnRecordSchema).optional(),
   /** §49: what the live process last said that the mirror does not keep. */
   snapshot: acpLogSnapshotSchema.optional(),
+  /**
+   * §56: the live agent's `promptCapabilities`. Absent when no process is
+   * running — and from a core older than 1.28, which takes no attachments.
+   */
+  promptCapabilities: acpPromptCapabilitiesSchema.optional(),
 });
 
 /** `POST /api/acp/nodes/{nodeId}/driver` (design §4.2). */
@@ -686,6 +718,8 @@ export type AcpUpdateEvent = z.infer<typeof acpUpdateEventSchema>;
 export type AcpTurnEvent = z.infer<typeof acpTurnEventSchema>;
 export type AcpTurnRecord = z.infer<typeof acpTurnRecordSchema>;
 export type AcpPromptRequest = z.infer<typeof acpPromptRequestSchema>;
+export type AcpPromptAttachment = z.infer<typeof acpPromptAttachmentSchema>;
+export type AcpPromptCapabilities = z.infer<typeof acpPromptCapabilitiesSchema>;
 export type AcpDriverEvent = z.infer<typeof acpDriverEventSchema>;
 export type AcpStartPhase = (typeof ACP_START_PHASES)[number];
 export type AcpStartingEvent = z.infer<typeof acpStartingEventSchema>;
