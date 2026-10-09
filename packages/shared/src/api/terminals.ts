@@ -141,6 +141,31 @@ export const terminalTerminateRequestSchema = z.object({
   mode: terminateModeSchema.default("process"),
 });
 
+/**
+ * 终端程序自报的状态（契约 §53）：OSC 7501（Program Status Protocol）的
+ * 记录摘要，或映射到根记录的 OSC 9;4 进度。展示级提示，不作任何判据；程序
+ * 的 `msg` / `title` 是终端输出正文，不在这里。
+ */
+export const PROGRAM_STATES = [
+  "idle",
+  "working",
+  "blocked",
+  "done",
+  "error",
+] as const;
+export const programStatusSchema = z.object({
+  state: z.enum(PROGRAM_STATES),
+  /** 只随 `blocked`：等的是授权、回答还是登录。 */
+  kind: z.enum(["permission", "question", "auth"]).optional(),
+  /** 0–100；缺席是不定进度。 */
+  progress: z.number().int().min(0).max(100).optional(),
+  /** 程序自报的机读名（`[A-Za-z0-9_.+-]{1,32}`）。 */
+  app: z.string().max(32).optional(),
+  source: z.enum(["osc7501", "osc9"]),
+  updatedAt: z.string(),
+});
+export type ProgramStatus = z.infer<typeof programStatusSchema>;
+
 /** `GET /api/workspaces/{id}/sessions` — the sessions sidebar payload. */
 export const sessionSummarySchema = z.object({
   nodeId: z.string(),
@@ -167,6 +192,8 @@ export const sessionSummarySchema = z.object({
   alive: z.boolean(),
   /** How the session is driven; the sidebar marks `acp` rows. */
   backend: terminalBackendKindSchema.optional(),
+  /** 契约 §53：会话活在这个 core 里、且程序自报过状态时才有。 */
+  programStatus: programStatusSchema.optional(),
 });
 
 export const sessionsResponseSchema = z.array(sessionSummarySchema);
