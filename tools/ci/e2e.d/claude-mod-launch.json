@@ -1,0 +1,8 @@
+{
+  "id": "claude-mod-launch",
+  "tier": "a",
+  "script": "tools/probes/claude-mod-launch.mjs",
+  "args": [],
+  "requires": ["claude"],
+  "timeoutMinutes": 10
+}

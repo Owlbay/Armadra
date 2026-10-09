@@ -34,7 +34,10 @@
  * Tier A needs tmux and a Chrome / Chromium (CHROME_PATH, or the usual install
  * locations). An entry that `requires` "webkit" needs Playwright's WebKit
  * (`pnpm exec playwright-core install webkit`, `--with-deps` on Linux); without
- * it the entry is skipped with that command as the reason. Entries marked `devStack` only run when ARMADRA_DEV_STACK=1 and
+ * it the entry is skipped with that command as the reason. An entry that
+ * `requires` "claude" needs a Claude Code at or above the mod gate
+ * (ARMADRA_CLAUDE_BIN, or `claude` on PATH); CI has none and records it as
+ * skipped. Entries marked `devStack` only run when ARMADRA_DEV_STACK=1 and
  * Docker answers; otherwise they are recorded as skipped, not failed.
  */
 import { execFileSync, spawn, spawnSync } from "node:child_process";
@@ -52,6 +55,7 @@ import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { findClaude } from "../probes/claude-mod-launch.mjs";
 import { findCloudSource } from "../probes/cloud-source.mjs";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -59,7 +63,14 @@ export const MANIFEST_DIR = join(ROOT, "tools/ci/e2e.d");
 /** The single-file manifest this directory replaced; it must not come back. */
 export const LEGACY_MANIFEST = join(ROOT, "tools/ci/e2e.json");
 export const TIERS = ["a", "b"];
-export const REQUIREMENTS = ["tmux", "chrome", "docker", "cloud", "webkit"];
+export const REQUIREMENTS = [
+  "tmux",
+  "chrome",
+  "docker",
+  "cloud",
+  "webkit",
+  "claude",
+];
 /** `process.platform` values an entry may restrict itself to. */
 export const PLATFORMS = ["darwin", "linux", "win32"];
 
@@ -291,6 +302,7 @@ export async function runTier({
     docker: hasDocker,
     cloud: () => findCloudSource(env, root),
     webkit: () => hasWebkit(root),
+    claude: () => findClaude(env),
   },
   devStack = {
     up: () => pnpm(root, ["dev-stack", "up"]),
@@ -324,8 +336,12 @@ export async function runTier({
   const docker = needs("docker") ? probe.docker() : false;
   const cloud = needs("cloud") ? (probe.cloud?.() ?? null) : null;
   const webkit = needs("webkit") ? (probe.webkit?.() ?? false) : false;
+  const claude = needs("claude")
+    ? (probe.claude?.() ?? { reason: "no Claude Code probe" })
+    : undefined;
   const childEnv = {
     ...env,
+    ...(claude?.program ? { ARMADRA_CLAUDE_BIN: claude.program } : {}),
     ...(chrome ? { CHROME_PATH: chrome } : {}),
     ...(cloud ? { ARMADRA_DEV_STACK_CLOUD_SRC: cloud } : {}),
   };
@@ -387,6 +403,15 @@ export async function runTier({
           status: "skipped",
           reason:
             "needs Playwright's WebKit (pnpm exec playwright-core install webkit; --with-deps on Linux)",
+        };
+      } else if (
+        entry.requires?.includes("claude") &&
+        claude?.program === undefined
+      ) {
+        record = {
+          id: entry.id,
+          status: "skipped",
+          reason: claude?.reason ?? "needs Claude Code",
         };
       } else if (entry.requires?.includes("cloud") && !cloud) {
         record = {
