@@ -1357,6 +1357,13 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
+  // Runtime 的健康数字（契约 §54）：事件循环延迟与资源采样计数，只有数字。
+  {
+    path: "/api/diagnostics/runtime",
+    methods: ["GET"],
+    surface: "runtime",
+    implemented: true,
+  },
   // 推送（契约 §19）：配置、设备登记与撤销、测试通知。只碰请求主体自己的设备，
   // 身份由推送域自己认（`route-scopes.ts` 的 `SELF_GUARDED`）。
   {
