@@ -19,6 +19,7 @@ function inputs(patch: Partial<RenderInputs> = {}): RenderInputs {
     focused: false,
     detached: false,
     budgeted: true,
+    webgl: true,
     ...patch,
   };
 }
@@ -58,8 +59,19 @@ describe("resolveRenderState", () => {
     expect(resolveRenderState(inputs())).toBe("visible");
   });
 
-  it("看得见但没抢到名额按 offscreen 处理", () => {
+  it("开着 WebGL 时，看得见但没抢到名额按 offscreen 处理", () => {
     expect(resolveRenderState(inputs({ budgeted: false }))).toBe("offscreen");
+  });
+
+  it("DOM 渲染器下名额与档位无关：看得见就直写", () => {
+    expect(resolveRenderState(inputs({ budgeted: false, webgl: false }))).toBe(
+      "visible",
+    );
+    expect(
+      resolveRenderState(
+        inputs({ budgeted: false, webgl: false, onScreen: false }),
+      ),
+    ).toBe("offscreen");
   });
 
   it("滚出视口是 offscreen", () => {

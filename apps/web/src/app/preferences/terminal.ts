@@ -1,3 +1,8 @@
+import {
+  DEFAULT_RELEASE_AFTER,
+  RELEASE_AFTER_OPTIONS,
+  type ReleaseAfter,
+} from "@/terminal/lifecycle";
 import { readStored, storedBoolean, storedEnum, storedNumber } from "./storage";
 
 const TERM_FONT_FAMILY_KEY = "armadra.terminal.fontFamily";
@@ -9,6 +14,7 @@ const TERM_CURSOR_BLINK_KEY = "armadra.terminal.cursorBlink";
 const TERM_OPTION_META_KEY = "armadra.terminal.macOptionIsMeta";
 const TERM_COPY_ON_SELECT_KEY = "armadra.terminal.copyOnSelect";
 const TERM_WEBGL_KEY = "armadra.terminal.webgl";
+const TERM_RELEASE_AFTER_KEY = "armadra.terminal.releaseAfter";
 
 /* ------------------------------- 终端外观 --------------------------------- */
 
@@ -35,6 +41,11 @@ export interface TerminalPreferences {
   copyOnSelect: boolean;
   /** WebGL 渲染器；默认关，DOM 渲染器在画布缩放下更清晰（§18.2 规则 5）。 */
   webgl: boolean;
+  /**
+   * 离屏多久后释放终端画面（性能设计 §2.4）：只销毁页面里的 xterm 实例，
+   * 会话继续运行，回到视口时重新接上。`never` 退回不释放。
+   */
+  releaseAfter: ReleaseAfter;
 }
 
 export const TERMINAL_FONT_SIZE_RANGE = [10, 20] as const;
@@ -63,6 +74,7 @@ export const TERMINAL_KEYS: Record<keyof TerminalPreferences, string> = {
   macOptionIsMeta: TERM_OPTION_META_KEY,
   copyOnSelect: TERM_COPY_ON_SELECT_KEY,
   webgl: TERM_WEBGL_KEY,
+  releaseAfter: TERM_RELEASE_AFTER_KEY,
 };
 
 export function storedTerminalPreferences(): TerminalPreferences {
@@ -95,5 +107,10 @@ export function storedTerminalPreferences(): TerminalPreferences {
     macOptionIsMeta: storedBoolean(TERM_OPTION_META_KEY, false),
     copyOnSelect: storedBoolean(TERM_COPY_ON_SELECT_KEY, false),
     webgl: storedBoolean(TERM_WEBGL_KEY, false),
+    releaseAfter: storedEnum(
+      TERM_RELEASE_AFTER_KEY,
+      RELEASE_AFTER_OPTIONS,
+      DEFAULT_RELEASE_AFTER,
+    ),
   };
 }

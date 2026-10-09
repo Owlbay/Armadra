@@ -18,25 +18,40 @@ import { writeClipboard } from "./clipboard";
 import { compensateScaledPointer } from "./scaled-pointer";
 import { applyOscTitle } from "./title";
 import { registerProgramOsc } from "./program-osc";
+import { deliverInput } from "./use-handle";
+import { loseWebglContexts } from "../render-budget";
 import { RESIZE_DEBOUNCE_MS, TERMINAL_SCROLLBACK } from "./constants";
 import type { SurfaceRefs } from "./refs";
 
 /**
  * xterm 实例的整个生命周期：创建、addon、键盘策略、尺寸观测、主题跟随与
- * tmux 滚轮桥。只依赖 `nodeId` 与 `refit`，所以标题、状态这些都不会重挂它。
+ * tmux 滚轮桥。只依赖 `nodeId`、`refit` 与生命周期给的 `mounted` / `generation`，
+ * 所以标题、状态这些都不会重挂它。
+ *
+ * 这一层是可以整块丢掉的显示层（性能设计 §2.4）：`mounted` 变假时销毁实例，
+ * 会话、输入账、离屏缓冲都在 `SurfaceRefs` 里不受影响；再变真时按 `gridRef`
+ * 记下的行列数重建，`generation` 让依赖它的传输与 WebGL effect 跟着重跑。
  */
 export function useXtermInstance(
   refs: SurfaceRefs,
-  options: { nodeId: string; refit: () => void },
+  options: {
+    nodeId: string;
+    refit: () => void;
+    mounted: boolean;
+    generation: number;
+  },
 ): void {
-  const { nodeId, refit } = options;
+  const { nodeId, refit, mounted, generation } = options;
 
   React.useEffect(() => {
     const body = refs.bodyRef.current;
     const container = refs.containerRef.current;
-    if (!body || !container) return;
+    if (!body || !container || !mounted) return;
 
+    const grid = refs.gridRef.current;
     const terminal = new Terminal({
+      // 重建时沿用上一次对齐过的行列数，首帧 fit 与它一致就不发 resize。
+      ...(grid ? { cols: grid.cols, rows: grid.rows } : {}),
       allowProposedApi: true,
       scrollback: TERMINAL_SCROLLBACK,
       // 原生滚动条被 CSS 藏掉了（§18.2 规则 1），滚屏靠 tmux 历史；
@@ -132,9 +147,7 @@ export function useXtermInstance(
      * `\e[<0;8;3M` frames). Its payload is also Latin-1 bytes-in-a-string,
      * which our JSON/UTF-8 transport would re-encode wrongly anyway.
      */
-    const input = terminal.onData((chunk) => {
-      refs.transportRef.current?.input(chunk);
-    });
+    const input = terminal.onData((chunk) => deliverInput(refs, chunk));
     // 选中即复制（设置项，默认关）。`onSelectionChange` 在拖拽过程中会连发，
     // 拿到空选区时不要清掉剪贴板。
     const selection = terminal.onSelectionChange(() => {
@@ -223,6 +236,10 @@ export function useXtermInstance(
     // 第一次挂载时问一次 Runtime 的平台；答案只影响下一个新建的节点。
     void loadRuntimePlatform();
 
+    // 释放期间排下的聚焦 / 粘贴：实例好了就做。
+    const queued = refs.mountQueueRef.current.splice(0);
+    for (const action of queued) action(terminal);
+
     return () => {
       disposed = true;
       if (timer) clearTimeout(timer);
@@ -237,7 +254,13 @@ export function useXtermInstance(
       programOsc.dispose();
       releaseIme();
       restorePointer();
+      // WebGL 的 canvas 要在 dispose 之前抓：dispose 会把它们摘掉，而且既不
+      // GC 也不弄丢上下文，不补这一刀就是一个占着名额的僵尸。
+      const held = Array.from(container.querySelectorAll("canvas"));
       terminal.dispose();
+      loseWebglContexts(held);
+      if (refs.flushingRef.current === terminal)
+        refs.flushingRef.current = null;
       /*
        * **不要在这里 `forgetOscTitle(nodeId)`**（2026-09-04 Phase 4 复跑时
        * 发现）：这个清理在热重载、StrictMode 的二次挂载、折叠重建时都会跑，
@@ -250,5 +273,5 @@ export function useXtermInstance(
       refs.fitRef.current = null;
       refs.searchRef.current = null;
     };
-  }, [refs, nodeId, refit]);
+  }, [refs, nodeId, refit, mounted, generation]);
 }
