@@ -85,6 +85,11 @@ describe("路由要求的 scope", () => {
     expect(
       routeScope("POST", "/api/workspaces/{workspaceId}/reveal")?.permission,
     ).toBe("terminal:create");
+    // 粘进 Agent 的文件（契约 §55）是向它输入，不是写工作区文件。
+    expect(
+      routeScope("POST", "/api/workspaces/{workspaceId}/agent-uploads")
+        ?.permission,
+    ).toBe("terminal:create");
   });
 
   it("健康检查不要求任何权限", () => {

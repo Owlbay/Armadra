@@ -23,6 +23,7 @@ export * from "./dependencies.js";
 export * from "./context-reads.js";
 export * from "./exports.js";
 export * from "./assets.js";
+export * from "./uploads.js";
 export * from "./git.js";
 export * from "./git-clone.js";
 export * from "./resources.js";
