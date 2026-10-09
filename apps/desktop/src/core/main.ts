@@ -143,6 +143,13 @@ export interface CoreContext {
   readonly bus: EventBus;
   readonly platform: CorePlatform;
   readonly log: ReturnType<typeof createLog>;
+  /**
+   * 域登记自己的收尾：定时扫描、启动对账、预热计时器这类后台工作都读写数据库，
+   * 关库之前必须先停。core 关停（以及启动中途失败）时，在所有监听关掉之后、
+   * 关库之前按登记的逆序调用。只有 `run` 装配的 core 有它；用例直接拼的上下文
+   * 没有，域照常工作。
+   */
+  readonly onStop?: (stop: () => void | Promise<void>) => void;
 }
 
 export interface RunningCore extends CoreContext {
@@ -320,6 +327,7 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
     // and `/health` reports a core with none.
     hookHealth: () => hookService()?.health() ?? NO_HOOK_SERVICE,
   });
+  const domainStops: (() => void | Promise<void>)[] = [];
   const context: CoreContext = {
     dataDir,
     db: opened,
@@ -327,6 +335,9 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
     bus,
     platform,
     log,
+    onStop: (stop) => {
+      domainStops.push(stop);
+    },
   };
   setLoopbackAnonymousOwner(
     options.loopbackAnonymousOwner ?? env.ARMADRA_LOOPBACK_OWNER === "1",
@@ -350,53 +361,14 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
   const realtime = realtimeDomain();
   const relay = relayDomain();
 
-  // Step 3.
-  const listeners: { server: Server; spec: ListenSpec }[] = [];
-  const bound: ListenSpec[] = [];
+  /**
+   * 关停顺序（启动失败与正常退出同一条）：先断入口——控制通道、运行、Gateway、
+   * 中继、监听，不再有新请求进来；再停各域的后台工作（逆序，后装的先停）；
+   * 然后实时板追平、语言服务退出；最后才关库。域的计时器与在途的启动对账都读写
+   * 数据库，关库在前它们就会撞上 `database is not open`。
+   */
   let controller: Awaited<ReturnType<typeof startControllerChannel>>;
-  try {
-    for (const spec of parsed.args.listen) {
-      const listener = server.createListener();
-      bound.push(await bind(listener, spec));
-      listeners.push({
-        server: listener,
-        spec: bound[bound.length - 1] as ListenSpec,
-      });
-    }
-    const service = new ControllerService(context, instanceId(), { runs });
-    controller = await startControllerChannel({
-      dataDir,
-      instanceId: instanceId(),
-      dispatch: (command, credential, signal) =>
-        service.dispatch(command, credential, signal),
-    });
-    runs.begin();
-  } catch (error) {
-    await runs.stop();
-    await controller?.close();
-    await server.close();
-    opened.close();
-    throw error;
-  }
-
-  const endpoints = endpointsFile(dataDir);
-  let released = false;
-  const releaseAll = (): void => {
-    if (released) return;
-    released = true;
-    try {
-      withdraw(endpoints, RUNTIME_SERVICE);
-      withdraw(endpoints, CONTROLLER_SERVICE);
-    } catch (error) {
-      log.warn("could not withdraw the core endpoint", {
-        error: describe(error),
-      });
-    }
-    for (const listener of listeners) release(listener.spec);
-  };
-
-  // Step 4 — armed before step 5 publishes anything about this process.
-  const stop = async (): Promise<void> => {
+  const teardown = async (): Promise<void> => {
     await controller?.close();
     await runs.stop();
     // 对外的 Gateway 先关：它的监听与经它进来的流不在 `server` 的名单上。
@@ -412,6 +384,13 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
       log.warn("could not stop the relay tunnels", { error: describe(error) });
     }
     await server.close();
+    for (const stopDomain of domainStops.splice(0).reverse()) {
+      try {
+        await stopDomain();
+      } catch (error) {
+        log.warn("could not stop a domain", { error: describe(error) });
+      }
+    }
     // 实时板：活动文档物化、写快照。更新早已逐条落库，这一步只是让表与快照
     // 在退出时追平，下次启动不必重放。
     try {
@@ -433,6 +412,52 @@ export async function run(options: RunOptions = {}): Promise<RunningCore> {
       });
     }
     opened.close();
+  };
+
+  // Step 3.
+  const listeners: { server: Server; spec: ListenSpec }[] = [];
+  const bound: ListenSpec[] = [];
+  try {
+    for (const spec of parsed.args.listen) {
+      const listener = server.createListener();
+      bound.push(await bind(listener, spec));
+      listeners.push({
+        server: listener,
+        spec: bound[bound.length - 1] as ListenSpec,
+      });
+    }
+    const service = new ControllerService(context, instanceId(), { runs });
+    controller = await startControllerChannel({
+      dataDir,
+      instanceId: instanceId(),
+      dispatch: (command, credential, signal) =>
+        service.dispatch(command, credential, signal),
+    });
+    runs.begin();
+  } catch (error) {
+    await teardown();
+    throw error;
+  }
+
+  const endpoints = endpointsFile(dataDir);
+  let released = false;
+  const releaseAll = (): void => {
+    if (released) return;
+    released = true;
+    try {
+      withdraw(endpoints, RUNTIME_SERVICE);
+      withdraw(endpoints, CONTROLLER_SERVICE);
+    } catch (error) {
+      log.warn("could not withdraw the core endpoint", {
+        error: describe(error),
+      });
+    }
+    for (const listener of listeners) release(listener.spec);
+  };
+
+  // Step 4 — armed before step 5 publishes anything about this process.
+  const stop = async (): Promise<void> => {
+    await teardown();
     releaseAll();
   };
   const onSignal = (): void => {

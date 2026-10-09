@@ -199,5 +199,6 @@ export function install(context: CoreContext): ModelsDomain {
     catalog,
     stop: () => catalog.stop(),
   };
+  context.onStop?.(() => catalog.stop());
   return assembled;
 }

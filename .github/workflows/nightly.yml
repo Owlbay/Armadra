@@ -325,6 +325,9 @@ jobs:
             target/mobile-shell-e2e/android/result.json
             target/mobile-shell-e2e/android/*.log
             apps/mobile/android/armadra-native-core/build/reports/tests/
+            # 插桩用例的报告与逐条用例的 logcat（「Process crashed」时栈只在这里）。
+            apps/mobile/android/app/build/reports/androidTests/
+            apps/mobile/android/app/build/outputs/androidTest-results/
           if-no-files-found: warn
 
   # Windows 打包验收（补全计划 G3-2）：在 windows runner 上打 NSIS 安装包，用

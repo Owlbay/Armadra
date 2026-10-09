@@ -3,7 +3,9 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
-import { chmodSync, lstatSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { chmodSync, lstatSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   CONTROLLER_LIMITS,
@@ -27,6 +29,47 @@ export interface ControllerChannelOptions {
   ) => Promise<unknown>;
 }
 
+/**
+ * The longest Unix socket path `bind(2)` takes, terminating NUL excluded:
+ * `sun_path` is 104 bytes on macOS and the BSDs, 108 on Linux.
+ */
+export function maxSocketPath(platform = process.platform): number {
+  return platform === "linux" ? 107 : 103;
+}
+
+/**
+ * Where the controller socket goes. Normally `<dataDir>/controller.sock`; a
+ * data directory deep enough that the path no longer fits `sun_path` (a
+ * temporary directory on macOS is already ~50 bytes) moves it to a private
+ * per-data-directory folder under the temporary directory. Clients never
+ * derive the path — they read it from `endpoints.json` — so moving it costs
+ * nothing, while refusing it would take the whole core down with `EINVAL`.
+ */
+export function controllerSocketPath(
+  dataDir: string,
+  platform = process.platform,
+  temporary = tmpdir(),
+): string {
+  const preferred = join(dataDir, "controller.sock");
+  if (Buffer.byteLength(preferred) <= maxSocketPath(platform)) return preferred;
+  const digest = createHash("sha256").update(dataDir).digest("hex");
+  return join(temporary, `armadra-ctl-${digest.slice(0, 16)}`, "c.sock");
+}
+
+/**
+ * The fallback folder is in a shared temporary directory on Linux: it must be
+ * ours, a real directory and 0700, or someone else could sit between the CLI
+ * and the core.
+ */
+function ensurePrivateDirectory(path: string): void {
+  mkdirSync(path, { recursive: true, mode: 0o700 });
+  const stat = lstatSync(path);
+  const uid = process.getuid?.();
+  if (!stat.isDirectory() || (uid !== undefined && stat.uid !== uid))
+    throw new Error(`${path} is not a private directory of this user`);
+  chmodSync(path, 0o700);
+}
+
 /** Separate listener, never registered on the browser/HTTP router. */
 export async function startControllerChannel(
   options: ControllerChannelOptions,
@@ -38,15 +81,15 @@ export async function startControllerChannel(
   });
   server.requestTimeout = 70_000;
   server.headersTimeout = 5_000;
-  const spec = await bind(server, {
-    kind: "unix",
-    path: join(options.dataDir, "controller.sock"),
-  });
+  const path = controllerSocketPath(options.dataDir, platform);
+  const directory = dirname(path);
+  if (directory !== options.dataDir) ensurePrivateDirectory(directory);
+  const spec = await bind(server, { kind: "unix", path });
   // Controller authorization requires actual OS protection, not best effort.
   try {
-    chmodSync(dirname(spec.kind === "unix" ? spec.path : ""), 0o700);
-    chmodSync(join(options.dataDir, "controller.sock"), 0o600);
-    if ((lstatSync(options.dataDir).mode & 0o777) !== 0o700)
+    chmodSync(directory, 0o700);
+    chmodSync(path, 0o600);
+    if ((lstatSync(directory).mode & 0o777) !== 0o700)
       throw new Error("private directory required");
   } catch (error) {
     server.close();

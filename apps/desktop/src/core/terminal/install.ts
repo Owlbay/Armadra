@@ -996,7 +996,7 @@ export function install(
     return { sessionId: session.id, generation: session.generation };
   });
 
-  return {
+  const domain: TerminalDomain = {
     manager,
     backends,
     hibernator,
@@ -1010,9 +1010,13 @@ export function install(
       setAgentLauncher(undefined);
       setHibernationWaker(undefined);
       clearInterval(hibernateTimer);
+      // 启动对账还在途时不抢先关：它问完后端要回写行，关停排在它之后。
+      await ready;
       await manager.shutdown();
     },
   };
+  context.onStop?.(() => domain.stop());
+  return domain;
 }
 
 /** How long a fresh shell may stay silent before the launch line goes in anyway. */

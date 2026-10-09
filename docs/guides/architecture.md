@@ -1,7 +1,8 @@
 # 架构
 
 本机 CLI 插件入口由纯 Node `armadra` 客户端调用 core 数据目录的独立
-`controller.sock`（0700 目录、0600 socket）。该通道不注册到浏览器 HTTP 路由，
+`controller.sock`（0700 目录、0600 socket；路径超出 `sun_path` 时落在临时目录下
+按数据目录哈希命名的私有目录，地址只经发现文件公布）。该通道不注册到浏览器 HTTP 路由，
 不复用桌面全权票据或节点 token。发现文件的 `controller` 段和实时实例 ID 一起
 校验连接。profile 凭据只在客户端私有文件保存，数据库存摘要和 workspace scope。
 增量建图复用画布验证、布局、保存和上下文授权；对象归属、幂等结果、审计与事件
@@ -551,6 +552,11 @@ core 启动时把 PATH 换成补齐过的版本（Homebrew、mise shims、mise N
 能用 CLI 自己的 resume 接回来的 Agent 会话被结束以释放内存，行以
 `termination_intent = 'hibernate'` 记下；页面聚焦、投递或计划冷启动时在同一个会话
 id 上起下一代并敲恢复行。设计见 [terminal-host-design.md](../design/terminal-host-design.md) §7.2。
+
+core 关停与启动中途失败走同一条收尾（`main.ts` 的 `teardown`）：先关控制通道、
+运行、Gateway、中继与监听，再按逆序调用各域经 `CoreContext.onStop` 登记的收尾
+（终端对账与周期任务、依赖与工作流扫描、调度、资源与用量采样、模型目录、ACP
+预热与预启动池），然后实时板追平、语言服务退出，最后才关库。
 
 ## 7. 安全边界
 

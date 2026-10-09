@@ -211,7 +211,8 @@ export class TerminalManager {
       this.log("非持久后端的终端行已标记为 failed", { rows: failed });
     }
     const report = await this.reconcile();
-    this.spawnLoops();
+    // 对账期间 core 已经开始关停：周期任务不再武装，它们会在关库之后醒来。
+    if (!this.stopping) this.spawnLoops();
     return report;
   }
 
@@ -1367,7 +1368,17 @@ export class TerminalManager {
     const record = this.records.get(sessionId);
     if (record === undefined || record.kind !== kind) return;
     if (record.generation !== notice.generation || record.exited) return;
-    this.markExited(sessionId, notice.exitCode ?? null);
+    if (!this.stopping) {
+      this.markExited(sessionId, notice.exitCode ?? null);
+      return;
+    }
+    // 关停时 `detachAll` 结束的直连会话陆续报退出：库还开着就照常记 `exited`；
+    // core 已经关了库就作罢，下次启动的 `failNonPersistentRows` 会把这些行收掉。
+    try {
+      this.markExited(sessionId, notice.exitCode ?? null);
+    } catch {
+      // The database is closed; see above.
+    }
   }
 
   /**

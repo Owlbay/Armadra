@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  type CoreContext,
   DOMAINS,
   HelpRequested,
   type RunningCore,
@@ -266,6 +267,79 @@ describe("the core process", () => {
     ).rejects.toThrow(/already in use/);
     expect(existsSync(endpointsFile(second))).toBe(false);
   });
+
+  // nightly 37858782422：启动中途失败（当时是 controller.sock 超长 EINVAL）时库先关了，
+  // 终端对账、依赖与工作流扫描、ACP 预热还在跑，撞上 `database is not open`。
+  it("启动中途失败时，先停各域登记的后台工作再关库", async () => {
+    const { core } = await start(temporary());
+    const held = base(core).split(":")[2] as string;
+    const seen: string[] = [];
+    await expect(
+      run({
+        argv: ["--listen", `tcp:127.0.0.1:${held}`, "--data-dir", temporary()],
+        env: {
+          ARMADRA_CORE_MIGRATIONS_DIR: migrationsDir,
+          ARMADRA_LOG: "error",
+        },
+        stdout: () => {},
+        domains: [
+          (context) => {
+            context.onStop?.(() => {
+              context.db.database.prepare("SELECT 1").get();
+              seen.push("stopped with the database open");
+            });
+          },
+        ],
+      }),
+    ).rejects.toThrow(/already in use/);
+    expect(seen).toEqual(["stopped with the database open"]);
+  });
+
+  it("正常关停按登记的逆序停域，都在关库之前；一个域停失败不拦后面的", async () => {
+    const order: string[] = [];
+    const domain =
+      (name: string, fail = false) =>
+      (context: CoreContext) => {
+        context.onStop?.(async () => {
+          context.db.database.prepare("SELECT 1").get();
+          order.push(name);
+          if (fail) throw new Error(`${name} failed`);
+        });
+      };
+    const core = await run({
+      argv: ["--listen", "tcp:127.0.0.1:0", "--data-dir", temporary()],
+      env: { ARMADRA_CORE_MIGRATIONS_DIR: migrationsDir, ARMADRA_LOG: "error" },
+      stdout: () => {},
+      domains: [domain("first"), domain("second", true), domain("third")],
+    });
+    await core.stop();
+    expect(order).toEqual(["third", "second", "first"]);
+    expect(() => core.db.database.prepare("SELECT 1").get()).toThrow(
+      /not open/,
+    );
+  });
+
+  // macOS 的 sun_path 只有 104 字节，CI 的临时目录就占了一半：
+  // `<dataDir>/controller.sock` 放不下时挪到临时目录下的私有目录，core 照常起来，
+  // 地址经 endpoints.json 公布。
+  it.skipIf(process.platform === "win32")(
+    "数据目录深到 controller.sock 超出 sun_path 也照常起来，公布挪过去的地址",
+    async () => {
+      const deep = join(temporary(), "x".repeat(60), "serve-data");
+      expect(Buffer.byteLength(join(deep, "controller.sock"))).toBeGreaterThan(
+        104,
+      );
+      const { core } = await start(deep);
+      const socket = read(endpointsFile(deep)).controller?.socket;
+      expect(socket).toBeDefined();
+      expect(socket?.startsWith(deep)).toBe(false);
+      expect(Buffer.byteLength(socket ?? "")).toBeLessThanOrEqual(103);
+      expect(statSync(socket ?? "").isSocket()).toBe(true);
+      await core.stop();
+      running.splice(running.indexOf(core), 1);
+      expect(existsSync(socket ?? "")).toBe(false);
+    },
+  );
 });
 
 describe("what the core answers", () => {

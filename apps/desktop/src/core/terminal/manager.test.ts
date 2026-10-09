@@ -667,6 +667,51 @@ describe("shutdown", () => {
     expect(row).toEqual({ status: "running", attach_state: "detached" });
     expect(backend.calls).toContain("detachAll");
   });
+
+  // 分支 nightly 的 server 用例：关停杀掉的会话在关库之后才报退出，落库抛
+  // `database is not open` 成了未处理的拒绝。
+  it("records an exit reported during shutdown, and drops one that arrives after the database closed", async () => {
+    const { manager, backend, database } = harness();
+    const first = await spawn(manager, "node-a");
+    const second = await spawn(manager, "node-b");
+    await manager.shutdown();
+    backend.announce({
+      type: "exited",
+      key: "node-a" as SessionKey,
+      generation: 1,
+      exitCode: 0,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(
+      (
+        database
+          .prepare("SELECT status FROM terminal_sessions WHERE id = ?")
+          .get(first.id) as { status: string }
+      ).status,
+    ).toBe("exited");
+    // core 关库之后才到的那条：不抛、不成未处理的拒绝。
+    const closing = open!;
+    open = undefined;
+    closing.close();
+    const unhandled: unknown[] = [];
+    const record = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", record);
+    try {
+      expect(() =>
+        backend.announce({
+          type: "exited",
+          key: "node-b" as SessionKey,
+          generation: 1,
+          exitCode: 0,
+        }),
+      ).not.toThrow();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    } finally {
+      process.off("unhandledRejection", record);
+    }
+    expect(unhandled).toEqual([]);
+    expect(second.id).toBeDefined();
+  });
 });
 
 /**

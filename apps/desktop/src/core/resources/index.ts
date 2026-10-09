@@ -309,6 +309,8 @@ export function install(context: CoreContext): ResourceDomain {
       power.stop();
     },
   };
+  const domain = assembled;
+  context.onStop?.(() => domain.stop());
   return assembled;
 }
 
