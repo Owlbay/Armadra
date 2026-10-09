@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# 本仓库的 PR 审查由 .github/workflows/codex-review.yml 负责，CodeRabbit 不再
+# 自动审查、发摘要或回复。这份配置只在 App 仍装在仓库上时起作用；彻底停用要
+# 在 GitHub 设置里卸载 App 或取消它对本仓库的授权。
+language: zh-CN
+reviews:
+  auto_review:
+    enabled: false
+    auto_incremental_review: false
+  high_level_summary: false
+  request_changes_workflow: false
+  review_status: false
+  review_progress: false
+  commit_status: false
+  changed_files_summary: false
+  sequence_diagrams: false
+  estimate_code_review_effort: false
+  assess_linked_issues: false
+  related_issues: false
+  related_prs: false
+  suggested_labels: false
+  suggested_reviewers: false
+  in_progress_fortune: false
+  poem: false
+chat:
+  auto_reply: false
+issue_enrichment:
+  auto_enrich:
+    enabled: false
+  planning:
+    enabled: false
+    auto_planning:
+      enabled: false
