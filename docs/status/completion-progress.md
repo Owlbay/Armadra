@@ -3605,3 +3605,37 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - core：`ProgramTap { subscribe, answer }`（`TerminalBackend.programTap?`）、`TerminalManagerOptions.onProgramStatus`、`TerminalManager.programStatus(sessionId)`、`listSessions(..., program?)`、`OscScanner` / `parseProgramReport` / `ProgramStatusTracker` / `ProgramStatusBook` / `connectProgramStatus`、`TmuxProgramTap`。
 - shared：`programStatusSchema` / `ProgramStatus`、`sessionSummarySchema.programStatus`、事件 `terminal.program`（`TerminalProgramEvent`）。
 - web：`useProgramStatusStore`、`headerStateFor`、`programHeaderState`、`reportedLive`、`programNotificationStatus`、`registerProgramOsc`。
+
+## 性能包 P1：Runtime 资源采样异步化、诊断接口与 tap 按需（契约 §54，2026-10-09）
+
+做了什么：
+
+- 资源采样（`core/resources/`）：一拍只读一轮整机表——一次异步 `ps`、一次异步 `tmux list-panes`（各 1.5 s 期限，超时 `SIGKILL`），所有在看的工作空间共用，CPU% 的分母只算一次；基线时刻取 `ps` 读回的那一刻。三个平台探针（内存压力 / 交换区 / 电源）按 10 / 30 / 60 s 缓存，过期先交旧值、后台刷新，一轮从不等探针。下一拍在这一拍走完后才挂；停掉又重起的循环撞上还没走完的一拍时跳过并计数。`ps` / `tmux` 超时这一轮作废：不发 `resource.sample`，`GET …/resources` 答 `503 resources_unavailable`。`GET …/resources` 与阈值慢轮（`ThresholdWatch`，改 async、不叠加）搭正在进行或 500 ms 内刚完成的那一轮。远端 worker 仍走同步版（另一个进程）。
+- 诊断：`metrics.ts` 记事件循环延迟（`monitorEventLoopDelay` 10 ms，只报超出间隔的部分，两段 30 s 轮换）与采样计数（轮数、最近 / 最大耗时、跳过、各命令超时）；p99 连续 3 轮 > 200 ms 记一条只有数字的 `warn`。`GET /api/diagnostics/runtime` 与 procedure `diagnostics.runtime`（§43.8 表一行），门同 §30；协议 minor 25 → 26。
+- tmux 的程序状态 tap（§53）只给 Agent 会话（环境里有 `ARMADRA_AGENT_ID`）开，接管时用 `show-environment` 判断；tap 输出按会话名查表，不再线性扫。探针 `core-terminal-program-status` 改用 Agent 终端。
+- 契约 §54（§53 的 tap 范围一句同步）、架构指南两处、错误码 `resources_unavailable`。
+
+实测（macOS arm64，`_shared/perf-diag-20261009/bench/terminal-memory.mjs`，10 个终端各 100 行/s，未打包壳 + 测量垫片，前 = `main` `7d75ea8f`，后 = 本分支）：
+
+| 阶段            | Runtime ELD max（ms） | 同步子进程（ms/s） | core ELU      | tmux 进程 |
+| --------------- | --------------------- | ------------------ | ------------- | --------- |
+| active          | 152.4 → 7.4           | 46.6 → 0           | 0.121 → 0.037 | 41 → 31   |
+| offscreen 1 min | 133.0 → 8.1           | 48.1 → 0           | 0.107 → 0.039 | 41 → 31   |
+| back-visible    | 95.2 → 11.5           | 39.1 → 0           | 0.077 → 0.041 | 41 → 31   |
+| switch ×10      | 236.6 → 13.6          | 55.4 → 0           | 0.166 → 0.037 | 41 → 31   |
+| after-forced-gc | 93.1 → 7.4            | 35.0 → 0           | 0.071 → 0.047 | 41 → 31   |
+
+- 隔离数据目录起 core，订阅资源后读 `GET /api/diagnostics/runtime`：每轮 `lastRoundMs` 约 110 ms（异步，不占主线程），`timeouts` 全 0，procedure 与旧路径同一份答案。
+- 新单测：采样服务 5（`ps` 挂住不阻塞并超时计数、两个工作空间一拍一次 `ps`、GET 搭进行中的一轮、跳拍计数、多工作空间同一 `elapsedMs`）、探针缓存 2、阈值慢轮 1、metrics 3、诊断路由 2、对偶 2、tmux 2（只给 Agent 会话开 tap，含接管）。
+- `node tools/probes/core-terminal-program-status.mjs`：tmux 与 direct 都过。
+
+没做 / 偏离：
+
+- 普通 shell 在 tmux 后端下不再有程序自报状态（设计 §2.6 的取舍；规则在 `tmux/backend.ts` 的 `wantsTap` 一处）。注册表里没有 `programStatus` 能力位，所以只按 Agent 会话判断。
+- 磁盘（`statfsSync`）仍每轮同步读，没有缓存（亚毫秒）。
+- 远端 worker 的同步采样没改（设计 §7.2）。
+
+接口：
+
+- core：`ResourceService.round(reuseMs?)` / `snapshotFrom(round, workspaceId)` / `snapshot()` 改 async / `metrics`；`ResourceDomain.runtime()`；`Sampler.refreshAsync()`、`readProcessTableAsync`、`panePidsAsync`、`SampleTimeout`、`ProbeCache`、`*Async` 探针；`installRoutes(server, reports, runtime?)`；`wantsTap(env)`。
+- shared：`diagnostics.runtime`、`runtimeDiagnosticsSchema`、`RUNTIME_DIAGNOSTICS_PATH`、错误码 `resources_unavailable`。
