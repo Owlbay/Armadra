@@ -16,7 +16,7 @@
  */
 import { scoped } from "../sources/scope";
 import { useEffect } from "react";
-import type { AgentStatus } from "@armadra/shared";
+import type { AgentStatus, ProgramStatus } from "@armadra/shared";
 
 import { onWorkspaceEvent } from "../api/events";
 import {
@@ -24,6 +24,10 @@ import {
   isFreshDone,
   useAgentStatusStore,
 } from "../agent/status-store";
+import {
+  reportedLive,
+  useProgramStatusStore,
+} from "../agent/program-status-store";
 import { requestCenterOnNode } from "../canvas/flow/flow-context";
 import { notify } from "../platform";
 import { useCanvasStore } from "../store/canvas-store";
@@ -218,6 +222,37 @@ export function createAgentNotifier(deps: NotifierDeps): AgentNotifier {
   };
 }
 
+/**
+ * 程序自报（契约 §53）换成提醒器认得的形状：`blocked` 是「需要你」（问题
+ * 算 `waiting`），`done` / `error` 是「完成」，其余不提醒。只是给提醒器用
+ * 的一份投影，不进状态镜像。
+ */
+export function programNotificationStatus(
+  nodeId: string,
+  program: ProgramStatus | undefined,
+): AgentStatus {
+  const state: AgentStatus["state"] =
+    program?.state === "blocked"
+      ? program.kind === "question"
+        ? "waiting"
+        : "blocked"
+      : program?.state === "done" || program?.state === "error"
+        ? "done"
+        : program?.state === "working"
+          ? "working"
+          : undefined;
+  return {
+    nodeId,
+    workspaceId: "",
+    agentId: "",
+    ...(state === undefined ? {} : { state }),
+    unread: state === "done",
+    verified: false,
+    restored: false,
+    updatedAt: program?.updatedAt ?? new Date(0).toISOString(),
+  } as AgentStatus;
+}
+
 /* --------------------------------- 接线 ---------------------------------- */
 
 function nodeTitle(nodeId: string): string {
@@ -266,6 +301,18 @@ export function useAgentNotifications(): void {
     const off = onWorkspaceEvent("agent.status", (event) => {
       notifier.handle(event.status);
     });
+    // 程序自报单独一个提醒器（节流各算各的）；节点有活的上报时让上报说话，
+    // 免得同一件事响两次。
+    const programNotifier = createAgentNotifier(defaultNotifierDeps());
+    const offProgram = onWorkspaceEvent("terminal.program", (event) => {
+      if (!event.nodeId) return;
+      const reported =
+        useAgentStatusStore.getState().statuses[scoped(event.nodeId)];
+      if (reportedLive(reported)) return;
+      programNotifier.handle(
+        programNotificationStatus(event.nodeId, event.status),
+      );
+    });
 
     // 选中即已读：点节点、从侧栏跳过去、MiniMap 点过去都会经过这里。
     const unsubscribe = useCanvasStore.subscribe((state, previous) => {
@@ -277,6 +324,7 @@ export function useAgentNotifications(): void {
         if (statuses[scoped(nodeId)]?.unread) {
           useAgentStatusStore.getState().markRead(nodeId);
         }
+        useProgramStatusStore.getState().markSeen(nodeId);
       }
     });
 
@@ -287,9 +335,11 @@ export function useAgentNotifications(): void {
 
     return () => {
       off();
+      offProgram();
       unsubscribe();
       clearInterval(sweep);
       notifier.reset();
+      programNotifier.reset();
     };
   }, []);
 }

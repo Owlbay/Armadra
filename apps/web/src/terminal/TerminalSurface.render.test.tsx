@@ -96,6 +96,7 @@ vi.mock("@xterm/xterm", () => ({
     rows = 24;
     options = {};
     unicode = { activeVersion: "" };
+    parser = { registerOscHandler: () => ({ dispose() {} }) };
     textarea = undefined;
     loadAddon() {}
     open() {}

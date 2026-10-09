@@ -17,6 +17,7 @@ import { terminalAppearance, terminalTheme } from "./appearance";
 import { writeClipboard } from "./clipboard";
 import { compensateScaledPointer } from "./scaled-pointer";
 import { applyOscTitle } from "./title";
+import { registerProgramOsc } from "./program-osc";
 import { RESIZE_DEBOUNCE_MS, TERMINAL_SCROLLBACK } from "./constants";
 import type { SurfaceRefs } from "./refs";
 
@@ -141,6 +142,8 @@ export function useXtermInstance(
       writeClipboard(terminal.getSelection());
     });
     const bell = terminal.onBell(() => refs.onBellRef.current?.());
+    // 程序状态与 OSC 9;4 进度（契约 §53）：core 读，页面只吞不答。
+    const programOsc = registerProgramOsc(terminal.parser);
     const title = terminal.onTitleChange((next) => {
       applyOscTitle(nodeId, next);
     });
@@ -231,6 +234,7 @@ export function useXtermInstance(
       selection.dispose();
       bell.dispose();
       title.dispose();
+      programOsc.dispose();
       releaseIme();
       restorePointer();
       terminal.dispose();
