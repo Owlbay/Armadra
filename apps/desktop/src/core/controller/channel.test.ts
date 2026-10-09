@@ -58,26 +58,32 @@ function ask(socketPath: string, input: unknown, headers = {}) {
   });
 }
 
-it("keeps the socket in the data directory while it fits sun_path, else moves it to a short per-directory path", () => {
-  expect(controllerSocketPath("/data", "darwin", "/tmp")).toBe(
-    "/data/controller.sock",
-  );
-  const deep = `/${"d".repeat(100)}`;
-  const moved = controllerSocketPath(deep, "darwin", "/tmp");
-  expect(moved).toMatch(/^\/tmp\/armadra-ctl-[0-9a-f]{16}\/c\.sock$/);
-  expect(Buffer.byteLength(moved)).toBeLessThanOrEqual(maxSocketPath("darwin"));
-  // 同一个数据目录总落在同一处，不同的数据目录互不相撞。
-  expect(controllerSocketPath(deep, "darwin", "/tmp")).toBe(moved);
-  expect(controllerSocketPath(`${deep}2`, "darwin", "/tmp")).not.toBe(moved);
-  // Linux 的 sun_path 多 4 个字节。
-  const edge = `/${"e".repeat(105 - "/controller.sock".length)}`;
-  expect(controllerSocketPath(edge, "linux", "/tmp")).toBe(
-    `${edge}/controller.sock`,
-  );
-  expect(controllerSocketPath(edge, "darwin", "/tmp")).not.toBe(
-    `${edge}/controller.sock`,
-  );
-});
+// 路径按 POSIX 拼（Windows 上不开这条通道）。
+it.skipIf(process.platform === "win32")(
+  "keeps the socket in the data directory while it fits sun_path, else moves it to a short per-directory path",
+  () => {
+    expect(controllerSocketPath("/data", "darwin", "/tmp")).toBe(
+      "/data/controller.sock",
+    );
+    const deep = `/${"d".repeat(100)}`;
+    const moved = controllerSocketPath(deep, "darwin", "/tmp");
+    expect(moved).toMatch(/^\/tmp\/armadra-ctl-[0-9a-f]{16}\/c\.sock$/);
+    expect(Buffer.byteLength(moved)).toBeLessThanOrEqual(
+      maxSocketPath("darwin"),
+    );
+    // 同一个数据目录总落在同一处，不同的数据目录互不相撞。
+    expect(controllerSocketPath(deep, "darwin", "/tmp")).toBe(moved);
+    expect(controllerSocketPath(`${deep}2`, "darwin", "/tmp")).not.toBe(moved);
+    // Linux 的 sun_path 多 4 个字节。
+    const edge = `/${"e".repeat(105 - "/controller.sock".length)}`;
+    expect(controllerSocketPath(edge, "linux", "/tmp")).toBe(
+      `${edge}/controller.sock`,
+    );
+    expect(controllerSocketPath(edge, "darwin", "/tmp")).not.toBe(
+      `${edge}/controller.sock`,
+    );
+  },
+);
 
 it("does not open a Windows pipe or TCP fallback", async () => {
   let dispatched = false;
