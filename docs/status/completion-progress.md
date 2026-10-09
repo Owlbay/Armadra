@@ -3605,3 +3605,30 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - core：`ProgramTap { subscribe, answer }`（`TerminalBackend.programTap?`）、`TerminalManagerOptions.onProgramStatus`、`TerminalManager.programStatus(sessionId)`、`listSessions(..., program?)`、`OscScanner` / `parseProgramReport` / `ProgramStatusTracker` / `ProgramStatusBook` / `connectProgramStatus`、`TmuxProgramTap`。
 - shared：`programStatusSchema` / `ProgramStatus`、`sessionSummarySchema.programStatus`、事件 `terminal.program`（`TerminalProgramEvent`）。
 - web：`useProgramStatusStore`、`headerStateFor`、`programHeaderState`、`reportedLive`、`programNotificationStatus`、`registerProgramOsc`。
+
+## 终端内存探针与基线（性能包 P5，2026-10-09）
+
+做了什么：
+
+- `tools/probes/terminal-memory.mjs`：把性能诊断时的基准脚本收进仓库。桌面壳（缺省打包产物，`--unpacked` 用开发构建）里 N 个持续输出的终端（`--terminals 5|10|20`、`--rate`、`--renderer dom|webgl`、`--backend tmux|direct`），阶段 `active → offscreen-1m → offscreen-3m → back-visible → switch-x10 → switch-x20 → after-forced-gc`；每段记各进程物理占用（macOS `top` 的 phys_footprint，Linux `smaps_rollup` 的 Pss 与 VmRSS）、Renderer 的 JS 堆 / DOM 计数 / `data-render` 与 `data-lifecycle` 直方图、tmux 进程树 RSS 与进程数、Runtime 的 `GET /api/diagnostics/runtime`（§54；接口不在时记 null 并注明），长离屏段里量 65 s 的采样轮次。可选 `--cadence-check`（新建节点 vs 重载后）、`--pressure`（经 `window.__armadraMemoryPressure.emit("warning")` 注入假压力，断言 `data-render` 不变）、`--restore-check`（停发射器、窗格打标记，离屏后回来比页面行数 / 文字 / 光标与 `tmux capture-pane`）、`--eld-preload`（只配 `--unpacked`，`terminal-memory-eld.cjs` 记同步子进程阻塞做对照）。SIGTERM 时先收拾自己的 tmux 与临时目录再退。
+- `terminal-memory-lib.mjs`：参数、读数解析、Runtime 汇总、恢复比对、`compare()`（相对阈值**且**超绝对容差才算退化；只看绝对差、下限、精确断言、GPU 在 Linux 只记录）、`--merge` 三次取中位数。规则表 `METRICS` 即设计 §2.7 的表。
+- 基线 `terminal-memory-baseline.json` 先占位（`platforms` 为空，B 档只报告不判），按 `<平台>-<架构>[-webgl][-direct]` 存，只和同一场景比；`docs/status/terminal-memory-baseline.md` 写了场景、指标、录法，环境与三次原始数待录。
+- 夜间 B 档 `tools/ci/e2e.d/terminal-memory.json`（darwin / linux，`--terminals 10 --off1 60 --off2 180 --cycles 10`，30 分钟）；`pnpm release:test` 加 `terminal-memory.test.mjs`。
+
+实测（macOS arm64，开发构建 `--unpacked --eld-preload --cadence-check`，10 个终端，`main` `7d75ea8f`，P1–P4 均未合入）：
+
+- Renderer 活跃 359 MiB、长离屏 134 MiB、强制 GC 比回到视口 +148 MiB（回到视口后 15 s 画面还没长回来）；Runtime 事件循环最大 346 ms，同步子进程 55.5 ms/s；全部离屏时每 65 s 采样 31 次，新建节点与重载后离屏 60 s 都是 28 次（徽标降速未生效，P2 要修的那个）；tmux 树 144.8 MiB / 41 个进程。
+- `--restore-check`（3 个终端）：行列、文字、光标与 `capture-pane` 全部对上（P3 未合入，离屏时 `data-lifecycle` 还没有值，这次验的是探针本身）。
+- `node --test tools/probes/terminal-memory.test.mjs`：14 个全过（`compare()` 各规则、恢复断言、合并、解析、清单经 `e2e.mjs --list`）。
+
+没做 / 偏离：
+
+- 基线没录：要等 P1–P4 合入后在 `main` 上连跑三次再 `--merge`，同步本节与基线文档。
+- 多了一个文件 `tools/probes/terminal-memory-eld.cjs`（`--eld-preload` 的垫片），设计的文件边界里没列。
+- `--pressure` 依赖 P2 的 `window.__armadraMemoryPressure`，`--release-after` 写 P3 的 `armadra.terminal.releaseAfter`，渲染器同时写 P4 的 `armadra.terminal.renderer` 与旧的 `armadra.terminal.webgl`；这些包合入前探针只记录。
+- 打包产物这条路径（B 档用的）本机没跑，靠 nightly 验；GPU 列在 Linux 软件 GL 下只记录。
+
+接口：
+
+- `node tools/probes/terminal-memory.mjs [输出目录] [选项]`，产物 `result.json`（`phases[].stage`、`metrics`、`comparison`、`restore`、`pressure`、`cadence`、`runtime`）、`table.md`；`--merge r1 r2 r3 [--machine 说明]` 写基线。
+- lib：`parseArgs`、`METRICS`、`compare(current, baseline, { platform })`、`deriveMetrics(report)`、`mergeRuns(reports)`、`restoreCheck({ before, after, paneBefore, pane })`、`summarizeDiagnostics(samples)`、`baselineKey`。
