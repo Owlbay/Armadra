@@ -74,11 +74,12 @@ function flowNode(
   type: CanvasNode["type"],
   x: number,
   title?: string,
+  y = 0,
 ): Node {
   return {
     id,
     type: "armadra",
-    position: { x, y: 0 },
+    position: { x, y },
     width: 100,
     height: 100,
     handles: HANDLES,
@@ -92,8 +93,15 @@ function flowNode(
 function renderEdge(
   sourceType: CanvasNode["type"],
   targetType: CanvasNode["type"],
-  options: { selected?: boolean; zoom?: number; role?: string } = {},
+  options: {
+    selected?: boolean;
+    zoom?: number;
+    role?: string;
+    /** 子（目标）节点的左上角；缺省 (300, 0)，与主并排。 */
+    targetAt?: { x: number; y: number };
+  } = {},
 ) {
+  const targetAt = options.targetAt ?? { x: 300, y: 0 };
   const edge: Edge = {
     id: "e1",
     type: "link",
@@ -111,7 +119,7 @@ function renderEdge(
         edgeTypes={edgeTypes}
         nodes={[
           flowNode(A, sourceType, 0, "planner"),
-          flowNode(B, targetType, 300, "codex-1"),
+          flowNode(B, targetType, targetAt.x, "codex-1", targetAt.y),
         ]}
         edges={[edge]}
         viewport={{ x: 0, y: 0, zoom: options.zoom ?? 1 }}
@@ -278,13 +286,37 @@ describe("LinkEdge", () => {
     });
 
     it("纵向布局时从主的底边中点出发、落在子的顶边中点", () => {
+      const lead = renderEdge("terminal", "terminal", {
+        role: "supervises",
+        targetAt: { x: 300, y: 300 },
+      });
+      const path = edgeGroup(lead.container).querySelector(
+        ".react-flow__edge-path",
+      ) as SVGPathElement;
+      // 主在 (0,0) 100×100，子在 (300,300)：底边中点 (50,100)，顶边中点 (350,300)。
+      expect(path.getAttribute("d")).toMatch(/^M 50,100 C /u);
+      expect(path.getAttribute("d")).toMatch(/ 350,300$/u);
+    });
+
+    it("子被拖到主的上方时改走就近边：主顶 → 子底", () => {
+      const lead = renderEdge("terminal", "terminal", {
+        role: "supervises",
+        targetAt: { x: 20, y: -400 },
+      });
+      const path = edgeGroup(lead.container).querySelector(
+        ".react-flow__edge-path",
+      ) as SVGPathElement;
+      expect(path.getAttribute("d")).toMatch(/^M 50,0 C /u);
+      expect(path.getAttribute("d")).toMatch(/ 70,-300$/u);
+    });
+
+    it("子与主并排时改走就近边：主右 → 子左", () => {
       const lead = renderEdge("terminal", "terminal", { role: "supervises" });
       const path = edgeGroup(lead.container).querySelector(
         ".react-flow__edge-path",
       ) as SVGPathElement;
-      // 主在 (0,0) 100×100，子在 (300,0)：底边中点 (50,100)，顶边中点 (350,0)。
-      expect(path.getAttribute("d")).toMatch(/^M 50,100 C /u);
-      expect(path.getAttribute("d")).toMatch(/ 350,0$/u);
+      expect(path.getAttribute("d")).toMatch(/^M 100,50 C /u);
+      expect(path.getAttribute("d")).toMatch(/ 300,50$/u);
     });
   });
 

@@ -3506,3 +3506,26 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 
 - core：`CoreContext.onStop?(stop)`（可选，只有 `run` 装配的 core 有）；`controllerSocketPath(dataDir)` 与 `maxSocketPath()` 导出。线上 JSON 形状不变。
 - iOS：Debug 构建的启动参数 `-ArmadraUITest`（只关开屏动画）。
+
+## 连线随两端位置换边（#211，2026-10-09）
+
+做了什么：
+
+- `canvas/geometry.ts`：`free` 锚改按两个矩形的**空隙**选轴——只在一条轴上分开就走那条轴相对的两条边，斜放时取空隙大的一轴，叠在一起才比中心。原先只比中心，宽节点斜下方挂小节点时会走左右，线先往回折。新增 `dispatchAnchor(source, target, direction)`：子整个在布局下游（纵向在主下方、横向在主右侧）时用布局方向，被拖到主的上方、左侧或与主并排时退回 `free`。
+- `flow/edges/LinkEdge.tsx`：派发线的锚改由 `dispatchAnchor` 现算；对等线、引用线（`ReferenceEdge`）、拖线预览本来就走 `free`，一起受益。边仍读 `useInternalNode` 的矩形，不读把手坐标；`useInternalNode` 只订阅两端节点，拖一个节点时只有挂在它身上的边重算。
+- 存储：边本来就只存 `source` / `target`，没有持久化把手；`canvasEdgeSchema` 是 zod 默认的 strip，旧数据若带 `sourceHandle` / `targetHandle` 读时丢掉。无迁移、无契约变化。
+- 展示页「画布」加一块「连线随动」：主在中间，上、左、下三个从加右侧便签，四条线从主的四条边各出一条。
+- `design-system.md` 连线两行改成新的选边规则。
+
+实测（macOS arm64，基于 main ae520e9a）：
+
+- 新增用例：`geometry.test.ts`（空隙选轴五条、`dispatchAnchor` 三条）、`link-path.test.ts`（目标绕一圈两端各换一次边、纵向 / 横向派发线被拖到上游后换边）、`LinkEdge.test.tsx`（派发线子在上方 / 并排时走就近边；原「纵向主底 → 子顶」用例把子挪到主下方，并排时按本 issue 应走左右）、新文件 `LinkEdge.drag.test.tsx`（受控 React Flow 里连续改节点位置：路径两端逐步换边；连拖三帧只为被拖节点那条线调用 `linkView`，另一条线一次不算；派发线拖上去再拖回来）、`use-flow-nodes.test.ts`（连线时不把把手写进边）、shared `domain/nodes.test.ts`（旧边带把手字段读时丢掉）。
+- 展示页在开发服务器上看过：四条线分别从主的顶、左、底、右边中点出。
+
+没做 / 偏离：
+
+- 同侧多条派发线仍共用一个出点（设计 §3.2 的「自然扇出」），没有按条数分散锚点。
+
+接口：
+
+- `geometry.ts`：新增 `dispatchAnchor`；`facingSides` / `edgeGeometry` 签名不变，`free` 的选边规则变了（`horizontal` / `vertical` 仍是硬约束；`CanvasOverlays` 的子代理派生线用 `free`，一并按新规则选边）。

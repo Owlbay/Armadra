@@ -208,3 +208,49 @@ export const CLUSTER_EDGES = [
   createdAt: AT,
   updatedAt: AT,
 }));
+
+/* ---------------------------- 连线随动（#211） ---------------------------- */
+
+/**
+ * 一个主被拖到中间：三个从分别在它上方、左侧、下方，便签在右侧。四条线从主的
+ * 四条边各出一条——下方那条按纵向布局走主底 → 子顶，上方与左侧那两条子已经不在
+ * 布局的下游，改走就近边；右侧是对等的上下文线，同样就近。
+ */
+export const FOLLOW_IDS = {
+  lead: "00000000-0000-4000-8000-000000000201",
+  above: "00000000-0000-4000-8000-000000000202",
+  left: "00000000-0000-4000-8000-000000000203",
+  below: "00000000-0000-4000-8000-000000000204",
+  note: "00000000-0000-4000-8000-000000000205",
+} as const;
+
+export const FOLLOW_NODES: CanvasNode[] = [
+  agentNode(FOLLOW_IDS.lead, "planner", "claude", 235, 129),
+  agentNode(FOLLOW_IDS.above, "codex-1", "codex", 250, 8),
+  agentNode(FOLLOW_IDS.left, "codex-2", "codex", 16, 135),
+  agentNode(FOLLOW_IDS.below, "codex-3", "codex", 250, 250),
+  node({
+    id: FOLLOW_IDS.note,
+    type: "sticky",
+    title: "约定",
+    position: { x: 454, y: 135 },
+    size: CLUSTER_SIZE,
+    data: { kind: "sticky", content: "" },
+  }),
+];
+
+export const FOLLOW_EDGES = [
+  [FOLLOW_IDS.lead, FOLLOW_IDS.above, "supervises"],
+  [FOLLOW_IDS.lead, FOLLOW_IDS.left, "supervises"],
+  [FOLLOW_IDS.lead, FOLLOW_IDS.below, "supervises"],
+  [FOLLOW_IDS.note, FOLLOW_IDS.lead, "peer"],
+].map(([source, target, role]) => ({
+  id: `follow-${source}-${target}`,
+  boardId: BOARD,
+  kind: "link" as const,
+  source: source!,
+  target: target!,
+  role: role as "peer" | "supervises",
+  createdAt: AT,
+  updatedAt: AT,
+}));

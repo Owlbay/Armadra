@@ -40,6 +40,8 @@ import {
   CANVAS_NODES,
   CLUSTER_EDGES,
   CLUSTER_NODES,
+  FOLLOW_EDGES,
+  FOLLOW_NODES,
   DELIVERY,
   EDITOR_LINES,
   PEERS,
@@ -352,7 +354,7 @@ const CLUSTER_HEIGHT = 330;
  */
 const SHOWCASE_DOCUMENT: BoardDocument = {
   board: {} as BoardDocument["board"],
-  nodes: [...CANVAS_NODES, ...CLUSTER_NODES],
+  nodes: [...CANVAS_NODES, ...CLUSTER_NODES, ...FOLLOW_NODES],
   edges: [
     ...CANVAS_EDGES.filter((edge) => edge.type === "link").map((edge) => ({
       id: edge.id,
@@ -365,6 +367,7 @@ const SHOWCASE_DOCUMENT: BoardDocument = {
       updatedAt: CLUSTER_EDGES[0]!.updatedAt,
     })),
     ...CLUSTER_EDGES,
+    ...FOLLOW_EDGES,
   ],
 };
 
@@ -388,26 +391,35 @@ function ClusterNode({ data: node }: NodeProps<ShowcaseFlowNode>) {
 
 const clusterNodeTypes: NodeTypes = { armadra: ClusterNode };
 
-const clusterFlowNodes = CLUSTER_NODES.map((node) => ({
-  id: node.id,
-  type: "armadra" as const,
-  position: node.position,
-  data: node,
-  width: node.size?.width,
-  height: node.size?.height,
-  draggable: false,
-  selectable: false,
-  dragHandle: ".drag-handle",
-}));
+function specimenNodes(nodes: readonly CanvasNode[]) {
+  return nodes.map((node) => ({
+    id: node.id,
+    type: "armadra" as const,
+    position: node.position,
+    data: node,
+    width: node.size?.width,
+    height: node.size?.height,
+    draggable: false,
+    selectable: false,
+    dragHandle: ".drag-handle",
+  }));
+}
 
-const clusterFlowEdges: Edge[] = CLUSTER_EDGES.map((edge) => ({
-  id: edge.id,
-  type: "link",
-  source: edge.source,
-  target: edge.target,
-  data: { role: edge.role },
-  selectable: false,
-}));
+function specimenEdges(edges: typeof CLUSTER_EDGES): Edge[] {
+  return edges.map((edge) => ({
+    id: edge.id,
+    type: "link",
+    source: edge.source,
+    target: edge.target,
+    data: { role: edge.role },
+    selectable: false,
+  }));
+}
+
+const clusterFlowNodes = specimenNodes(CLUSTER_NODES);
+const clusterFlowEdges = specimenEdges(CLUSTER_EDGES);
+const followFlowNodes = specimenNodes(FOLLOW_NODES);
+const followFlowEdges = specimenEdges(FOLLOW_EDGES);
 
 const noGlow = () => undefined;
 
@@ -471,6 +483,51 @@ function ClusterSpecimen({ scale }: { scale: number }) {
               }
               nodeComponent={MinimapNode}
               nodeBorderRadius={3}
+            />
+          </ReactFlow>
+        </ReactFlowProvider>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 连线随动（#211）：主在中间，四条线从它的四条边各出一条。拖动节点时每条线按
+ * 两端此刻的相对位置重新选边；这里把「拖过之后」的那一刻定格下来。
+ */
+function FollowSpecimen({ scale }: { scale: number }) {
+  return (
+    <div style={{ height: (CLUSTER_HEIGHT + 2) * scale }}>
+      <div
+        data-showcase-follow
+        className="canvas-stage relative origin-top-left overflow-hidden rounded-[var(--r-panel)] border border-border"
+        style={{
+          width: CLUSTER_WIDTH + 2,
+          height: CLUSTER_HEIGHT + 2,
+          transform: scale < 1 ? `scale(${scale})` : undefined,
+        }}
+      >
+        <ReactFlowProvider>
+          <ReactFlow
+            nodes={followFlowNodes}
+            edges={followFlowEdges}
+            nodeTypes={clusterNodeTypes}
+            edgeTypes={edgeTypes}
+            defaultViewport={{ x: 0, y: 0, zoom: 1 }}
+            nodesDraggable={false}
+            nodesConnectable={false}
+            elementsSelectable={false}
+            panOnDrag={false}
+            zoomOnScroll={false}
+            zoomOnPinch={false}
+            zoomOnDoubleClick={false}
+            preventScrolling={false}
+            proOptions={{ hideAttribution: true }}
+          >
+            <Background
+              variant={BackgroundVariant.Dots}
+              color="var(--canvas-dot)"
+              gap={20}
             />
           </ReactFlow>
         </ReactFlowProvider>
@@ -572,6 +629,7 @@ export default function CanvasSection() {
       </div>
       <HeaderSpecimen scale={scale} />
       <ClusterSpecimen scale={scale} />
+      <FollowSpecimen scale={scale} />
     </div>
   );
 }
