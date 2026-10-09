@@ -1,6 +1,10 @@
 import * as React from "react";
 
-import { flushScheduler } from "../flush-scheduler";
+import type {
+  TerminalRenderer,
+  TerminalRepaintThrottle,
+} from "@/app/preferences/terminal";
+import { flushScheduler, repaintScheduler } from "../flush-scheduler";
 import {
   drainOffscreenBuffer,
   rendersActively,
@@ -8,12 +12,24 @@ import {
   type TerminalRenderState,
 } from "../render-state";
 import { registerRenderClient, type RenderClient } from "../render-budget";
+import {
+  rendererGatesRender,
+  repaintThrottled,
+  wantsWebgl,
+} from "../renderer-policy";
 import type { SurfaceRefs } from "./refs";
 import type { TerminalConnection } from "./types";
 
 export interface RenderBudget {
   render: TerminalRenderState;
   active: boolean;
+  /**
+   * 输出直写进 xterm。`active` 时为真，除非缩小限帧（E2）把这个可见 DOM 终端
+   * 的写入合并到 100 ms 一拍——那时 fit 照常，只是不每块都写。
+   */
+  writeThrough: boolean;
+  /** 正在限帧（`data-throttled` 诊断属性用）。 */
+  throttled: boolean;
   /** 持有一个渲染名额：WebGL addon 的挂载条件（`render-budget.ts`）。 */
   budgeted: boolean;
   focused: boolean;
@@ -40,8 +56,14 @@ export function useRenderBudget(
     pageVisible: boolean;
     detached: boolean;
     connection: TerminalConnection;
-    /** WebGL 开着时渲染名额才决定档位（性能设计 §2.4 B3 最后一条）。 */
-    webgl: boolean;
+    /**
+     * 渲染器档位。只有纯 `webgl` 档由名额决定档位（性能设计 §2.4 B3 最后一条）；
+     * `auto` 下没名额的可见终端用 DOM 直写。
+     */
+    renderer: TerminalRenderer;
+    repaintThrottle: TerminalRepaintThrottle;
+    /** 画布缩放低于限帧阈值（`useLowZoom`）。 */
+    lowZoom: boolean;
   },
 ): RenderBudget {
   const { nodeId, collapsed, onScreen, pageVisible, detached, connection } =
@@ -57,9 +79,19 @@ export function useRenderBudget(
     focused,
     detached,
     budgeted,
-    webgl: options.webgl,
+    webgl: rendererGatesRender(options.renderer),
   });
   const active = rendersActively(render);
+  const throttled = repaintThrottled({
+    throttle: options.repaintThrottle,
+    lowZoom: options.lowZoom,
+    visible: render === "visible",
+    focused: render === "focused",
+    webglActive: wantsWebgl(options.renderer, budgeted),
+  });
+  const writeThrough = active && !throttled;
+  const throttledRef = React.useRef(throttled);
+  throttledRef.current = throttled;
 
   /*
    * 渲染名额（设计 §7.1「WebGL context 设设备预算」）。
@@ -129,33 +161,39 @@ export function useRenderBudget(
       refs.flushingRef.current = null;
       if (refs.bufferRef.current.chunks.length === 0) return;
       if (refs.writeThroughRef.current) flushRef.current();
-      else flushScheduler.request(flushRef.current);
+      else schedulerFor(throttledRef.current).request(flushRef.current);
     });
   }, [refs]);
   flushRef.current = flushOutput;
 
   const scheduleFlush = React.useCallback(() => {
-    flushScheduler.request(flushOutput);
+    schedulerFor(throttledRef.current).request(flushOutput);
   }, [flushOutput]);
 
   /*
-   * 重新可见时立刻灌；离屏时不挂定时器，有数据进来时 `scheduleFlush` 才排。
+   * 回到直写时立刻灌；离屏时不挂定时器，有数据进来时 `scheduleFlush` 才排。
    * 攒着的目的只是不每帧重绘，不是丢数据——所以节奏慢，但一定会灌。
    */
   React.useEffect(() => {
-    if (active) {
+    if (writeThrough) {
       flushScheduler.cancel(flushOutput);
+      repaintScheduler.cancel(flushOutput);
       flushOutput();
     }
-  }, [active, flushOutput]);
+  }, [writeThrough, flushOutput]);
   React.useEffect(
-    () => () => flushScheduler.cancel(flushOutput),
+    () => () => {
+      flushScheduler.cancel(flushOutput);
+      repaintScheduler.cancel(flushOutput);
+    },
     [flushOutput],
   );
 
   return {
     render,
     active,
+    writeThrough,
+    throttled,
     budgeted,
     focused,
     setFocused,
@@ -163,4 +201,9 @@ export function useRenderBudget(
     scheduleFlush,
     reportContextLoss,
   };
+}
+
+/** 限帧中的可见终端排 100 ms 一拍，其余（离屏）排 500 ms 一拍。 */
+function schedulerFor(throttled: boolean) {
+  return throttled ? repaintScheduler : flushScheduler;
 }

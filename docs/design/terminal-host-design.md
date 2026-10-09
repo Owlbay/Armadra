@@ -158,6 +158,19 @@ Eco 模式与状态机见 §7.4。
 - **豁免**：启动行已武装或在等依赖、`starting` / `connecting` / 休眠接回中、有没落地的输入时不断开也不释放；聚焦模式的节点与等审批的 Agent 另外不释放。命中时 5 s 后再看。
 - **内存压力**：订阅页面的压力总线；告警档释放离屏满 30 s 的实例，紧急档释放全部看不见的实例，可见的不动，降回 normal 不重建；设置为 `never` 时不响应。
 - **离屏输出**：全页一个调度器，只在有表面待灌时排一次 500 ms 的定时器；灌写用 `terminal.write(text, callback)`，上一批没消化完不灌下一批。DOM 渲染器下渲染名额不再决定档位，看得见即直写；名额只在 WebGL 开着时生效。
+
+### 7.6 实现状态（渲染器策略，2026-10-09）
+
+渲染器是本机设置 `armadra.terminal.renderer`（`dom` / `webgl` / `auto`，缺省 `dom`），取代旧的布尔 `armadra.terminal.webgl`（旧键不读）。规则在 `apps/web/src/terminal/renderer-policy.ts`，addon 的挂卸在 `surface/use-webgl.ts`：
+
+- `dom`：不装 addon，名额与档位无关。
+- `webgl`：持有名额的装 addon，没名额的可见终端按 `offscreen` 批写；设置页只在这一档显示「渲染名额」。
+- `auto`（实验）：协调器上限压到 `AUTO_WEBGL_SLOTS = 4`，焦点终端不计上限；没名额的可见终端用 DOM 直写。
+- `armadra.terminal.repaintThrottle = lowZoom`（实验，缺省 `off`）：画布缩放 < 0.5 时，非焦点的可见 DOM 终端写入合并到 100 ms 一拍（`repaintScheduler`）；开关关着时表面不订阅画布 store。
+- `[data-slot="terminal-body"]` 加 `data-renderer="dom|webgl"`（addon 是否真的装着）与 `data-throttled`。
+
+20 个忙碌终端的对照见 `docs/status/completion-progress.md`「性能包 P4」：`auto` 在 4 / 8 个名额下 Blink 堆与 DOM 档相同，整机内存更高，所以默认仍是 DOM。
+
 - **代价**：释放时 xterm 自己的回滚、选区与搜索高亮丢失；tmux 后端历史在 tmux 里，滚轮桥照旧；direct 后端靠回放环拿回一屏与回放。节点头对 `released` 仍显示「已断开（省电）」（`data-render="detached"`）。
 
 ## 8. 主机与会话资源面板

@@ -39,6 +39,8 @@ const fixture = vi.hoisted(() => ({
   proposed: { cols: 80, rows: 24 } as
     | { cols: number; rows: number }
     | undefined,
+  /** 画布缩放（缩小限帧用）。 */
+  zoom: 1,
   getTerminal: vi.fn(),
   createTerminal: vi.fn(),
   wakeTerminal: vi.fn(),
@@ -46,10 +48,11 @@ const fixture = vi.hoisted(() => ({
 
 vi.mock("@/store/canvas-store", () => ({
   useCanvasStore: {
+    subscribe: () => () => undefined,
     getState: () => ({
       workspace: { id: "workspace", rootPath: "/repo" },
       document: {
-        board: { id: "board" },
+        board: { id: "board", viewport: { x: 0, y: 0, zoom: fixture.zoom } },
         nodes: [{ id: "node", data: fixture.data }],
       },
       updateNodeData: vi.fn(),
@@ -171,6 +174,8 @@ vi.mock("@xterm/addon-clipboard", () => ({ ClipboardAddon: class {} }));
 import * as React from "react";
 import { HIDDEN_DETACH_MS, OFFSCREEN_FLUSH_MS } from "./render-state";
 import { resetRenderBudget } from "./render-budget";
+import { THROTTLED_REPAINT_MS } from "./renderer-policy";
+import { usePreferencesStore } from "@/app/preferences-store";
 import {
   LIFECYCLE_RECHECK_MS,
   OFFSCREEN_DETACH_MS,
@@ -215,6 +220,7 @@ beforeEach(() => {
   fixture.terminals = [];
   fixture.disposed = 0;
   fixture.proposed = { cols: 80, rows: 24 };
+  fixture.zoom = 1;
   fixture.getTerminal.mockImplementation(async () => ({
     id: "session",
     workspaceId: "workspace",
@@ -665,5 +671,40 @@ describe("分阶段生命周期", () => {
     act(() => emitMemoryPressure("normal"));
     expect(body.dataset.lifecycle).toBe("released");
     expect(fixture.terminals).toHaveLength(1);
+  });
+
+  it("缩小时限帧：可见的 DOM 终端按 100 ms 一拍灌写，关掉开关立刻直写", async () => {
+    const terminal = usePreferencesStore.getState().terminal;
+    usePreferencesStore.setState({
+      terminal: { ...terminal, repaintThrottle: "lowZoom" },
+    });
+    try {
+      fixture.zoom = 0.3;
+      const { body } = await mount();
+      act(() => fixture.handlers!.onHello!(hello));
+      expect(body.dataset.render).toBe("visible");
+      expect(body.dataset.renderer).toBe("dom");
+      expect(body.dataset.throttled).toBe("");
+      fixture.writes = [];
+      act(() => fixture.handlers!.onOutput!("a"));
+      act(() => fixture.handlers!.onOutput!("b"));
+      expect(fixture.writes).toEqual([]);
+      act(() => vi.advanceTimersByTime(THROTTLED_REPAINT_MS));
+      expect(fixture.writes).toEqual(["ab"]);
+
+      // 关掉开关：直写，攒着的立刻灌。
+      act(() => fixture.handlers!.onOutput!("c"));
+      act(() =>
+        usePreferencesStore.setState({
+          terminal: { ...terminal, repaintThrottle: "off" },
+        }),
+      );
+      expect(body.dataset.throttled).toBeUndefined();
+      expect(fixture.writes).toEqual(["ab", "c"]);
+      act(() => fixture.handlers!.onOutput!("d"));
+      expect(fixture.writes).toEqual(["ab", "c", "d"]);
+    } finally {
+      usePreferencesStore.setState({ terminal });
+    }
   });
 });

@@ -9,6 +9,7 @@
  */
 
 import { OFFSCREEN_FLUSH_MS } from "./render-state";
+import { THROTTLED_REPAINT_MS } from "./renderer-policy";
 
 export type FlushTask = () => void;
 
@@ -71,3 +72,9 @@ export function createFlushScheduler(
 
 /** 全页共用的那一个。 */
 export const flushScheduler = createFlushScheduler();
+
+/**
+ * 缩小时限帧（性能设计 §2.5 E2）用的第二个：同样的登记语义，节奏 100 ms。
+ * 只有开了 `repaintThrottle = lowZoom` 且缩放够低的可见 DOM 终端会登记。
+ */
+export const repaintScheduler = createFlushScheduler(THROTTLED_REPAINT_MS);
