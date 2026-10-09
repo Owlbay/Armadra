@@ -1,0 +1,8 @@
+{
+  "id": "core-terminal-program-status",
+  "tier": "a",
+  "script": "tools/probes/core-terminal-program-status.mjs",
+  "args": [],
+  "requires": ["tmux"],
+  "timeoutMinutes": 5
+}
