@@ -23,8 +23,9 @@
  *  - 超预算时按 `hiddenAt` LRU 从**最久未见的隐藏持有者**按需回收；持有者若当前
  *    全部可见，新来者**不授予、留在 DOM 渲染器**——绝不越预算，浏览器就永远
  *    没有强制驱逐的理由。
- *  - 隐藏持有者保留名额（暖着），没有基于时间的主动释放；唯一的主动释放是内存
- *    压力下的 `releaseHidden()`。
+ *  - 隐藏持有者只暖 `RENDER_HIDDEN_RELEASE_MS`（30 秒）：短暂平移出去再回来不
+ *    用重建上下文，离开更久就把名额还回去——开 WebGL 时，20 个离屏终端白占着
+ *    约 190 MiB GPU（性能设计 A4）。内存压力下 `releaseHidden()` 不等这 30 秒。
  *
  * 策略是纯函数 `selectGranted`，登记处只负责「变了就通知」。
  *
@@ -35,6 +36,10 @@
  * 的 24 才有意义；浏览器里跑（没有壳）时抬不了顶，用户要自己在设置里调低档位。
  * 不变量到哪都一样：我们的预算**明显低于**这台机器的真实上限。
  */
+
+import { installMemoryPressure } from "./memory-pressure";
+import { onMemoryPressure } from "./pressure-bus";
+import { actionFor } from "./pressure-policy";
 
 /* -------------------------------- 预算数值 -------------------------------- */
 
@@ -110,6 +115,14 @@ export const RENDER_REACQUIRE_AFTER_LOSS_MS = 1_000;
  * 用户把节点移出视口再移回来为止。
  */
 export const RENDER_LOSS_STREAK_MAX = 3;
+
+/**
+ * 隐藏持有者最多暖多久。
+ *
+ * 30 秒覆盖「平移出去看一眼别处再回来」；离开更久，回来时重建上下文的那一帧
+ * （取名额的去抖已有 150 ms）比一直占着 GPU 便宜。设成 `Infinity` 即回到旧行为。
+ */
+export const RENDER_HIDDEN_RELEASE_MS = 30_000;
 
 /* -------------------------------- 名额策略 -------------------------------- */
 
@@ -199,6 +212,8 @@ interface Entry {
   timer: ReturnType<typeof setTimeout> | null;
   /** 中间没有可见性变化的连续外部丢失次数。 */
   lossStreak: number;
+  /** 变为隐藏的真实时间（`Date.now()`）；可见时为 null。 */
+  hiddenAt: number | null;
   onChange: (granted: boolean) => void;
 }
 
@@ -208,6 +223,11 @@ let clock = 0;
 /** 登记键的自增号，只保证唯一。 */
 let serial = 0;
 const entries = new Map<string, Entry>();
+/** 全表只有一个：在最早到期的隐藏持有者上触发重算。 */
+let expiryTimer: ReturnType<typeof setTimeout> | null = null;
+let expiryAt = Infinity;
+/** 内存压力总线只接一次（第一个终端登记时）。 */
+let pressureWired = false;
 
 export function getRenderBudget(): number {
   return limit;
@@ -248,6 +268,7 @@ export function registerRenderClient(
   initial: { visible: boolean; focused: boolean },
   onChange: (granted: boolean) => void,
 ): RenderClient {
+  wirePressure();
   serial += 1;
   const key = `${id}#${serial}`;
   const entry: Entry = {
@@ -259,6 +280,7 @@ export function registerRenderClient(
     hold: null,
     timer: null,
     lossStreak: 0,
+    hiddenAt: initial.visible ? null : Date.now(),
     onChange,
   };
   entries.set(key, entry);
@@ -275,6 +297,7 @@ export function registerRenderClient(
       entry.lossStreak = 0;
       clearHold(entry);
       entry.seq = ++clock;
+      entry.hiddenAt = visible ? null : Date.now();
       if (visible && !entry.granted && !entry.focused) {
         // 平移扫过不该抓上下文；已持有的（暖着的）不必再等，聚焦的也不等。
         hold(entry, "debounce", RENDER_ACQUIRE_DEBOUNCE_MS);
@@ -352,14 +375,12 @@ export function loseWebglContexts(
 }
 
 /**
- * 内存压力下把**所有隐藏持有者**的名额还回去。
+ * 内存压力下把**所有隐藏持有者**的名额还回去，不等 `RENDER_HIDDEN_RELEASE_MS`。
  *
- * 这是生命周期里唯一一次主动释放：隐藏持有者平时暖着，只在有可见的新来者要
- * 名额时按 LRU 让出一个。可见的持有者一概不动——把上下文从用户正盯着的终端上
- * 摘走，是拿一次可见的降级去换内存，和 `selectGranted` 里那条规矩同一个理由。
- *
- * 目前没有事件源接进来（壳侧的内存压力事件是 Electron 迁移 W1/W2 的事），这里
- * 先把杠杆和它的语义定下来。
+ * 可见的持有者一概不动——把上下文从用户正盯着的终端上摘走，是拿一次可见的降级
+ * 去换内存，和 `selectGranted` 里那条规矩同一个理由。事件源是
+ * `pressure-bus.ts`（壳的 `memory:pressure` 与采样里的 `host.memory.pressure`），
+ * 第一个终端登记时接上（`wirePressure`）。
  */
 export function releaseHidden(): void {
   const released: Entry[] = [];
@@ -378,6 +399,7 @@ export function releaseHidden(): void {
 export function resetRenderBudget(): void {
   for (const entry of entries.values()) clearHold(entry);
   entries.clear();
+  clearExpiry();
   clock = 0;
   serial = 0;
   limit = DEFAULT_RENDER_BUDGET;
@@ -403,11 +425,14 @@ function hold(entry: Entry, reason: Hold, delay: number): void {
 /**
  * 一条登记这一轮参不参与申领。
  *
- * 隐藏但持有名额的进隐藏档（暖着，也是唯一可回收的一档）；隐藏且没名额的完全
+ * 隐藏但持有名额、隐藏未满 `RENDER_HIDDEN_RELEASE_MS` 的进隐藏档（暖着，也是
+ * 唯一可回收的一档）；暖够了的不再申领；隐藏且没名额的完全
  * 不参与——看不见的终端不会因为看不见而拿到上下文。缓期中的一律不参与。
  */
-function claimOf(entry: Entry): RenderClaim | null {
+function claimOf(entry: Entry, now: number): RenderClaim | null {
   if (entry.granted && !entry.visible) {
+    // 暖够了：不再申领，这一轮重算就把名额收回去。
+    if (hiddenExpired(entry, now)) return null;
     return { id: entry.key, priority: RENDER_PRIORITY_HIDDEN, seq: entry.seq };
   }
   if (!entry.visible || entry.hold) return null;
@@ -425,9 +450,10 @@ function claimOf(entry: Entry): RenderClaim | null {
  * 丢名额后立刻降级重挂），此时登记表必须已经是自洽的。
  */
 function reevaluate(): void {
+  const now = Date.now();
   const claims: RenderClaim[] = [];
   for (const entry of entries.values()) {
-    const claim = claimOf(entry);
+    const claim = claimOf(entry, now);
     if (claim) claims.push(claim);
   }
   const granted = selectGranted(claims, limit);
@@ -438,5 +464,52 @@ function reevaluate(): void {
     entry.granted = next;
     changed.push(entry);
   }
+  scheduleExpiry(now);
   for (const entry of changed) entry.onChange(entry.granted);
+}
+
+function hiddenExpired(entry: Entry, now: number): boolean {
+  return (
+    entry.hiddenAt !== null && now - entry.hiddenAt >= RENDER_HIDDEN_RELEASE_MS
+  );
+}
+
+function clearExpiry(): void {
+  if (expiryTimer) clearTimeout(expiryTimer);
+  expiryTimer = null;
+  expiryAt = Infinity;
+}
+
+/**
+ * 在最早到期的那个隐藏持有者上挂**一个**计时器，不每条一个。到点重算一轮，
+ * 重算末尾再按剩下的挂下一个。
+ */
+function scheduleExpiry(now: number): void {
+  let earliest = Infinity;
+  for (const entry of entries.values()) {
+    if (!entry.granted || entry.visible || entry.hiddenAt === null) continue;
+    earliest = Math.min(earliest, entry.hiddenAt + RENDER_HIDDEN_RELEASE_MS);
+  }
+  if (earliest === expiryAt) return;
+  clearExpiry();
+  if (!Number.isFinite(earliest)) return;
+  expiryAt = earliest;
+  expiryTimer = setTimeout(
+    () => {
+      expiryTimer = null;
+      expiryAt = Infinity;
+      reevaluate();
+    },
+    Math.max(0, earliest - now),
+  );
+}
+
+/** 第一个终端登记时接上内存压力：有可回收的东西才需要听。 */
+function wirePressure(): void {
+  if (pressureWired) return;
+  pressureWired = true;
+  onMemoryPressure((level) => {
+    if (actionFor(level).releaseHiddenSlots) releaseHidden();
+  });
+  installMemoryPressure();
 }

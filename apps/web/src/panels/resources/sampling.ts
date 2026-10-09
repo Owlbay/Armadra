@@ -20,6 +20,7 @@ import type { ResourceSnapshot } from "@armadra/shared";
 
 import { runtimeApi } from "@/api/client";
 import { onWorkspaceEvent } from "@/api/events";
+import { emitMemoryPressure } from "@/terminal/pressure-bus";
 
 /** 离屏节点的采样节奏（路线图 §4.3「节点 offscreen 时降到 30 秒」）。 */
 export const SLOW_INTERVAL_MS = 30_000;
@@ -60,6 +61,18 @@ interface Room {
 }
 
 const rooms = new Map<string, Room>();
+
+/**
+ * 样本里本机的系统内存压力转给终端的回收总线（性能设计 A3 的后备那一路：服务器
+ * 壳 / 浏览器里没有壳的 `memory:pressure`）。远端机器的压力与这一页无关；
+ * `null` 是没测到，不是 normal。
+ */
+function forwardPressure(snapshot: ResourceSnapshot): void {
+  const host = snapshot.host as Partial<ResourceSnapshot["host"]> | undefined;
+  const pressure = host?.memory?.pressure;
+  if (host?.location !== "local" || !pressure) return;
+  emitMemoryPressure(pressure, "sample");
+}
 
 function emit(room: Room): void {
   for (const listener of room.listeners.values()) listener(room.state);
@@ -160,6 +173,7 @@ function open(workspaceId: string): Room {
 
   room.stopEvents = onWorkspaceEvent("resource.sample", (event) => {
     if (event.snapshot.workspaceId !== workspaceId) return;
+    forwardPressure(event.snapshot);
     patch(room, { snapshot: event.snapshot, loading: false, error: null });
   });
 

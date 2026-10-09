@@ -11,6 +11,7 @@ import {
   RENDER_BUDGET_MAC,
   RENDER_BUDGET_OTHER,
   RENDER_BUDGET_RANGE,
+  RENDER_HIDDEN_RELEASE_MS,
   RENDER_LOSS_STREAK_MAX,
   RENDER_PRIORITY_FOCUSED,
   RENDER_PRIORITY_HIDDEN,
@@ -21,8 +22,12 @@ import {
   setRenderBudget,
   type RenderClaim,
 } from "./render-budget";
+import { emitMemoryPressure, resetMemoryPressure } from "./pressure-bus";
 
-afterEach(() => resetRenderBudget());
+afterEach(() => {
+  resetRenderBudget();
+  resetMemoryPressure();
+});
 
 /** 依次变可见的一串终端：`seq` 越小越早可见（老住户）。 */
 function visible(ids: readonly string[]): RenderClaim[] {
@@ -421,6 +426,84 @@ describe("协调器", () => {
       const a = client("a");
       releaseHidden();
       expect(a.log).toEqual([true]);
+    });
+  });
+
+  describe("隐藏持有者 30 秒后归还（A4）", () => {
+    it("隐藏满 30 秒还名额，之前一直暖着", () => {
+      const a = client("a");
+      a.handle.setVisible(false);
+      vi.advanceTimersByTime(RENDER_HIDDEN_RELEASE_MS - 1);
+      expect(a.granted()).toBe(true);
+      vi.advanceTimersByTime(1);
+      expect(a.log).toEqual([true, false]);
+    });
+
+    it("30 秒内回来不重建：名额一直在", () => {
+      const a = client("a");
+      a.handle.setVisible(false);
+      vi.advanceTimersByTime(RENDER_HIDDEN_RELEASE_MS / 2);
+      a.handle.setVisible(true);
+      vi.advanceTimersByTime(RENDER_HIDDEN_RELEASE_MS * 2);
+      expect(a.log).toEqual([true]);
+    });
+
+    it("一个计时器按到期先后逐个收回", () => {
+      setRenderBudget(4);
+      const a = client("a");
+      const b = client("b");
+      a.handle.setVisible(false);
+      vi.advanceTimersByTime(10_000);
+      b.handle.setVisible(false);
+      expect(vi.getTimerCount()).toBe(1);
+      vi.advanceTimersByTime(RENDER_HIDDEN_RELEASE_MS - 10_000);
+      expect(a.granted()).toBe(false);
+      expect(b.granted()).toBe(true);
+      expect(vi.getTimerCount()).toBe(1);
+      vi.advanceTimersByTime(10_000);
+      expect(b.granted()).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("还掉之后回到可见要重新过去抖", () => {
+      const a = client("a");
+      a.handle.setVisible(false);
+      vi.advanceTimersByTime(RENDER_HIDDEN_RELEASE_MS);
+      a.handle.setVisible(true);
+      expect(a.granted()).toBe(false);
+      vi.advanceTimersByTime(RENDER_ACQUIRE_DEBOUNCE_MS);
+      expect(a.log).toEqual([true, false, true]);
+    });
+
+    it("一开始就隐藏且没名额的不挂计时器", () => {
+      client("a", false);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+  });
+
+  describe("内存压力经总线触发 releaseHidden", () => {
+    it("warning 立刻还掉隐藏持有者，可见的不动", () => {
+      setRenderBudget(4);
+      const a = client("a");
+      const b = client("b");
+      a.handle.setVisible(false);
+      emitMemoryPressure("warning");
+      expect(a.log).toEqual([true, false]);
+      expect(b.log).toEqual([true]);
+    });
+
+    it("采样那一路的 critical 也算", () => {
+      const a = client("a");
+      a.handle.setVisible(false);
+      emitMemoryPressure("critical", "sample");
+      expect(a.granted()).toBe(false);
+    });
+
+    it("normal 什么都不做", () => {
+      const a = client("a");
+      a.handle.setVisible(false);
+      emitMemoryPressure("normal");
+      expect(a.granted()).toBe(true);
     });
   });
 
