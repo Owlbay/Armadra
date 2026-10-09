@@ -41,6 +41,8 @@ export const ERROR_CODES = {
   not_implemented: { status: 501, i18n: "error.notImplemented" },
   unsupported: { status: 501, i18n: "error.unsupported" },
   settings_unavailable: { status: 503 },
+  /** 这一轮资源采样没在期限内答完（`ps` / `tmux` 超时，契约 §54）。 */
+  resources_unavailable: { status: 503 },
   /** 订阅跟不上、队列满了（`resubscribe` 策略）：带 `lastEventId` 重订（契约 §35.5）。 */
   overflow: { status: 503 },
   unknown_outcome: { status: 504, i18n: "error.unknownOutcome" },
