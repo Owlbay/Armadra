@@ -49,13 +49,22 @@ interface Segment {
   readonly max: number;
 }
 
+/** 监视器的采样间隔。 */
+export const EVENT_LOOP_RESOLUTION_MS = 10;
+
+/**
+ * `monitorEventLoopDelay` 记的是两次定时器回调之间的整段时间，含采样间隔本身
+ * （空闲进程的 p50 约 10.5 ms）；这里只报超出间隔的那一段，也就是被挡住的时间。
+ */
 function segmentOf(histogram: IntervalHistogram): Segment | undefined {
   if (histogram.count === 0) return undefined;
+  const excess = (nanoseconds: number) =>
+    Math.max(0, nanoseconds - EVENT_LOOP_RESOLUTION_MS * 1e6);
   return {
     count: histogram.count,
-    p50: histogram.percentile(50),
-    p99: histogram.percentile(99),
-    max: histogram.max,
+    p50: excess(histogram.percentile(50)),
+    p99: excess(histogram.percentile(99)),
+    max: excess(histogram.max),
   };
 }
 
@@ -73,7 +82,9 @@ export class EventLoopMonitor {
 
   enable(): void {
     if (this.current !== undefined) return;
-    this.current = monitorEventLoopDelay({ resolution: 10 });
+    this.current = monitorEventLoopDelay({
+      resolution: EVENT_LOOP_RESOLUTION_MS,
+    });
     this.current.enable();
     this.rotateTimer = setInterval(() => this.rotate(), this.windowMs / 2);
     this.rotateTimer.unref?.();
