@@ -1,0 +1,53 @@
+import type { MessageModule } from "./index";
+
+/**
+ * 选择服务（多端入口，A7-1）：手机与 iPad 启动落的选择页、桌面「切换服务」对话框、
+ * 设置里的「服务」一组。添加、移除、当前、返回沿用 `mobileConnect.*`，登录与
+ * 登出沿用 `remote.*`。
+ */
+export const services: MessageModule = {
+  "zh-CN": {
+    "services.title": "选择服务",
+    "services.group": "服务",
+    "services.recent": "最近使用",
+    "services.all": "全部",
+    "services.group.local": "本机",
+    "services.group.direct": "直连",
+    "services.group.relay": "中转 · {name}",
+    "services.via.direct": "直连",
+    "services.via.relay": "经 {name}",
+    "services.status.online": "在线",
+    "services.status.offline": "离线",
+    "services.status.unknown": "未知",
+    "services.switch": "切换服务",
+    "services.current": "当前服务",
+    "services.autoEnter": "启动时直接进入上次的服务",
+    "services.openWindow": "在新窗口打开",
+    "services.select": "切换",
+    "services.empty": "还没有连接",
+    "services.pick": "选择服务",
+    "cmd.app.switchService": "切换服务",
+  },
+  en: {
+    "services.title": "Choose a service",
+    "services.group": "Services",
+    "services.recent": "Recent",
+    "services.all": "All",
+    "services.group.local": "This device",
+    "services.group.direct": "Direct",
+    "services.group.relay": "Relay · {name}",
+    "services.via.direct": "Direct",
+    "services.via.relay": "via {name}",
+    "services.status.online": "Online",
+    "services.status.offline": "Offline",
+    "services.status.unknown": "Unknown",
+    "services.switch": "Switch service",
+    "services.current": "Current service",
+    "services.autoEnter": "Open the last service on launch",
+    "services.openWindow": "Open in new window",
+    "services.select": "Switch",
+    "services.empty": "No connections yet",
+    "services.pick": "Choose a service",
+    "cmd.app.switchService": "Switch service",
+  },
+};
