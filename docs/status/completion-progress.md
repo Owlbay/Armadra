@@ -3557,6 +3557,25 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - core：`CODEX_SESSION_HOOK_TRUST_MIN`、`codexTrustsSessionHooks`、`codexHookTrustHash(event, command, timeout?)`、`codexSessionKeySource(windows)`、`codexArgs(command, instructions?, hooks?, windows?)`；删 `CODEX_BYPASS_HOOK_TRUST`、`CODEX_HOOK_TRUST_BYPASS_MIN`、`codexBypassesTrust`。
 - `GET /api/agents/codex/integration` 的 `launchArgs` 只变值：不再有 `--dangerously-bypass-hook-trust`，多 `features.daemon_auto_start=false` 与 `hooks.state=…`。线上 JSON 形状不变。
 
+## Windows 验收保活后 5.1 无回显（nightly 37906434287，2026-10-09）
+
+做了什么：
+
+- 判断：探针时序问题，不是会话宿主缺陷。同一个 Windows PowerShell 5.1 会话在 `terminal.shells`（首条命令）和 `restart.survives`（重启后）都有回显；三种 shell 的输入走同一条原样写 ConPTY 的路径，cmd / pwsh 都过。只有「Ctrl+C 停循环 → 固定睡 2 秒 → 敲记号」不过：5.1 在忙的 runner 上回到提示符可以超过 2 秒，期间敲进去的字被 Ctrl+C 的输入缓冲清理吞掉。不改用户 shell 的启动参数。
+- `windows-acceptance-lib.mjs`：页面助手 `terminal` 的 `waitFor` 支持 `{ quietMs }`（发完输入后等输出停够这么久，快照不算，每帧输出重计）；新增 `responsiveAfterLoop`：Ctrl+C 后等静 3 秒（不静再按一次），再敲记号，没回显整行重敲，最多 3 次、每次 20 秒。
+- soak 的 detail 多了 `answers`：每个 shell 的敲了几次、怎么静下来的，失败时带输出尾巴。
+
+实测：
+
+- `windows-acceptance.test.mjs` 新增两条（等静与重敲、静默计时）。
+- 分支上手动跑 nightly 两次（37911707342、37911747495），windows acceptance 都过，三个 shell 都是一次静下来、一次回显。
+
+没做：
+
+- 5.1 吞字的具体机制（conhost 的 Ctrl+C 处理还是 PSReadLine）没在真机上拆开验证；新 detail 下次再挂能直接看屏幕。
+
+接口：无产品接口变化。
+
 ## 终端程序自报的状态：OSC 7501 与 OSC 9;4（契约 §53，2026-10-09）
 
 做了什么：

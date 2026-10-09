@@ -20,6 +20,7 @@ import {
   PAGE_HELPERS,
   parseArgs,
   probeLaunchConfig,
+  responsiveAfterLoop,
   snapshot,
   summarize,
   userConfigTargets,
@@ -301,4 +302,133 @@ test("page helpers pair through the shell bridge and carry the session", async (
     url: "ws://127.0.0.1:9/api/terminals/s1/ws?writer=acceptance",
     protocols: ["armadra-ticket.ws1"],
   });
+});
+
+test("after the soak the marker is typed only once the loop went quiet, and retyped", async () => {
+  // nightly 37906434287：5.1 的记号在固定两秒后敲进去被吞掉，同一会话后来照常回显。
+  const calls = [];
+  const replies = [
+    { ok: true, reason: "quiet" },
+    { ok: false, reason: "timeout", tail: "tick-OK" },
+    { ok: true, reason: "matched" },
+  ];
+  const answer = await responsiveAfterLoop(
+    async (lines, waitFor, timeoutMs) => {
+      calls.push({ lines, waitFor, timeoutMs });
+      return replies.shift();
+    },
+    "powershell",
+    "ACC-after-x-OK",
+  );
+  assert.deepEqual(answer, { ok: true, attempts: 2, settled: "quiet" });
+  assert.deepEqual(calls[0].lines, ["\u0003"]);
+  assert.deepEqual(calls[0].waitFor, { quietMs: 3_000 });
+  assert.equal(
+    calls[1].lines[1],
+    `${markerLine("powershell", "ACC-after-x-OK")}\r`,
+  );
+  assert.equal(calls[1].waitFor, "ACC-after-x-OK");
+
+  // 一直不静就再按一次 Ctrl+C；都敲不出来时带上最后的输出尾巴。
+  const sent = [];
+  const never = await responsiveAfterLoop(
+    async (lines) => {
+      sent.push(lines[0]);
+      return { ok: false, reason: "timeout", tail: "tick-OK" };
+    },
+    "powershell",
+    "ACC-after-y-OK",
+    { attempts: 2 },
+  );
+  assert.equal(never.ok, false);
+  assert.equal(never.settled, "timeout");
+  assert.equal(never.tail, "tick-OK");
+  assert.deepEqual(sent, ["\u0003", "\u0003", "\r", "\r"]);
+});
+
+test("the quiet wait ignores the snapshot and restarts on every output frame", async () => {
+  const timers = new Map();
+  let nextTimer = 0;
+  let socket;
+  class FakeSocket {
+    constructor() {
+      socket = this;
+      this.sent = [];
+    }
+    close() {}
+    send(data) {
+      this.sent.push(JSON.parse(data));
+    }
+  }
+  const fakeFetch = async (url) => {
+    const path = new URL(url).pathname;
+    const body =
+      path === "/api/identity/pair"
+        ? { native: { accessToken: "a", refreshToken: "r" } }
+        : { ticket: "ws1" };
+    return {
+      ok: true,
+      status: 200,
+      json: async () => body,
+      text: async () => JSON.stringify(body),
+    };
+  };
+  const helpers = new Function(
+    "globalThis",
+    "fetch",
+    "WebSocket",
+    "setTimeout",
+    "clearTimeout",
+    `return ${PAGE_HELPERS}, globalThis.__acceptance;`,
+  )(
+    {
+      window: {
+        armadra: {
+          transport: {
+            endpointsSync: () => ({
+              httpBase: "http://127.0.0.1:9",
+              wsBase: "ws://127.0.0.1:9",
+            }),
+          },
+          identity: {
+            ticket: async () => ({ ok: true, ticket: { ticket: "t" } }),
+          },
+        },
+      },
+    },
+    fakeFetch,
+    FakeSocket,
+    (fn, ms) => {
+      nextTimer += 1;
+      timers.set(nextTimer, { fn, ms });
+      return nextTimer;
+    },
+    (id) => timers.delete(id),
+  );
+  const quietTimers = () => [...timers.values()].filter((t) => t.ms === 3_000);
+  const pending = helpers.terminal(
+    "s1",
+    "acceptance",
+    ["\u0003"],
+    { quietMs: 3_000 },
+    30_000,
+  );
+  for (let i = 0; i < 5 && socket === undefined; i += 1)
+    await new Promise((resolve) => setImmediate(resolve));
+  const frame = (value) => socket.onmessage({ data: JSON.stringify(value) });
+  frame({ type: "snapshot", data: "old ACC-after-x-OK" });
+  assert.equal(quietTimers().length, 0, "快照不开始计静");
+  frame({ type: "hello" });
+  assert.deepEqual(
+    socket.sent.map((m) => m.data),
+    ["\u0003"],
+  );
+  const first = quietTimers()[0];
+  frame({ type: "output", data: "tick-OK" });
+  assert.equal(quietTimers().length, 1);
+  assert.notEqual(quietTimers()[0], first, "有输出就重新计");
+  quietTimers()[0].fn();
+  const result = await pending;
+  assert.equal(result.ok, true);
+  assert.equal(result.reason, "quiet");
 });
