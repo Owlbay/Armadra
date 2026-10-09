@@ -1,0 +1,63 @@
+# PR 按改动路径打标签，由 .github/workflows/labeler.yml 执行。
+# 标签本身已建在仓库里（颜色与描述见 CONTRIBUTING）；这里只管路径到标签的映射。
+web:
+  - changed-files:
+      - any-glob-to-any-file: "apps/web/**"
+
+i18n:
+  - changed-files:
+      - any-glob-to-any-file: "apps/web/src/i18n/**"
+
+core:
+  - changed-files:
+      - any-glob-to-any-file: "apps/desktop/src/core/**"
+
+migrations:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/desktop/src/core/db/migrations/**"
+          - "migrations.lock"
+
+# 桌面壳：apps/desktop 下 core 以外的文件。两条 glob 要同时命中同一个文件。
+desktop:
+  - changed-files:
+      - all-globs-to-any-file:
+          - "apps/desktop/**"
+          - "!apps/desktop/src/core/**"
+
+server:
+  - changed-files:
+      - any-glob-to-any-file: "apps/server/**"
+
+mobile:
+  - changed-files:
+      - any-glob-to-any-file: "apps/mobile/**"
+
+push-relay:
+  - changed-files:
+      - any-glob-to-any-file: "apps/push-relay/**"
+
+shared:
+  - changed-files:
+      - any-glob-to-any-file: "packages/shared/**"
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/**"
+          - "**/*.md"
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+          - "tools/**"
+          - "repo.rules.json"
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/package.json"
+          - "pnpm-lock.yaml"
+          - "pnpm-workspace.yaml"
+          - "patches/**"

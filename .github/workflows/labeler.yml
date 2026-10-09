@@ -1,0 +1,24 @@
+# PR 按改动路径打标签，映射在 .github/labeler.yml。
+#
+# 用 pull_request_target 是为了 fork 来的 PR 也能写标签；代价是它带着仓库的
+# 写权限运行，所以这里只给打标签需要的两项权限，也绝不检出 PR 的代码——
+# labeler 只经 API 读改动文件列表，从不执行 PR 里的任何东西。
+name: labeler
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label:
+    name: label
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/labeler@v6
+        with:
+          sync-labels: true
