@@ -13,7 +13,6 @@ import {
   forgetConnection,
   openConnection,
 } from "./connect";
-import type { ConnectionRow } from "./ConnectRelay";
 import type { Entry } from "./entry";
 import { nativeBridge } from "./native-bridge";
 import { NativeMfa } from "./NativeMfa";
@@ -21,6 +20,10 @@ import { PushPermission } from "./PushPermission";
 import { RelaySignIn } from "../shell/RelaySignIn";
 import { hostedRelay } from "../sources/hosted";
 import { usePushOpen } from "./push-open";
+import { mobileCredentialProvider } from "./credentials";
+import { createServiceProbe, useServiceProbe } from "../services/probe";
+import { loadRecent } from "../services/recent";
+import { serviceRowOf } from "../services/rows";
 import { usePushRotation } from "./push-rotation";
 
 /**
@@ -81,15 +84,34 @@ export function MobileRoot({ entry: initial }: { entry: Entry }) {
       />
     );
   }
+  return <NativeConnect entry={entry} relay={relay} />;
+}
+
+/** 原生 App 的连接页：表非空是「选择服务」（A7-1），带在线状态。 */
+function NativeConnect({
+  entry,
+  relay,
+}: {
+  entry: Extract<Entry, { kind: "connect"; mode: "native" }>;
+  relay: ReturnType<typeof createRelayEnrollment>;
+}) {
   const bridge = nativeBridge();
   const origin = entry.origin;
-  const rows: ConnectionRow[] = (entry.connections ?? []).map((row) => ({
-    sourceId: row.sourceId,
-    label: row.label,
-    host: hostOfBase(row.baseUrl || row.relayOrigin),
-    direct: row.baseUrl !== "",
-    relayed: row.relayOrigin !== "",
-  }));
+  const connections = entry.connections;
+  const rows = React.useMemo(() => {
+    const recent = loadRecent();
+    return (connections ?? []).map((row) => serviceRowOf(row, { recent }));
+  }, [connections]);
+  const probe = React.useMemo(() => {
+    if (!connections || connections.length === 0) return null;
+    const bases = new Map(
+      connections.map((row) => [row.sourceId, row.baseUrl]),
+    );
+    return createServiceProbe((sourceId) => bases.get(sourceId) ?? "", {
+      cloudAuth: mobileCredentialProvider().cloudAuth,
+    });
+  }, [connections]);
+  const probed = useServiceProbe(rows, probe);
   return (
     <ConnectScreen
       mode="native"
@@ -100,10 +122,15 @@ export function MobileRoot({ entry: initial }: { entry: Entry }) {
       relay={relay}
       connections={rows}
       activeId={entry.activeId}
+      recent={entry.recent ?? []}
+      statuses={probed.statuses}
+      signedOut={probed.signedOut}
+      failedId={entry.failedId}
+      manage={entry.manage === true}
       onOpen={(sourceId) => openConnection(sourceId)}
       onRemove={(sourceId) => {
         void forgetConnection(sourceId).then(() => {
-          // 回到管理页（入口按这个片段进连接页）。
+          // 回到选择页（入口按这个片段进连接页）。
           history.replaceState(null, "", `${location.pathname}#connections`);
           location.reload();
         });
@@ -120,14 +147,6 @@ export function MobileRoot({ entry: initial }: { entry: Entry }) {
         : {})}
     />
   );
-}
-
-function hostOfBase(base: string): string {
-  try {
-    return new URL(base).host;
-  } catch {
-    return base;
-  }
 }
 
 function ConnectedApp() {

@@ -10,6 +10,7 @@ import { saveRuntimeOrigin } from "../api/runtime-url";
 import { parsePairingQr } from "../host/qr";
 import { LOCAL_SOURCE_ID } from "../api/source";
 import { openAfterJoin } from "../sources/join-intent";
+import { forgetRecent, setEnterIntent } from "../services/recent";
 import { SourceError } from "../sources/types";
 import {
   CloudError,
@@ -80,6 +81,15 @@ const nativeDeps = (): NativeConnectDeps => ({
   reload: () => globalThis.location.reload(),
 });
 
+/**
+ * 刚加上（或点了）的连接：记为当前，并让重载后的入口直接进它——选择页是启动
+ * 的缺省（A7-1），加完连接不该再停在列表上。
+ */
+function enterNext(sourceId: string): void {
+  setActiveConnection(sourceId);
+  setEnterIntent(sourceId);
+}
+
 export function recordDirectConnection(connection: {
   readonly sourceId: string;
   readonly origin: string;
@@ -93,7 +103,7 @@ export function recordDirectConnection(connection: {
     cloudIssuer: "",
     fingerprint: connection.fingerprint,
   });
-  setActiveConnection(connection.sourceId);
+  enterNext(connection.sourceId);
 }
 
 /** 配对答案里的源标识（core 的 `hostId`）；没有就不记连接表。 */
@@ -450,7 +460,7 @@ export function createRelayEnrollment(
             )
             .catch(() => "");
           connectionOf(accepted.sourceId, name, slot);
-          setActiveConnection(accepted.sourceId);
+          enterNext(accepted.sourceId);
           // 重载进画布后打开链接指向的工作空间（本机源此时就是这条连接）。
           openAfterJoin(LOCAL_SOURCE_ID);
         } catch (error) {
@@ -521,7 +531,7 @@ export function createRelayEnrollment(
       } catch (error) {
         return failed(cloudFailureOf(error));
       }
-      setActiveConnection(mounted);
+      enterNext(mounted);
       reset();
       deps.reload();
       return { kind: "done" };
@@ -534,7 +544,7 @@ export function openConnection(
   sourceId: string,
   reload: () => void = () => globalThis.location.reload(),
 ): void {
-  setActiveConnection(sourceId);
+  enterNext(sourceId);
   reload();
 }
 
@@ -552,6 +562,7 @@ export async function forgetConnection(
   const slot = row === undefined || row.cloudIssuer === "" ? null : slotOf(row);
   await bridge.removeSession(sourceId);
   removeConnection(sourceId);
+  forgetRecent(sourceId);
   if (slot === null) return;
   const stillUsed = loadConnections().some(
     (item) => item.cloudIssuer !== "" && slotOf(item) === slot,
