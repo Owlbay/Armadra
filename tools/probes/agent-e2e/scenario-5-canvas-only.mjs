@@ -7,8 +7,8 @@
 //
 //   * 画布内：`<launcher> <程序> … "<prompt>"`，环境带源节点的身份。prompt 是位
 //     置参数，注入的旗标落在它后面——两家都得照样接受。Codex 的会话记录里有
-//     `[Armadra canvas rules r<N>]` 与完整技能的路径、stderr 有
-//     `--dangerously-bypass-hook-trust` 的警告、Hook 打到 core；Claude 的 init
+//     `[Armadra canvas rules r<N>]` 与完整技能的路径、stderr 没有旗标与共享
+//     后台服务器的警告（信任记录在 `-c` 层里）、Hook 打到 core；Claude 的 init
 //     里有我们的插件与插件技能、Hook 打到 core。
 //   * 画布外重跑同一行：只去掉 ARMADRA_NODE_ID（「shell 历史里重跑」）。没有
 //     画布说明、没有插件、Hook 没打到 core。
@@ -108,13 +108,15 @@ export default async function run5(ctx) {
       ),
       claudeState.launchArgs,
     );
-    const codexHooks = codexState.launchArgs.filter((arg) =>
-      arg.startsWith("hooks."),
+    const codexHooks = codexState.launchArgs.filter(
+      (arg) => arg.startsWith("hooks.") && !arg.startsWith("hooks.state="),
     );
     s.check(
-      "Codex 的启动器追加 --dangerously-bypass-hook-trust、八个 -c hooks.*、developer_instructions、关升级检查",
-      codexState.launchArgs[0] === "--dangerously-bypass-hook-trust" &&
+      "Codex 的启动器追加八个 -c hooks.* 与信任记录、developer_instructions、关升级检查与后台服务器自启，没有 --dangerously- 旗标",
+      !codexState.launchArgs.some((arg) => arg.startsWith("--dangerously-")) &&
         codexHooks.length === 8 &&
+        codexState.launchArgs.some((arg) => arg.startsWith("hooks.state=")) &&
+        codexState.launchArgs.includes("features.daemon_auto_start=false") &&
         codexState.launchArgs.includes("check_for_update_on_startup=false") &&
         codexState.launchArgs.some((arg) =>
           arg.startsWith("developer_instructions="),
@@ -184,8 +186,10 @@ export default async function run5(ctx) {
       inRollout,
     );
     s.check(
-      "画布内：Codex 打出 --dangerously-bypass-hook-trust 的警告",
-      codexIn.stderr.includes("`--dangerously-bypass-hook-trust` is enabled"),
+      "画布内：Codex 没有打旗标或共享后台服务器的警告",
+      !codexIn.stderr.includes("--dangerously-bypass-hook-trust") &&
+        !codexIn.stderr.includes("shared background server"),
+      codexIn.stderr.slice(-300),
     );
     s.check("画布内：Codex 的 Hook 打到了 core", lastEvent() !== before, {
       before,

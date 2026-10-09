@@ -583,8 +583,8 @@ async function main() {
     foreignChanged,
   );
   // 用户那条示例 Hook 断言做完就拿掉，免得后面 Codex 的会话里多跑一条与本测
-  // 无关的 Hook。画布内的 Codex 带 --dangerously-bypass-hook-trust，不靠信任
-  // 记录；下面休眠与唤醒之后再确认 config.toml 没被写进信任记录。
+  // 无关的 Hook（它没审过，画布内同样要审查）。画布内的 Codex 只信任启动器在
+  // `-c` 层里带的那八条记录；下面休眠与唤醒之后再确认 config.toml 没被写进信任记录。
   writeFileSync(
     legacy.codexHooks,
     `${JSON.stringify({ hooks: {} }, null, 2)}\n`,
@@ -851,7 +851,7 @@ async function main() {
       { timeout: 120_000, interval: 1000 },
     );
     check(
-      "Codex 没有停在升级或 Hook 审查提示上（画布内带 --dangerously-bypass-hook-trust，不靠信任记录）",
+      "Codex 没有停在升级或 Hook 审查提示上（画布内的信任记录在启动器的 -c 层里，不写 config.toml）",
       stuck === undefined,
       stuck,
     );
