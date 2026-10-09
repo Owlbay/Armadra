@@ -229,15 +229,12 @@ describe("§33 与协议包同一份", () => {
   it("sources.* 的出入参就是协议包 core-api 的 schema 对象", async () => {
     const protocol = await import("@armadra/platform-protocol/core-api");
     const pairs: [string, "inputSchema" | "outputSchema", unknown][] = [
-      ["sources.list", "outputSchema", protocol.sourcesListOutputSchema],
       [
         "sources.addDirect",
         "inputSchema",
         protocol.sourcesAddDirectInputSchema,
       ],
-      ["sources.addDirect", "outputSchema", protocol.clientSourceSchema],
       ["sources.update", "inputSchema", protocol.sourcesUpdateInputSchema],
-      ["sources.session", "inputSchema", protocol.sourcesSessionInputSchema],
       ["sources.session", "outputSchema", protocol.sourcesSessionOutputSchema],
       ["sources.remoteAdd", "inputSchema", protocol.remoteAddInputSchema],
       ["sources.remoteAdd", "outputSchema", protocol.remoteAddOutputSchema],
@@ -258,6 +255,46 @@ describe("§33 与协议包同一份", () => {
       expect(entry, name).toBeDefined();
       expect(def(entry!)[slot], `${name} ${slot}`).toBe(schema);
     }
+  });
+});
+
+describe("§55 在协议包的形状上追加", () => {
+  // 协议包（cloud 仓，0.2.1）还没有 `routes`：这几个 schema 是它的 `extend`，
+  // 协议包的每个字段逐个沿用同一个对象，只多 §55 的字段。
+  it("源表行、列表与 session 入参是协议包形状的超集", async () => {
+    const protocol = await import("@armadra/platform-protocol/core-api");
+    type Shaped = { shape: Record<string, unknown> };
+    const superset = (ours: unknown, theirs: unknown, extra: string[]) => {
+      const mine = (ours as Shaped).shape;
+      const base = (theirs as Shaped).shape;
+      for (const key of Object.keys(base)) {
+        if (key === "sources") continue;
+        expect(mine[key], key).toBe(base[key]);
+      }
+      expect(Object.keys(mine).filter((key) => !(key in base))).toEqual(extra);
+    };
+    const slot = (name: string, which: "inputSchema" | "outputSchema") =>
+      def(entries.find((one) => one.name === name)!)[which];
+    superset(
+      slot("sources.addDirect", "outputSchema"),
+      protocol.clientSourceSchema,
+      ["routes"],
+    );
+    superset(
+      slot("sources.mount", "outputSchema"),
+      protocol.clientSourceSchema,
+      ["routes"],
+    );
+    superset(
+      slot("sources.list", "outputSchema"),
+      protocol.sourcesListOutputSchema,
+      [],
+    );
+    superset(
+      slot("sources.session", "inputSchema"),
+      protocol.sourcesSessionInputSchema,
+      ["route"],
+    );
   });
 });
 

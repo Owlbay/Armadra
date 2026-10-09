@@ -1,7 +1,7 @@
 {
   "info": {
     "title": "Armadra core",
-    "version": "1.26",
+    "version": "1.27",
     "description": "契约 procedure 的入参与出参（docs/contracts/core-json-api.md §34）。线上是 `POST /api/rpc/<域>/<动词>`，体按 `{ json }` 编码，下列 schema 是 `json` 那一格；失败一律是 `CoreError`。由 tools/contract/generate.mjs 生成，不要手改。"
   },
   "openapi": "3.1.1",
@@ -5441,6 +5441,43 @@
                           },
                           "hasCredentials": {
                             "type": "boolean"
+                          },
+                          "routes": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "via": {
+                                  "enum": ["direct", "relayed"],
+                                  "type": "string"
+                                },
+                                "origin": {
+                                  "type": "string"
+                                },
+                                "cloudIssuer": {
+                                  "type": "string"
+                                },
+                                "fingerprint": {
+                                  "type": "string"
+                                },
+                                "preferred": {
+                                  "type": "boolean"
+                                },
+                                "lastOkAtMs": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "via",
+                                "origin",
+                                "cloudIssuer",
+                                "fingerprint",
+                                "preferred",
+                                "lastOkAtMs"
+                              ]
+                            }
                           }
                         },
                         "required": [
@@ -5455,7 +5492,8 @@
                           "addedAtMs",
                           "lastOkAtMs",
                           "orderIndex",
-                          "hasCredentials"
+                          "hasCredentials",
+                          "routes"
                         ]
                       }
                     },
@@ -5633,6 +5671,43 @@
                     },
                     "hasCredentials": {
                       "type": "boolean"
+                    },
+                    "routes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "via": {
+                            "enum": ["direct", "relayed"],
+                            "type": "string"
+                          },
+                          "origin": {
+                            "type": "string"
+                          },
+                          "cloudIssuer": {
+                            "type": "string"
+                          },
+                          "fingerprint": {
+                            "type": "string"
+                          },
+                          "preferred": {
+                            "type": "boolean"
+                          },
+                          "lastOkAtMs": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "via",
+                          "origin",
+                          "cloudIssuer",
+                          "fingerprint",
+                          "preferred",
+                          "lastOkAtMs"
+                        ]
+                      }
                     }
                   },
                   "required": [
@@ -5647,7 +5722,8 @@
                     "addedAtMs",
                     "lastOkAtMs",
                     "orderIndex",
-                    "hasCredentials"
+                    "hasCredentials",
+                    "routes"
                   ]
                 }
               }
@@ -5800,6 +5876,43 @@
                     },
                     "hasCredentials": {
                       "type": "boolean"
+                    },
+                    "routes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "via": {
+                            "enum": ["direct", "relayed"],
+                            "type": "string"
+                          },
+                          "origin": {
+                            "type": "string"
+                          },
+                          "cloudIssuer": {
+                            "type": "string"
+                          },
+                          "fingerprint": {
+                            "type": "string"
+                          },
+                          "preferred": {
+                            "type": "boolean"
+                          },
+                          "lastOkAtMs": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "via",
+                          "origin",
+                          "cloudIssuer",
+                          "fingerprint",
+                          "preferred",
+                          "lastOkAtMs"
+                        ]
+                      }
                     }
                   },
                   "required": [
@@ -5814,7 +5927,8 @@
                     "addedAtMs",
                     "lastOkAtMs",
                     "orderIndex",
-                    "hasCredentials"
+                    "hasCredentials",
+                    "routes"
                   ]
                 }
               }
@@ -6055,6 +6169,21 @@
                   "via": {
                     "enum": ["direct", "relayed"],
                     "type": "string"
+                  },
+                  "route": {
+                    "type": "object",
+                    "properties": {
+                      "via": {
+                        "enum": ["direct", "relayed"],
+                        "type": "string"
+                      },
+                      "origin": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2048
+                      }
+                    },
+                    "required": ["via", "origin"]
                   }
                 },
                 "required": ["sourceId"]
@@ -6166,6 +6295,386 @@
           "legacy": {
             "method": "POST",
             "path": "/api/sources/{sourceId}/session"
+          }
+        }
+      }
+    },
+    "/api/rpc/sources/routePrefer": {
+      "post": {
+        "operationId": "sources.routePrefer",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "via": {
+                    "enum": ["direct", "relayed"],
+                    "type": "string"
+                  },
+                  "origin": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048
+                  },
+                  "sourceId": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{32}$"
+                  }
+                },
+                "required": ["via", "origin", "sourceId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sourceId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{32}$"
+                    },
+                    "kind": {
+                      "enum": ["local", "direct", "relayed", "hosted"],
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "baseUrl": {
+                      "type": "string"
+                    },
+                    "relayOrigin": {
+                      "type": "string"
+                    },
+                    "fingerprint": {
+                      "type": "string"
+                    },
+                    "cloudIssuer": {
+                      "type": "string"
+                    },
+                    "principalHint": {
+                      "type": "string"
+                    },
+                    "addedAtMs": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "lastOkAtMs": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "orderIndex": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "hasCredentials": {
+                      "type": "boolean"
+                    },
+                    "routes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "via": {
+                            "enum": ["direct", "relayed"],
+                            "type": "string"
+                          },
+                          "origin": {
+                            "type": "string"
+                          },
+                          "cloudIssuer": {
+                            "type": "string"
+                          },
+                          "fingerprint": {
+                            "type": "string"
+                          },
+                          "preferred": {
+                            "type": "boolean"
+                          },
+                          "lastOkAtMs": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "via",
+                          "origin",
+                          "cloudIssuer",
+                          "fingerprint",
+                          "preferred",
+                          "lastOkAtMs"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "sourceId",
+                    "kind",
+                    "label",
+                    "baseUrl",
+                    "relayOrigin",
+                    "fingerprint",
+                    "cloudIssuer",
+                    "principalHint",
+                    "addedAtMs",
+                    "lastOkAtMs",
+                    "orderIndex",
+                    "hasCredentials",
+                    "routes"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "409",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§55.2",
+          "scope": "settings:write",
+          "since": "1.27",
+          "legacy": {
+            "method": "POST",
+            "path": "/api/sources/{sourceId}/routes/prefer"
+          }
+        }
+      }
+    },
+    "/api/rpc/sources/routeRemove": {
+      "post": {
+        "operationId": "sources.routeRemove",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "via": {
+                    "enum": ["direct", "relayed"],
+                    "type": "string"
+                  },
+                  "origin": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048
+                  },
+                  "sourceId": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{32}$"
+                  }
+                },
+                "required": ["via", "origin", "sourceId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sourceId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{32}$"
+                    },
+                    "kind": {
+                      "enum": ["local", "direct", "relayed", "hosted"],
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "baseUrl": {
+                      "type": "string"
+                    },
+                    "relayOrigin": {
+                      "type": "string"
+                    },
+                    "fingerprint": {
+                      "type": "string"
+                    },
+                    "cloudIssuer": {
+                      "type": "string"
+                    },
+                    "principalHint": {
+                      "type": "string"
+                    },
+                    "addedAtMs": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "lastOkAtMs": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "orderIndex": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "hasCredentials": {
+                      "type": "boolean"
+                    },
+                    "routes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "via": {
+                            "enum": ["direct", "relayed"],
+                            "type": "string"
+                          },
+                          "origin": {
+                            "type": "string"
+                          },
+                          "cloudIssuer": {
+                            "type": "string"
+                          },
+                          "fingerprint": {
+                            "type": "string"
+                          },
+                          "preferred": {
+                            "type": "boolean"
+                          },
+                          "lastOkAtMs": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "via",
+                          "origin",
+                          "cloudIssuer",
+                          "fingerprint",
+                          "preferred",
+                          "lastOkAtMs"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "sourceId",
+                    "kind",
+                    "label",
+                    "baseUrl",
+                    "relayOrigin",
+                    "fingerprint",
+                    "cloudIssuer",
+                    "principalHint",
+                    "addedAtMs",
+                    "lastOkAtMs",
+                    "orderIndex",
+                    "hasCredentials",
+                    "routes"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "409",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§55.2",
+          "scope": "settings:write",
+          "since": "1.27",
+          "legacy": {
+            "method": "POST",
+            "path": "/api/sources/{sourceId}/routes/remove"
           }
         }
       }
@@ -6790,6 +7299,43 @@
                     },
                     "hasCredentials": {
                       "type": "boolean"
+                    },
+                    "routes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "via": {
+                            "enum": ["direct", "relayed"],
+                            "type": "string"
+                          },
+                          "origin": {
+                            "type": "string"
+                          },
+                          "cloudIssuer": {
+                            "type": "string"
+                          },
+                          "fingerprint": {
+                            "type": "string"
+                          },
+                          "preferred": {
+                            "type": "boolean"
+                          },
+                          "lastOkAtMs": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "via",
+                          "origin",
+                          "cloudIssuer",
+                          "fingerprint",
+                          "preferred",
+                          "lastOkAtMs"
+                        ]
+                      }
                     }
                   },
                   "required": [
@@ -6804,7 +7350,8 @@
                     "addedAtMs",
                     "lastOkAtMs",
                     "orderIndex",
-                    "hasCredentials"
+                    "hasCredentials",
+                    "routes"
                   ]
                 }
               }
@@ -7159,6 +7706,43 @@
                     },
                     "hasCredentials": {
                       "type": "boolean"
+                    },
+                    "routes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "via": {
+                            "enum": ["direct", "relayed"],
+                            "type": "string"
+                          },
+                          "origin": {
+                            "type": "string"
+                          },
+                          "cloudIssuer": {
+                            "type": "string"
+                          },
+                          "fingerprint": {
+                            "type": "string"
+                          },
+                          "preferred": {
+                            "type": "boolean"
+                          },
+                          "lastOkAtMs": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "via",
+                          "origin",
+                          "cloudIssuer",
+                          "fingerprint",
+                          "preferred",
+                          "lastOkAtMs"
+                        ]
+                      }
                     }
                   },
                   "required": [
@@ -7173,7 +7757,8 @@
                     "addedAtMs",
                     "lastOkAtMs",
                     "orderIndex",
-                    "hasCredentials"
+                    "hasCredentials",
+                    "routes"
                   ]
                 }
               }
