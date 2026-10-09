@@ -1,0 +1,145 @@
+name: 缺陷报告 / Bug report
+description: 报告与预期不符的行为。 / Report behavior that does not match what you expected.
+title: "[Bug] "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢报告。请先搜索已有 issue，一个 issue 只写一个问题。
+        **不要贴凭据**（API key、token、密码、cookie、配对码）与**终端原始输出**；日志里出现路径、用户名或主机名请先打码。
+
+        Thanks for the report. Please search existing issues first and keep one problem per issue.
+        **Do not paste credentials** (API keys, tokens, passwords, cookies, pairing codes) or **raw terminal output**; redact paths, user names and host names in logs.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: 提交前确认 / Before submitting
+      options:
+        - label: 我已搜索过已有 issue，没有重复。 / I searched existing issues and this is not a duplicate.
+          required: true
+        - label: 我在最新发布版或 main 上复现过。 / I reproduced this on the latest release or on main.
+          required: true
+        - label: 下面的内容不含凭据与终端原始输出。 / The content below contains no credentials or raw terminal output.
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Armadra 版本 / Armadra version
+      description: 设置 → 关于里的版本号；从源码运行请写提交号。 / Version from Settings → About; commit hash if running from source.
+      placeholder: 0.2.4 / ae520e9a
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 平台 / Platform
+      multiple: true
+      options:
+        - macOS
+        - Windows
+        - Linux
+        - iOS
+        - Android
+        - 服务器壳 / Server shell (apps/server)
+    validations:
+      required: true
+
+  - type: input
+    id: os-version
+    attributes:
+      label: 系统版本与架构 / OS version and architecture
+      placeholder: macOS 15.5 arm64 / Windows 11 24H2 x64 / Ubuntu 24.04 x64
+    validations:
+      required: true
+
+  - type: dropdown
+    id: run-mode
+    attributes:
+      label: 运行方式 / How you run it
+      multiple: true
+      options:
+        - 桌面应用 / Desktop app
+        - 浏览器访问网页 / Web page in a browser
+        - 手机 App / Mobile app
+        - 经个人中转 / Through a personal relay
+        - 局域网直连 / LAN direct connection
+        - 从源码运行 / From source
+    validations:
+      required: true
+
+  - type: dropdown
+    id: agent-cli
+    attributes:
+      label: 涉及的 Agent CLI / Agent CLI involved
+      multiple: true
+      options:
+        - 不涉及 / Not related
+        - Claude Code
+        - Codex
+        - OpenCode
+        - Pi
+        - Oh My Pi
+        - GitHub Copilot
+        - ama
+        - 自定义 Agent / Custom agent
+        - 其他 / Other
+    validations:
+      required: true
+
+  - type: input
+    id: agent-cli-version
+    attributes:
+      label: Agent CLI 版本 / Agent CLI version
+      description: 例如 `<cli> --version` 的输出；不涉及可留空。 / For example the output of `<cli> --version`; leave empty if not related.
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤 / Steps to reproduce
+      description: 从启动应用开始，尽量给出最少步骤。 / Start from launching the app; keep the steps minimal.
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为 / Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为 / Actual behavior
+      description: 包括界面上的错误提示（`code` 与 `message`）。 / Include any error shown in the UI (`code` and `message`).
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / Logs
+      description: |
+        只贴相关的几行（error / warn），先删去凭据、token 与终端原始输出。
+        Paste only the relevant lines (error / warn), with credentials, tokens and raw terminal output removed.
+      render: text
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: 截图或录屏 / Screenshots or recordings
+      description: 可直接拖入图片；请遮住凭据与私人内容。 / Drag images here; cover credentials and private content.
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 其他信息 / Additional context
+      description: 终端后端（tmux / direct）、是否可稳定复现、最近一次正常的版本等。 / Terminal backend (tmux / direct), reproducibility, last known good version, etc.
