@@ -456,7 +456,9 @@ export type AgentStateLabelKey =
   | "agent.state.blocked"
   | "agent.state.done"
   | "agent.state.errored"
-  | "agent.state.interrupted";
+  | "agent.state.interrupted"
+  /** 程序自报的 `error`（契约 §53）：普通终端里没有「回合」可言。 */
+  | "agent.program.error";
 
 export interface AgentHeaderState {
   pill?: { tone: StatusTone; labelKey: AgentStateLabelKey };

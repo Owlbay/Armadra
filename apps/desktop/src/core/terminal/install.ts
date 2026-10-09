@@ -57,6 +57,7 @@ import { SshBackend } from "./ssh/backend";
 import { permissionWaitEnvironment } from "../hook/approvals";
 import { issueNodeToken } from "../hook/tokens";
 import { TerminalManager } from "./manager";
+import type { ProgramStatusWire } from "./program-status-book";
 import { humanActor } from "../drive/lease";
 import {
   type BackendChoice,
@@ -208,6 +209,23 @@ export function install(
           sessionId: event.sessionId,
           ...(event.nodeId === null ? {} : { nodeId: event.nodeId }),
           lease: event.lease as unknown as Record<string, unknown>,
+        },
+      });
+    },
+    // 程序自报的状态（契约 §53）。只带状态、种类、进度与程序名：`msg` /
+    // `title` 是终端输出的正文，不出 core。
+    onProgramStatus: (event) => {
+      context.bus.emit("workspace.event", {
+        workspaceId: event.workspaceId,
+        event: {
+          type: "terminal.program",
+          sessionId: event.sessionId,
+          ...(event.nodeId === null ? {} : { nodeId: event.nodeId }),
+          ...(event.status === undefined
+            ? {}
+            : {
+                status: event.status as unknown as Record<string, unknown>,
+              }),
         },
       });
     },
@@ -595,8 +613,11 @@ export function install(
     },
 
     sessions: (workspaceId: string) =>
-      listSessions(context.db.database, workspaceId, (id) =>
-        manager.isAlive(id),
+      listSessions(
+        context.db.database,
+        workspaceId,
+        (id) => manager.isAlive(id),
+        (id) => manager.programStatus(id),
       ),
 
     paste: async (sessionId: string, text: unknown, enter: boolean) => {
@@ -1139,6 +1160,8 @@ export interface SessionSummary {
   readonly pendingId?: string;
   readonly updatedAt: string;
   readonly alive: boolean;
+  /** 契约 §53：程序此刻自报的状态，只在会话活在这个进程里时有。 */
+  readonly programStatus?: ProgramStatusWire;
 }
 
 /**
@@ -1164,6 +1187,8 @@ export function listSessions(
   database: import("node:sqlite").DatabaseSync,
   workspaceId: string,
   alive: (sessionId: string) => boolean,
+  program: (sessionId: string) => ProgramStatusWire | undefined = () =>
+    undefined,
 ): SessionSummary[] {
   const rows = database
     .prepare(
@@ -1202,6 +1227,7 @@ export function listSessions(
     const state = row.state as string | null;
     const stateSource = row.state_source as string | null;
     const pendingId = row.pending_id as string | null;
+    const programStatus = program(sessionId);
     return {
       nodeId: String(row.node_id),
       boardId: String(row.board_id),
@@ -1218,6 +1244,7 @@ export function listSessions(
         (row.status_updated_at as string | null) ?? row.created_at,
       ),
       alive: alive(sessionId),
+      ...(programStatus === undefined ? {} : { programStatus }),
     };
   });
 }

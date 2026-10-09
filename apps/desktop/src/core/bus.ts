@@ -101,6 +101,16 @@ export interface WorkspaceEventPayloads {
     readonly state: "hibernated" | "resuming" | "running" | "failed";
     readonly reason?: string;
   };
+  /**
+   * 终端程序自报的状态变了（契约 §53：OSC 7501 / OSC 9;4）。`status` 缺席是
+   * 这个终端不再有记录。只在内存里，不进 outbox（`events/stream.ts`）：重连
+   * 的页面从会话列表的 `programStatus` 补。
+   */
+  "terminal.program": {
+    readonly sessionId: string;
+    readonly nodeId?: string;
+    readonly status?: OpaquePayload;
+  };
   "board.changed": { readonly boardId: string; readonly updatedAt: string };
   /**
    * 谁在看这块画布、谁持有写租约（契约 §9.4）。有人来、有人走、租约换手时
@@ -354,6 +364,7 @@ export const WORKSPACE_EVENT_TYPES = [
   "terminal.exit",
   "terminal.lease",
   "terminal.hibernation",
+  "terminal.program",
   "board.changed",
   "canvas.presence",
   "node.created",

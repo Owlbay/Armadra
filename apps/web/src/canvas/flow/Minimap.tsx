@@ -4,11 +4,11 @@ import { MiniMap, Panel, useReactFlow, useStore } from "@xyflow/react";
 import type { MiniMapNodeProps, ReactFlowState } from "@xyflow/react";
 import { Map, Minus } from "lucide-react";
 
+import { useAgentStatusStore, type AgentGlow } from "@/agent/status-store";
 import {
-  agentHeaderState,
-  useAgentStatusStore,
-  type AgentGlow,
-} from "@/agent/status-store";
+  headerStateFor,
+  useProgramStatusStore,
+} from "@/agent/program-status-store";
 import { useMinimapPreferences } from "@/app/minimap-preferences";
 import { useT } from "@/app/preferences-store";
 import { useLayoutDirection } from "@/canvas/layout-direction";
@@ -346,10 +346,22 @@ export function Minimap() {
   const { collapsed, setCollapsed } = useMinimapPreferences();
   // 状态每变一次都要重刷描边色，所以订阅整张表而不是某一个节点。
   const statuses = useAgentStatusStore((state) => state.statuses);
+  // 程序自报（契约 §53）与上报按节点头同一条规则合并，描边色才和节点头一致。
+  const programs = useProgramStatusStore((state) => state.programs);
+  const seen = useProgramStatusStore((state) => state.seen);
 
   const glowOf = React.useCallback(
-    (nodeId: string) => agentHeaderState(statuses[scoped(nodeId)]).glow,
-    [statuses],
+    (nodeId: string) => {
+      const key = scoped(nodeId);
+      const status = statuses[key];
+      return headerStateFor(
+        Boolean(status?.agentId),
+        status,
+        programs[key],
+        Boolean(seen[key]),
+      ).glow;
+    },
+    [statuses, programs, seen],
   );
 
   const families = useFamilies();

@@ -3576,6 +3576,36 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 
 接口：无产品接口变化。
 
+## 终端程序自报的状态：OSC 7501 与 OSC 9;4（契约 §53，2026-10-09）
+
+做了什么：
+
+- 规范核对：Program Status Protocol（OSC 7501）是 2026-10-06 公布的终端协议，规范修订 0.3（2026-10-07）。正文 `key=value` 以 `:` 分隔，`state` 为 `idle` / `working` / `blocked` / `done` / `error` / `clear`，另有 `kind`、`progress`、`app`、`id`（层级记录）、base64 的 `msg` / `title`；`OSC 7501 ; ?` 为特性查询。程序侧已发出的有 Claude Code 2.1.295（启动时先查询，DA1 当哨兵，收不到回应就不发）；Codex 只有原型，没有正式版本发出。
+- core：`terminal/program-status.ts`（跨分片 OSC 扫描、tmux DCS 透传解包、规范级解析、记录表与生命周期、OSC 9;4 映射）、`program-status-book.ts`（每会话一份、查询回应、250 ms 节流、`connectProgramStatus` 接线）。后端新增可选的 `programTap`：direct 交 pty 的每次读；tmux 用 `pipe-pane -O` 把 pane 原始输出 `cat` 进数据目录 `program-taps/` 下的 FIFO（tmux 自己吞掉未知 OSC，实测 3.7c 连 OSC 9;4 也不转发），adopt 时重建、`list` 时收走；session-host 只读附着中的实时输出；SSH 装饰器转发。
+- 事件 `terminal.program`（不进 outbox），会话列表加 `programStatus`；协议 minor 24 → 25。程序自报不写 `agent_status`、不进任何闸门，`msg` / `title` 不出 core。
+- 页面：`agent/program-status-store.ts` 单独一张表与合并规则（活的上报优先，程序自报只补进度；没有上报时程序自报画节点头胶囊、光晕、小地图描边与离屏提醒）；节点头来源点新增 `program`；xterm 注册 7501 与 9;4 的处理器只吞不答；文案进 `i18n/agent.ts` 中英。
+- 探针 `core-terminal-program-status`（A 档）：tmux 与 direct 各一遍，`printf` 序列断言事件流，读回查询的回应，tmux 下断开终端 socket 后用 `send-keys` 证明离屏也更新。
+
+实测（macOS arm64，tmux 3.7c）：
+
+- 新单测：解析器 23（分片到每个字节、非法序列、超长、透传、RIS、9;4、记录上限）、账本 6、manager 5、direct 1、tmux 2（真 tmux 的 FIFO 读取与 adopt 重接）、会话列表 1、页面合并与提醒 9、xterm 处理器 1。
+- `pnpm libs:build && pnpm -r --if-present test`：web 4157、desktop 5435 / 67 跳、shared 382、server 98 / 4 跳、mobile 10、push-relay 9 全过；live 配置的 `passkey-cdp.live.integration.test.ts` 本机失败（同前几节，与本改动无关），`node --test scripts/*.test.mjs` 单独跑 73 / 2 跳通过。`pnpm check` 通过。
+- `node tools/probes/core-terminal-program-status.mjs`：两种后端全过。
+- 隔离数据目录与临时 HOME 起 core + 页面：终端里 `printf` 之后节点头出现「运行中 40%」与光晕、终端里无乱码；改报 `blocked` 后变「需要你」。
+
+没做 / 偏离：
+
+- tmux 后端下 Claude Code 2.1.295 仍不会发 7501：它把 DA1 当哨兵，而 tmux 即刻回答 DA1，core 经 pipe-pane 看到查询再回应必然晚一步。direct 后端下回应先于页面的 DA1，可以通过；没有用真实账号的 Claude Code 核实。Claude 节点的状态仍以 Hook 为准，不受影响。
+- session-host（Windows）没有附着时读不到；回放帧不解析。
+- 没有 OSC 133 的 shell 里，程序死掉之前没报 `done` / `error` 的话，`working` 会一直留到终端退出或下一条报告。
+- 页面没有 Dock 状态色这一处（Dock 只有工具按钮），所以没有改。
+
+接口：
+
+- core：`ProgramTap { subscribe, answer }`（`TerminalBackend.programTap?`）、`TerminalManagerOptions.onProgramStatus`、`TerminalManager.programStatus(sessionId)`、`listSessions(..., program?)`、`OscScanner` / `parseProgramReport` / `ProgramStatusTracker` / `ProgramStatusBook` / `connectProgramStatus`、`TmuxProgramTap`。
+- shared：`programStatusSchema` / `ProgramStatus`、`sessionSummarySchema.programStatus`、事件 `terminal.program`（`TerminalProgramEvent`）。
+- web：`useProgramStatusStore`、`headerStateFor`、`programHeaderState`、`reportedLive`、`programNotificationStatus`、`registerProgramOsc`。
+
 ## 小地图收起钮悬停才显示、连线同画布锚点与曲线（#216，2026-10-09）
 
 做了什么：

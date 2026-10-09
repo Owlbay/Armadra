@@ -273,6 +273,10 @@ Agent 节点就是终端节点里跑着一个 CLI，没有中间协议：
    并随 `GET /api/workspaces/{id}/sessions` 一起返回，使刷新后节点头部的来源徽标不丢。
 5. 没有任何适配的终端只有 `observed`：core 按已有的输入围栏与输出计数给一个弱提示，
    它不写进状态、也不能满足自动化提示词的空闲门（`core/terminal/` 的 `input_idle`）。
+   终端里的程序也可以经 pty 自报状态（OSC 7501 / OSC 9;4，契约 §53）：core 从程序
+   输出这一侧解析（tmux 后端经 `pipe-pane` 读进数据目录里的 FIFO），作为
+   `terminal.program` 推给前端；它同样只是展示级提示，不写 `agent_status`、不进任何判据，
+   节点有活的上报时上报优先。
 6. 权限请求在节点头部直答，答案写回 `<数据目录>/pending/`，hook 客户端阻塞读取
    （目前只有 Claude 的 Hook 能等答复）。
 

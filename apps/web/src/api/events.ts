@@ -31,6 +31,7 @@ import {
   onControlDrop,
 } from "./client";
 import { useAgentStatusStore } from "../agent/status-store";
+import { useProgramStatusStore } from "../agent/program-status-store";
 import { useDeliveryStore } from "../agent/delivery-store";
 import { useDependencyStore } from "../agent/dependency-store";
 import { useDriveStore } from "../agent/drive-store";
@@ -117,6 +118,8 @@ export function dispatchWorkspaceEvent(
 
 function dispatchInSource(event: WorkspaceEvent, sourceId: string): void {
   useAgentStatusStore.getState().handleEvent(event);
+  // 程序自报的状态（契约 §53）：另一张表，不让它冒充上报。
+  useProgramStatusStore.getState().handleEvent(event);
   // 语言会话与服务器状态走同一条流（语言服务设计 §2.9）：状态栏和设置页
   // 因此不必为了看一眼状态就开一条会话 socket。
   useLanguageStatusStore.getState().handleEvent(event);

@@ -47,6 +47,9 @@ import { appendEvent, catchUp, outboxReady, prune, watermark } from "./outbox";
 export const EPHEMERAL_EVENTS: ReadonlySet<string> = new Set([
   "canvas.presence",
   "cloud.tunnel",
+  // 契约 §53：程序自报的状态在内存里，重连从会话列表补；进度一秒几帧，补发
+  // 过去的进度只会让节点头倒着跑。
+  "terminal.program",
 ]);
 
 /**

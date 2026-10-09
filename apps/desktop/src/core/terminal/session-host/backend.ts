@@ -7,6 +7,7 @@ import {
   type BackendNotice,
   type BackendRef,
   type ForegroundInfo,
+  type ProgramTap,
   PASTE_END,
   PASTE_START,
   REPLAY_CHUNKS,
@@ -144,6 +145,23 @@ export class SessionHostBackend implements AdoptableBackend {
   readonly kind: BackendKind = "sessionHost";
   private readonly sessions = new Map<SessionKey, Remembered>();
   private readonly sinks: ((notice: BackendNotice) => void)[] = [];
+  private readonly programListeners: ((
+    key: SessionKey,
+    generation: number,
+    chunk: Buffer,
+  ) => void)[] = [];
+
+  /**
+   * Live output of the attachment that feeds the screen (contract §53). The
+   * pseudo console belongs to the host, so a session nobody has attached is
+   * not seen here; a replay is never delivered.
+   */
+  readonly programTap: ProgramTap = {
+    subscribe: (listener) => {
+      this.programListeners.push(listener);
+    },
+    answer: (key, bytes) => this.input(key, bytes),
+  };
   private readonly ids = new RequestIds();
   /** One pipe connection per attachment; closing it is the detach. */
   private readonly attachments = new Map<number, Link>();
@@ -440,8 +458,12 @@ export class SessionHostBackend implements AdoptableBackend {
       );
       remembered.decoder = new StringDecoder("utf8");
     };
-    const deliver = (payload: Buffer): void => {
+    const deliver = (payload: Buffer, live = false): void => {
       if (remembered.feeders.at(-1) === feeder) {
+        if (live) {
+          for (const listener of this.programListeners)
+            listener(key, generation, payload);
+        }
         remembered.replay.push(payload);
         while (remembered.replay.length > REPLAY_CHUNKS)
           remembered.replay.shift();
@@ -484,7 +506,7 @@ export class SessionHostBackend implements AdoptableBackend {
             return;
           case "output":
             takeOver();
-            deliver(event.payload);
+            deliver(event.payload, true);
             return;
           case "exit":
             end(event.exitCode ?? undefined);

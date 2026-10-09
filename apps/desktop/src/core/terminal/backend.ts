@@ -364,6 +364,34 @@ export interface TerminalBackend {
 
   /** Release process-local resources without ending persistent sessions. */
   detachAll(): Promise<void>;
+
+  /**
+   * What the program wrote, whether or not a viewer is attached — the input
+   * of the program status channel (contract §53). Absent on a backend that
+   * cannot see it.
+   */
+  readonly programTap?: ProgramTap;
+}
+
+/**
+ * The program's own output, before any terminal emulator in between ate it.
+ *
+ * `direct` hands over every pty read. `tmux` swallows unknown OSC strings, so
+ * it reads the pane through `pipe-pane -O` into a FIFO in the data directory
+ * (`tmux/program-tap.ts`). `sessionHost` sees live output only while one of
+ * its attachments is open.
+ */
+export interface ProgramTap {
+  /** Several listeners are allowed. A replay is never delivered here. */
+  subscribe(
+    listener: (key: SessionKey, generation: number, chunk: Buffer) => void,
+  ): void;
+  /**
+   * Writes a terminal reply (the `OSC 7501 ; ?` answer) to the program. Not
+   * a keystroke: it bypasses the drive lease, and a tmux client in between
+   * must not get to parse it as keys.
+   */
+  answer(key: SessionKey, bytes: Buffer): Promise<void>;
 }
 
 /**

@@ -2029,6 +2029,65 @@
                                   "type": "object",
                                   "properties": {
                                     "type": {
+                                      "const": "terminal.program"
+                                    },
+                                    "sessionId": {
+                                      "type": "string"
+                                    },
+                                    "nodeId": {
+                                      "type": "string"
+                                    },
+                                    "status": {
+                                      "type": "object",
+                                      "properties": {
+                                        "state": {
+                                          "enum": [
+                                            "idle",
+                                            "working",
+                                            "blocked",
+                                            "done",
+                                            "error"
+                                          ],
+                                          "type": "string"
+                                        },
+                                        "kind": {
+                                          "enum": [
+                                            "permission",
+                                            "question",
+                                            "auth"
+                                          ],
+                                          "type": "string"
+                                        },
+                                        "progress": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 100
+                                        },
+                                        "app": {
+                                          "type": "string",
+                                          "maxLength": 32
+                                        },
+                                        "source": {
+                                          "enum": ["osc7501", "osc9"],
+                                          "type": "string"
+                                        },
+                                        "updatedAt": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "state",
+                                        "source",
+                                        "updatedAt"
+                                      ]
+                                    }
+                                  },
+                                  "required": ["type", "sessionId"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
                                       "const": "board.changed"
                                     },
                                     "boardId": {
@@ -12305,6 +12364,42 @@
                       "backend": {
                         "enum": ["direct", "tmux", "sessionHost", "acp"],
                         "type": "string"
+                      },
+                      "programStatus": {
+                        "type": "object",
+                        "properties": {
+                          "state": {
+                            "enum": [
+                              "idle",
+                              "working",
+                              "blocked",
+                              "done",
+                              "error"
+                            ],
+                            "type": "string"
+                          },
+                          "kind": {
+                            "enum": ["permission", "question", "auth"],
+                            "type": "string"
+                          },
+                          "progress": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 100
+                          },
+                          "app": {
+                            "type": "string",
+                            "maxLength": 32
+                          },
+                          "source": {
+                            "enum": ["osc7501", "osc9"],
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["state", "source", "updatedAt"]
                       }
                     },
                     "required": [

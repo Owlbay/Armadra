@@ -17,6 +17,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { onWorkspaceConnection } from "../api/events";
 import { sessionsQuery } from "./sessions";
 import { useAgentStatusStore } from "./status-store";
+import { useProgramStatusStore } from "./program-status-store";
 import { activeSourceId, sk } from "../sources/scope";
 
 /**
@@ -29,11 +30,14 @@ export function useAgentStatusHydration(workspaceId: string | null): void {
   const queryClient = useQueryClient();
   const query = useQuery(sessionsQuery(workspaceId));
   const hydrate = useAgentStatusStore((state) => state.hydrate);
+  const hydratePrograms = useProgramStatusStore((state) => state.hydrate);
 
   useEffect(() => {
-    if (query.data && workspaceId)
+    if (query.data && workspaceId) {
       hydrate(query.data, workspaceId, activeSourceId());
-  }, [query.data, workspaceId, hydrate]);
+      hydratePrograms(query.data, activeSourceId());
+    }
+  }, [query.data, workspaceId, hydrate, hydratePrograms]);
 
   useEffect(() => {
     if (!workspaceId) return;

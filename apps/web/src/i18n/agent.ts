@@ -33,6 +33,9 @@ const zh = {
   "agent.state.done": "已完成",
   "agent.state.errored": "已失败",
   "agent.state.interrupted": "已暂停",
+  /* 程序自报（契约 §53）：进度跟在胶囊后面，出错不叫「回合失败」。 */
+  "agent.program.progress": "{percent}%",
+  "agent.program.error": "出错",
   /* 启动闸门（契约 §52）：自动重试一次之后仍没起来。 */
   "agent.launch.failed": "启动失败",
   "agent.launch.retry": "重试",
@@ -48,6 +51,9 @@ const zh = {
   "agent.stateSource.observed": "终端观测",
   "agent.stateSource.observed.note":
     "没有适配器，状态由终端输出推测；交接与消息投递仍会被拒绝。",
+  "agent.stateSource.program": "程序自报",
+  "agent.stateSource.program.note":
+    "状态由终端里的程序自己报告，只作提示；交接与消息投递不以它为准。",
 } as const;
 
 const en: Record<keyof typeof zh, string> = {
@@ -79,6 +85,8 @@ const en: Record<keyof typeof zh, string> = {
   "agent.state.done": "Done",
   "agent.state.errored": "Turn failed",
   "agent.state.interrupted": "Paused",
+  "agent.program.progress": "{percent}%",
+  "agent.program.error": "Failed",
   "agent.launch.failed": "Launch failed",
   "agent.launch.retry": "Retry",
 
@@ -93,6 +101,9 @@ const en: Record<keyof typeof zh, string> = {
   "agent.stateSource.observed": "Observed in the terminal",
   "agent.stateSource.observed.note":
     "No adapter: the state is a guess from terminal output. Handoffs and message delivery are still refused.",
+  "agent.stateSource.program": "Reported by the program",
+  "agent.stateSource.program.note":
+    "The program in the terminal reports this itself. It is a hint only; handoffs and message delivery do not rely on it.",
 };
 
 export const agent: MessageModule = { "zh-CN": zh, en };

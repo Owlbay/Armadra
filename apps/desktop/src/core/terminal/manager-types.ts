@@ -121,6 +121,13 @@ export interface TerminalManagerOptions {
    * 驱动租约换手了（设计 `agent-delivery.md` §6）。抢占、接管、自然过期各一
    * 帧，节点头的徽标从这里同步。
    */
+  readonly onProgramStatus?: (event: {
+    workspaceId: string;
+    sessionId: string;
+    nodeId: string | null;
+    /** 缺席表示这个终端不再有任何程序自报的记录（契约 §53）。 */
+    status: import("./program-status-book").ProgramStatusWire | undefined;
+  }) => void;
   readonly onLease?: (event: {
     workspaceId: string;
     sessionId: string;

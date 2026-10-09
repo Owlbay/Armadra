@@ -8,6 +8,7 @@ import {
   type BackendRef,
   DORMANT_FLUSH_INTERVAL_MS,
   type ForegroundInfo,
+  type ProgramTap,
   OUTPUT_FLUSH_BYTES,
   OUTPUT_FLUSH_INTERVAL_MS,
   PASTE_END,
@@ -113,6 +114,21 @@ export class DirectBackend implements TerminalBackend {
   private readonly sessions = new Map<SessionKey, DirectSession>();
   private readonly listenerSinks: ((notice: BackendNotice) => void)[] = [];
   private nextListenerId = 1;
+  private readonly programListeners: ((
+    key: SessionKey,
+    generation: number,
+    chunk: Buffer,
+  ) => void)[] = [];
+
+  /** Every pty read, as it arrives (contract §53). */
+  readonly programTap: ProgramTap = {
+    subscribe: (listener) => {
+      this.programListeners.push(listener);
+    },
+    answer: async (key, bytes) => {
+      this.live(key).pty?.write(bytes.toString("utf8"));
+    },
+  };
 
   getCapabilities(): BackendCapabilities {
     return {
@@ -197,6 +213,11 @@ export class DirectBackend implements TerminalBackend {
   /* --------------------------------- output ------------------------------- */
 
   private absorb(session: DirectSession, chunk: Buffer): void {
+    // Before the batching: a program waiting on the `OSC 7501 ; ?` answer
+    // should not also wait out the flush cadence.
+    for (const listener of this.programListeners) {
+      listener(session.key, session.generation, chunk);
+    }
     session.pending.push(chunk);
     session.pendingBytes += chunk.byteLength;
     if (session.pendingBytes >= OUTPUT_FLUSH_BYTES) {
