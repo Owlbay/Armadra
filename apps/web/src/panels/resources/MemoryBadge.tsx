@@ -65,7 +65,9 @@ export function MemoryBadge({
   const threshold = thresholdBytes ?? stored;
 
   const anchor = React.useRef<HTMLButtonElement>(null);
-  const onScreen = useOnScreen(anchor);
+  // 没有会话时下面提前 `return null`，按钮不在 DOM 上；会话 id 到了的那次提交
+  // 才挂观察器（见 `useOnScreen` 的 `enabled`）。
+  const onScreen = useOnScreen(anchor, Boolean(sessionId));
   const pageVisible = usePageVisible();
   const watched = visible && onScreen && pageVisible;
   const cadence = watched ? "fast" : "slow";
