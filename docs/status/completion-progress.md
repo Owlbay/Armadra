@@ -3770,3 +3770,36 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 接口：
 
 - web：`TerminalPreferences.renderer` / `repaintThrottle`、`TERMINAL_RENDERERS` / `TERMINAL_REPAINT_THROTTLES`；`renderer-policy.ts`（`AUTO_WEBGL_SLOTS`、`LOW_ZOOM_THRESHOLD`、`THROTTLED_REPAINT_MS`、`rendererUsesWebgl`、`rendererGatesRender`、`wantsWebgl`、`effectiveRenderBudget`、`isLowZoom`、`repaintThrottled`）；`useWebglRenderer`、`useLowZoom`；`repaintScheduler`；`RenderBudget.writeThrough` / `throttled`；`useRenderBudget` 的选项 `webgl` 换成 `renderer` / `repaintThrottle` / `lowZoom`；DOM 属性 `data-renderer`、`data-throttled`。
+
+## Claude Code mod M1：状态上报改走 mod、状态栏、版本门与环境回退（契约 §55，2026-10-10）
+
+做了什么：
+
+- 产物：`<数据目录>/integration/claude/` 多出 `settings-permission.json`（只有 `PermissionRequest`）与 `mod/`（`armadra-mod`：`.claude-plugin/plugin.json`、`hooks/hooks.json`、`hooks/armadra.ts`）。生成器在 `core/hook/install/claude-mod/`（`template` / `transport` / `status`，`ui` / `commands` / `i18n` 是留给 M2 / M3 的空段）。`mod/` 在 core 每次启动时删掉重写，之后每次启动前只按字节比较。
+- 模块：九个 `classic.*` 事件（设置 hook 的除 `PermissionRequest` 外全部）原样经 `$.http.fetch` 走 Unix socket POST 到 `/hook/claude`，socket 不通走 TCP 端口，都被拒就 `$.process.run` 起 `armadra-hook claude`；`classic.PreToolUse` 的工具调用信封拼回设置 hook 的形状。每个 hook 立即 `next(e)` 且带 `.catch`，`SessionEnd` 最多等 800 ms。交互式会话的状态栏只画节点名。`session.start` 发 hello（`POST /node/mod`），报告改走另一条路时再发；fetch 被拒时 hello 经新的 `armadra-hook mod-hello`。不注册 `PermissionRequest` / `tool.check` / `tool.call`，不调 `prompt.*` / `session.append`，token 只在函数局部。
+- 门：`CLAUDE_MODS_MIN = 2.1.293`，读 `claude --version` 的探测缓存，未知即关；Windows、执行主机第一版不挂。门开时 `run/claude` 接 `--settings settings-permission.json` 与第二个 `--plugin-dir mod`，并在节点环境里有 `CLAUDE_CODE_SAFE_MODE` 或 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 时改接全套设置 hook（`LauncherSpec.fallback`）。
+- core：`terminalBinding` 可以不带 `sourceRevision`，core 在同样的门之后对同一个 `.seq` 计数器（同一把 `.lock`）代分配（`runs/reports.ts::allocateSourceRevision`）；`POST /node/mod` 的 hello 只存内存、每节点一条；`GET /api/agents/claude/integration` 带 `mods`；`GET /node/overlay` 进路由表、答 501（M2）。`INTEGRATION_REVISION` 改为 `<hook>×10000 + <mod>×100 + <skill>` = 50118；协议 minor 26 → 27。
+- 探针 `claude-mod-launch`（A 档，`requires: ["claude"]`，CI 没有 Claude 时记 skipped；e2e 运行器新增 `claude` 需求）：真 core + 画布 Agent 终端里经 `run/claude` 跑真 Claude `-p`，模型是本机假 Messages API，假 key。`compatibility.json` 新增 `claudeMods`（`minVersion`、`verified`，不进围栏）。
+
+实测（macOS arm64；本机全局 `claude` 是 2.1.287，低于门槛，没动它；2.1.293 与 2.1.295 用 `npm install --prefix /tmp/…` 装到临时目录验证）：
+
+- 新单测：生成器 10（确定性、env 名全是字面量、无 `import()`、不出现权限 / 代答相关的名字、对垫片类型检查、在本进程里用假 `$` 跑：原样转发、PreToolUse 改形、socket → TCP → 客户端、hello 与再发、画布外与 ACP 不报）、注入 4（产物布局、版本门与 argv、启动器随探测缓存切换与环境分支、缺文件重写且不碰 Claude 写的 `types/`）、启动器 2（分支正文、真 `/bin/sh` 按环境选 argv）、ingest 3（代分配连续递增与 16 字节格式、非当前会话 / 未验证 / 多键丢弃、没有计数器时不带绑定）、hello 5、集成状态 2、客户端 `mod-hello` 1、e2e 运行器 1、compatibility 1。
+- `ARMADRA_CLAUDE_PROBE=1` 下 2.1.293、2.1.295 的 `claude plugin validate`（无「gating hook without .catch」，env 读取全是 `ARMADRA_*`）与 `claude plugin test`（转发、fetch 被拒退回客户端、hello，共 3 条）全过。
+- `node tools/probes/claude-mod-launch.mjs`：2.1.293、2.1.295 全过——hello 走 socket、节点状态 `done` 来自 `hook` 且已验证、可信报告的 `sourceRevision` 是 core 代分配的递增值；两个环境变量下启动器接的是全套设置 hook、没有 hello；2.1.293 上模块对引擎自带的 `.claude-plugin/types/` 类型检查通过（2.1.295 不再写类型文件）；`~/.claude/settings.json` 前后哈希一致。`--record-compat` 写入 `claudeMods.verified = 2.1.293–2.1.295`。
+- `pnpm libs:build && pnpm -r --if-present test`：desktop 5486 / 69 跳（`parity-terminals` afterAll 超时与 `oauth` 一条 ECONNRESET 是负载下的偶发，单独重跑 59 条全过）、web 4240、shared 382、server 98 / 4 跳、mobile 10、push-relay 9；live 配置的 `passkey-cdp.live.integration.test.ts` 本机失败（同前几节），`node --test scripts/*.test.mjs` 73 / 2 跳。`pnpm --filter @armadra/web typecheck`、`pnpm check` 通过。
+
+没做 / 偏离：
+
+- 2.1.293 上 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 不再拒绝插件不带 `auth` 的 fetch（2.1.287 会），所以探针里「宿主拒绝 fetch → 客户端代报、hello 说 `process`」这条路在真 Claude 上走不到，只在 `claude plugin test` 与本进程单测里验证；`CLAUDE_CODE_SAFE_MODE` 在 2.1.293 连设置 hook 也不跑，回退后节点没有状态上报，这是 Claude 的行为。两条环境回退都保留。
+- 状态栏只画节点名，画布名要等 M2 的 `/node/overlay`；交互式 TUI 里状态行的 `⚠` 前缀观感没有在 2.1.293 上截图确认。
+- 集成页还不显示 mod 的状态（M2 的设置子页行）；「SessionStart 到了却没有 hello」的会话没有点名；集成页的「重新生成」没有顺手忘掉探测缓存。
+- 计数器文件不存在时 core 不创建（与 hook 客户端同一条规矩），报告不带绑定照常归约；设计原写「没有也可创建」。
+- CI 没有装 Claude，e2e 里这条记 skipped；没有用真实账号跑。
+
+接口：
+
+- core：`claudeModSource` / `claudeModManifest` / `claudeModHooks` / `MOD_PLUGIN_NAME` / `MOD_MODULE_FILE`、`claudeModPluginTest`；`CLAUDE_MODS_MIN`、`CLAUDE_MODS_BROKEN`、`CLAUDE_MODS_FALLBACK_ENV`、`claudeLoadsMods`、`claudeModsGate`、`probedClaudeVersion`、`resetClaudeMod`；`ArtifactLayout.{settingsPermission,modDir,modManifest,modHooks,modModule}`、`InjectionRequest.claudeVersion`、`Injection.fallback`、`injectionFromLayout(..., { claudeMods })`、`LauncherSpec.fallback`；`MOD_REVISION`；`allocateSourceRevision`；`HookService.recordModHello` / `modSessions`、`ModHello`、`parseModHello` / `receiveModHello`；`IntegrationState.mods`、`modsState`、`IntegrationOptions.modSessions`。
+- 客户端：`armadra-hook mod-hello`（内部）。
+- shared：`integrationModsSchema`、`modSessionSchema`、`MOD_GATE_REASONS`。
+- 线上：§55（hook 的 `terminalBinding` 可缺 `sourceRevision`、`POST /node/mod`、`GET /node/overlay` 501、`agents.integration.mods`），协议 1.27。
+- 工具：`tools/probes/claude-mod-launch.mjs`（`findClaude`、`--record-compat`）、e2e 需求 `claude`、`compatibility.json` 的 `claudeMods`、`tools/vendor/claude-mod-api.d.ts`。

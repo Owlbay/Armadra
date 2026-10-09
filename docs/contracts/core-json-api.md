@@ -603,6 +603,7 @@ G5-25 追加：`GET /api/usage` 与 `POST /api/usage/refresh` 里 Claude 那一�
 | `shim`            | 新增，可选：`shims/<cli>` 的绝对路径，存在时才有                                                                       |
 | `launcherWarning` | 新增，可选：画布内启动少带了东西的原因——Windows 没有 `armadra-launch.exe`；Codex 版本低于 0.134.0，画布内启动不带 Hook |
 | `hook.installed`  | 对 Codex 只看产物，不再看信任记录；Codex 的 `hook.path` 是它的启动器（有时）                                           |
+| `mods`            | 新增，可选（自 1.27 起，只有 `claude`）：mod 的门、原因与本进程收到的 hello，见 §55.5                                  |
 
 ```json
 {
@@ -3659,3 +3660,100 @@ human initiator。页面不接收任何 controller 凭据；body owner/controlle
 - **低频探针**：内存压力 10 s、交换区 30 s、电源 60 s 缓存；过期时先交出旧值、后台刷新，一轮永远不等探针；从来没有值时是 `null`（规矩不变）。
 - **程序状态的 tap 按需**（§53）：tmux 后端只给 Agent 会话（环境里有 `ARMADRA_AGENT_ID`）开 `pipe-pane` 的 `cat`；重启后接管时读会话自己的环境判断。普通 shell 不再有 tmux 下的程序自报状态（direct 后端照旧，每一次读都解析）。
 - `ResourceSnapshot` 形状不变；没有新设置项，不写数据库迁移。远端主机的 worker（`remote/resources-worker.ts`，另一个进程）仍用同步采样。
+
+## 55. Claude Code mods：门槛、hello、`/node/overlay` 与 `agents.integration.mods`
+
+自协议 1.27 起。Claude Code 的 mod（函数式 hooks 模块的插件）是画布注入的一层增强：技能插件、`--append-system-prompt-file`、`PermissionRequest` 的设置 hook 原样保留，mod 接管其余的状态上报并在终端里加状态栏（M1），之后加横条 / toast（M2）与 `/armadra-*` 斜杠命令、ACP 下挂载（M3）。设计见 [Claude Code mods](../design/claude-mods.md)。每条前面标注落地的包；没落地的条目这一版不答（路由表里有、答 `501`）或不出现。
+
+### 55.1 门与产物（M1）
+
+- 产物在 `<数据目录>/integration/claude/` 下多出 `settings-permission.json`（只有 `PermissionRequest`，与 `settings.json` 同一条 `armadra-hook claude` 命令）与 `mod/`：`mod/.claude-plugin/plugin.json`（`name` 为 `armadra-mod`）、`mod/hooks/hooks.json`（`{ "modules": ["./armadra.ts"] }`）、`mod/hooks/armadra.ts`（core 生成的模块）。技能插件 `plugin/` 不动：旧版 Claude 不认 `modules` 键时只丢 mod，不丢技能。
+- `mod/` 在 core 每次启动时整个删掉重写；之后每次画布启动前只按字节比较、写变了的文件，不读、不删目录里多出来的东西（Claude Code 2.1.287–2.1.294 加载时写进去的 `tsconfig.json` 与 `.claude-plugin/types/`，后者含会话连接的 MCP 工具名），也不在集成状态、日志或任何答复里列出它们。
+- **版本门**（core）：`CLAUDE_MODS_MIN = 2.1.293`（`classic.*` 事件在这一版才是设置 hook 的 stdin 形状），版本取 `claude --version` 的探测缓存（`agents.probes.claude`）；没探测到、解析不出时**不挂**。`tools/release/compatibility.json` 的 `claudeMods.minVersion` 与之相等，`claudeMods.verified` 记真 Claude 探针（`tools/probes/claude-mod-launch.mjs --record-compat`）通过的区间，只扩不缩，不进发布围栏。
+- **环境门**（启动器）：门开时 `run/claude` 接 `--settings settings-permission.json --plugin-dir plugin --plugin-dir mod --append-system-prompt-file instructions.md`，但节点环境里 `CLAUDE_CODE_SAFE_MODE` 或 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 非空时改接今天的全套 `--settings settings.json --plugin-dir plugin --append-system-prompt-file instructions.md`。门关时只有后一组，启动器里也没有这段分支。
+- Windows（`.launch` 文件没有条件分支）与执行主机（不探测远端版本）第一版不挂：远端同步的文件里有 `mod/` 与 `settings-permission.json`，启动行仍是全套设置 hook。
+- mod 不注册 `classic.PermissionRequest`、`tool.check`、`tool.call`，不调 `prompt.submit` / `prompt.fill` / `session.append`：权限提示与对话框永远由人回答。节点 token 与 hook bearer 只在模块的函数局部变量里，不进状态栏、hello、日志或 `$.store`。
+- `INTEGRATION_REVISION` 的算式改为 `<hook>×10000 + <mod>×100 + <skill>`（`HOOK_CLIENT_REVISION` 5、`MOD_REVISION` 1、`SKILLS_REVISION` 18 → `50118`），旧产物与旧启动器因此一律重写；`HOOK_CLIENT_REVISION` 不变。
+
+### 55.2 hook 请求的 `terminalBinding.sourceRevision` 可缺席（M1）
+
+`POST /hook/{agentId}` 的 `terminalBinding` 可以只带 `{ "sessionId", "generation" }`（恰好这两个键）。core 在通过与带数字时相同的门之后（节点 token 已验证、`sessionId` 是节点当前在跑的那个会话与代数、属于这个 Agent）对同一个 `context-sequences/<sessionId>-<generation>.seq` 计数器做读-改-写（同一个 `<file>.lock` 旁车锁，最多等 200 ms），把新值当作这条报告的 `sourceRevision`。计数器文件不存在或损坏时不创建、不重置：报告照常归约，只是不带绑定（与 hook 客户端拿不到计数器时一样）。门不过时整条丢弃，答复照旧 `204`。带数字的客户端一个字节不变；多一个键、`sourceRevision` 不是字符串仍按不认识的客户端整条丢弃。
+
+### 55.3 `POST /node/mod`：mod 的 hello（M1）
+
+hook surface 上，应用 bearer + 节点 token 必须**验过**（与 `/credential` 同门）。mod 在 `session.start` 发一次，报告改走另一条路（例如宿主拒绝了 mod 的 fetch、改由 `armadra-hook` 进程代报）时再发一次；fetch 被拒时 hello 经 `armadra-hook mod-hello`（stdin 是同一份 JSON，节点 id 取进程自己的 `ARMADRA_NODE_ID`、`transport` 恒为 `process`）送达。
+
+```json
+{
+  "nodeId": "n_…",
+  "engine": "claude",
+  "version": "2.1.293",
+  "base": "2.1.293",
+  "surface": "terminal",
+  "isInteractive": true,
+  "profile": "terminal",
+  "transport": "socket",
+  "modRevision": 1
+}
+```
+
+| 字段                | 规则                                                                                     |
+| ------------------- | ---------------------------------------------------------------------------------------- |
+| `engine`、`version` | 必填，1–64 个可见字符                                                                    |
+| `base`              | 可选，同上；缺席记 `null`                                                                |
+| `surface`           | `terminal` / `desktop` / `mobile` / `vscode`，其它记 `null`（`-p` 与 SDK 宿主是 `null`） |
+| `isInteractive`     | 布尔，缺席为 `false`                                                                     |
+| `profile`           | `terminal` / `acp`，缺席为 `terminal`                                                    |
+| `transport`         | 必填，`socket` / `tcp` / `process`                                                       |
+| `modRevision`       | 必填，正整数                                                                             |
+
+答 `204`；bearer 不对或节点 token 未验过 `403 forbidden`；体不是对象或字段不合规 `400 bad_request`。只存内存、每个节点留最新一条（最多 512 个节点，最旧的先走），core 重启即空；别的字段一律丢弃，不记日志。
+
+### 55.4 `GET /node/overlay`：横条读的计数（M2，这一版答 `501`）
+
+hook surface 上，节点 token 必须验过，只答调用者自己节点的连线：
+
+```json
+{
+  "revision": 418,
+  "node": {
+    "id": "n_…",
+    "name": "reviewer",
+    "role": "sub",
+    "agentId": "claude"
+  },
+  "board": { "id": "b_…", "title": "发布 0.3" },
+  "links": {
+    "main": [{ "id": "n_…", "name": "lead" }],
+    "subs": [],
+    "peers": [{ "id": "n_…", "name": "" }]
+  },
+  "inbox": { "pending": 2, "latestSequence": 9131, "latestFrom": "lead" },
+  "outbox": { "queued": 0 },
+  "approvals": { "pending": 0 }
+}
+```
+
+只有名字、计数与 id，零值照写；没有正文、没有路径、没有终端内容。`If-None-Match: "<revision>"` 命中答 `304`。
+
+### 55.5 `agents.integration.mods`（M1）
+
+`GET /api/agents/claude/integration`（与 install / uninstall 的答复）多一个可选的 `mods`，只有 `claude` 带：
+
+```json
+"mods": {
+  "gate": "enabled",
+  "reason": null,
+  "minVersion": "2.1.293",
+  "probedVersion": "2.1.293",
+  "sessions": [{ "nodeId": "n_…", "version": "2.1.293", "profile": "terminal", "transport": "socket", "reportedAt": "2026-10-10T00:00:00.000Z" }]
+}
+```
+
+`gate` 是这台机器下一次画布启动的门：`enabled` / `disabled`；`reason` 在关着时给出 `version_below_min` / `version_unknown` / `windows_launcher` / `remote_unprobed`，开着时为 `null`（环境门在节点 shell 里判断，core 不知道，不进 `reason`）；`probedVersion` 是探测缓存里的版本或 `null`；`sessions` 是 §55.3 收到的 hello（只取 `engine` 为 `claude` 的）。共享层 `integrationModsSchema` 同形。
+
+### 55.6 设置 `ui.locale`（M2）
+
+设备级设置，`zh-CN` | `en`，页面在切换界面语言时写，core 生成 mod 源码时读，只用于终端里需要词的地方（M3 斜杠命令的说明）。M1 的终端文案只有节点名，不依赖它。
+
+- 不写数据库迁移；`HOOK_CLIENT_REVISION` 不动；没有新 procedure。
