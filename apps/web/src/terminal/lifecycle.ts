@@ -15,7 +15,7 @@
  * 这里只放纯函数：迁移时机与豁免都要靠单测钉死。
  */
 
-import type { MemoryPressureLevel } from "./pressure-bus";
+import { actionFor, type MemoryPressureLevel } from "./pressure-policy";
 import { HIDDEN_DETACH_MS } from "./render-state";
 import { DETACH_GRACE_MS } from "./surface/constants";
 
@@ -31,12 +31,6 @@ export const OFFSCREEN_DETACH_MS: number | null = 60_000;
 
 /** 豁免命中时多久后再看一次。 */
 export const LIFECYCLE_RECHECK_MS = 5_000;
-
-/**
- * 告警档内存压力时释放离屏多久以上的实例；与压力策略的
- * `WARNING_RELEASE_OFFSCREEN_MS` 同值。紧急档不限时长。
- */
-export const PRESSURE_WARNING_RELEASE_MS = 30_000;
 
 export const RELEASE_AFTER_OPTIONS = ["5m", "10m", "30m", "never"] as const;
 export type ReleaseAfter = (typeof RELEASE_AFTER_OPTIONS)[number];
@@ -129,15 +123,15 @@ export function canRelease(inputs: HoldInputs): boolean {
 }
 
 /**
- * 内存压力要不要提前释放一个看不见的实例。可见的一律不动；告警档只动离屏
- * 够久的，紧急档全部；`normal` 什么都不做（降级不重建，等用户看到再恢复）。
+ * 内存压力要不要提前释放一个看不见的实例，按压力策略的 `actionFor` 取阈值：
+ * 可见的一律不动；告警档只动离屏够久的，紧急档全部（阈值 0）；`normal` 什么
+ * 都不做（降级不重建，等用户看到再恢复）。
  */
 export function pressureReleases(
   level: MemoryPressureLevel,
   unseenForMs: number | null,
 ): boolean {
   if (unseenForMs === null) return false;
-  if (level === "critical") return true;
-  if (level === "warning") return unseenForMs >= PRESSURE_WARNING_RELEASE_MS;
-  return false;
+  const threshold = actionFor(level).releaseOffscreenOlderThanMs;
+  return threshold !== null && unseenForMs >= threshold;
 }

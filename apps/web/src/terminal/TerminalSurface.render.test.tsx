@@ -176,7 +176,7 @@ import {
   OFFSCREEN_DETACH_MS,
   releaseAfterMs,
 } from "./lifecycle";
-import { emitMemoryPressure } from "./pressure-bus";
+import { emitMemoryPressure, resetMemoryPressure } from "./pressure-bus";
 import {
   TerminalSurface,
   type TerminalSurfaceHandle,
@@ -507,13 +507,14 @@ describe("分阶段生命周期", () => {
     .IntersectionObserver;
   beforeEach(() => {
     viewport.callbacks = [];
+    resetMemoryPressure();
     (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver =
       FakeIntersectionObserver;
     vi.useFakeTimers();
   });
   afterEach(() => {
     vi.useRealTimers();
-    emitMemoryPressure("normal");
+    resetMemoryPressure();
     (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver =
       original;
   });

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   OFFSCREEN_DETACH_MS,
-  PRESSURE_WARNING_RELEASE_MS,
   canDetach,
   canRelease,
   detachDelay,
@@ -12,6 +11,7 @@ import {
   resolveLifecycle,
   type HoldInputs,
 } from "./lifecycle";
+import { WARNING_RELEASE_OFFSCREEN_MS as PRESSURE_WARNING_RELEASE_MS } from "./pressure-policy";
 import { HIDDEN_DETACH_MS } from "./render-state";
 import { DETACH_GRACE_MS } from "./surface/constants";
 
