@@ -24,7 +24,7 @@ feat(web): ACP 节点先显示、可先输入
 docs(status): completion-progress 记包 D 的重跑结果
 ```
 
-- 类型 / Types：`feat`、`fix`、`docs`、`test`、`refactor`、`perf`、`chore`、`ci`、`release`。
+- 类型 / Types：`feat`、`fix`、`docs`、`test`、`refactor`、`perf`、`build`、`chore`、`ci`、`release`、`revert`。
 - 范围 / Scopes：模块或目录名，例如 `core`、`web`、`canvas`、`terminal`、`mobile`、`probes`、`status`；跨两处用逗号，例如 `test(web,probes)`。 / A module or directory name; join two with a comma.
 - 一个模块连同它的测试一个提交；不要在提交信息里加生成说明或自动署名。 / One commit per module together with its tests; no generated notes or automatic trailers.
 
