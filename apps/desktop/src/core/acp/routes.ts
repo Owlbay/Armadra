@@ -10,12 +10,15 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
+import { MAX_ACP_ATTACHMENTS } from "@armadra/shared";
+
 import { canvasLaunchLine, nodeDialect } from "../agent/canvas-launch";
 import { PERMISSION_MODES, canResume } from "../agent/launch";
 import type { AgentSettings } from "../agent/registry";
 import { getAgentStatus } from "../agent/status";
 import { loadNode, loadSession, workspaceRoot } from "../collab/nodes";
 import { humanActor } from "../drive/lease";
+import { resolveUpload } from "../files/uploads";
 import { isAcpMirror } from "../history/acp-mirror";
 import { CoreFailure } from "../http/errors";
 import type { CoreRequest, HandlerResult, RouteMatch } from "../http/router";
@@ -31,6 +34,7 @@ import {
   optionalString,
 } from "../workspaces/support";
 import { type AcpAdapter, cliResumeId } from "./adapters";
+import { type AttachmentBlocks, attachmentBlocks } from "./attachments";
 import { AcpError } from "./client";
 import type { AcpStartPlan, AcpTerminalWiring } from "./index";
 import { AcpMirror, mirrorPath } from "./mirror";
@@ -128,6 +132,8 @@ function acpStatus(code: string): number {
     case "acp_mode_unsupported":
     case "acp_no_raw_write":
       return 400;
+    case "acp_image_unsupported":
+    case "acp_attachment_unsupported":
     case "acp_mode_unavailable":
     case "acp_model_unavailable":
     case "acp_model_unsupported":
@@ -137,6 +143,8 @@ function acpStatus(code: string): number {
       return 409;
     case "acp_session_timeout":
       return 504;
+    case "acp_attachment_too_large":
+      return 413;
     default:
       return 502;
   }
@@ -169,6 +177,26 @@ function agentOf(node: { readonly data: Record<string, unknown> }) {
 /** 这个节点是不是 SSH 节点（节点还没落盘时不是）。 */
 function sshOf(database: DatabaseSync, nodeId: string): string | undefined {
   return sshHostOf(loadNode(database, nodeId)?.data);
+}
+
+/** 契约 §55：`attachments: [{ uploadId }]`，最多 {@link MAX_ACP_ATTACHMENTS} 个。 */
+function uploadIdsOf(value: unknown): string[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > MAX_ACP_ATTACHMENTS) {
+    throw badRequest(
+      `attachments must be a list of at most ${MAX_ACP_ATTACHMENTS} uploads`,
+    );
+  }
+  return value.map((item) => {
+    const id =
+      item !== null && typeof item === "object"
+        ? (item as Record<string, unknown>).uploadId
+        : undefined;
+    if (typeof id !== "string" || !/^[0-9a-f]{32}$/.test(id)) {
+      throw badRequest("attachments[].uploadId is invalid");
+    }
+    return id;
+  });
 }
 
 function text(value: unknown): string | undefined {
@@ -385,15 +413,39 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
 
   /* --------------------------------- 回合 --------------------------------- */
 
+  /** 契约 §55：上传 id → 这一轮的内容块。上传按会话所在的工作空间找。 */
+  const attachmentsFor = (
+    wiring: AcpTerminalWiring,
+    row: TerminalSession,
+    uploadIds: readonly string[],
+  ): AttachmentBlocks | undefined => {
+    if (uploadIds.length === 0) return undefined;
+    const session = wiring.backend.sessionByRow(row.id);
+    if (session === undefined) {
+      throw domain(409, "acp_exited", "The ACP session has ended");
+    }
+    const uploads = uploadIds.map((id) =>
+      resolveUpload(context.dataDir, row.workspaceId, id),
+    );
+    return attachmentBlocks(
+      uploads,
+      session.promptCapabilities,
+      session.remote,
+    );
+  };
+
   const deliverPrompt = (
     sessionId: string,
     prompt: string,
     clientTurnId: string | undefined,
+    uploadIds: readonly string[] = [],
   ) =>
     promptLocked(sessionId, async () => {
       const wiring = await need();
       const row = await live(wiring, sessionId);
+      const attachments = attachmentsFor(wiring, row, uploadIds);
       wiring.backend.expectClientTurn(row.sessionKey, clientTurnId);
+      wiring.backend.expectAttachments(row.sessionKey, attachments);
       try {
         await wiring.manager.writeSubmit(
           row.id,
@@ -403,15 +455,28 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
         );
       } finally {
         wiring.backend.expectClientTurn(row.sessionKey, undefined);
+        wiring.backend.expectAttachments(row.sessionKey, undefined);
       }
       const turnId = wiring.backend.lastTurn(row.sessionKey) ?? "";
       return { turnId };
     });
 
   const sendPrompt = guarded(
-    async (sessionId: string, text: unknown, clientTurn?: unknown) => {
-      const prompt = optionalString({ text }, "text");
-      if (prompt === undefined || prompt.trim() === "") {
+    async (
+      sessionId: string,
+      text: unknown,
+      clientTurn?: unknown,
+      attachments?: unknown,
+    ) => {
+      const uploadIds = uploadIdsOf(attachments);
+      const prompt =
+        text === undefined || text === null || text === ""
+          ? ""
+          : optionalString({ text }, "text");
+      if (
+        prompt === undefined ||
+        (prompt.trim() === "" && uploadIds.length === 0)
+      ) {
         throw badRequest("text is required");
       }
       if (
@@ -426,12 +491,17 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
       const clientTurnId =
         typeof clientTurn === "string" ? clientTurn : undefined;
       if (clientTurnId === undefined) {
-        return deliverPrompt(sessionId, prompt, undefined);
+        return deliverPrompt(sessionId, prompt, undefined, uploadIds);
       }
       const key = `${sessionId}\n${clientTurnId}`;
       const seen = promptsById.get(key);
       if (seen !== undefined) return seen;
-      const delivery = deliverPrompt(sessionId, prompt, clientTurnId);
+      const delivery = deliverPrompt(
+        sessionId,
+        prompt,
+        clientTurnId,
+        uploadIds,
+      );
       promptsById.set(key, delivery);
       if (promptsById.size > PROMPT_IDS) {
         const oldest = promptsById.keys().next().value;
@@ -518,6 +588,9 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
             elicitations: session.pendingElicitations(),
             turns: session.recentTurns(),
             snapshot: session.snapshot(),
+            ...(session.promptCapabilities === null
+              ? {}
+              : { promptCapabilities: session.promptCapabilities }),
           }),
     };
   });
@@ -552,11 +625,13 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
       sessionId,
       text,
       clientTurnId,
+      attachments,
     }: {
       sessionId: string;
       text?: unknown;
       clientTurnId?: unknown;
-    }) => sendPrompt(sessionId, text, clientTurnId),
+      attachments?: unknown;
+    }) => sendPrompt(sessionId, text, clientTurnId, attachments),
     cancel: ({ sessionId }: { sessionId: string }) => cancel(sessionId),
     setMode: ({ sessionId, modeId }: { sessionId: string; modeId?: unknown }) =>
       setMode(sessionId, modeId),
@@ -595,6 +670,7 @@ export function installRoutes(context: CoreContext, deps: AcpRouteDeps): void {
         param(match, "sessionId"),
         jsonObject(request.body).text,
         jsonObject(request.body).clientTurnId,
+        jsonObject(request.body).attachments,
       ),
     }),
   );

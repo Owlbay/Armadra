@@ -559,6 +559,7 @@ class AcpRuntime {
         new AcpMirror(mirrorPath(dataDir, nodeId, acpSessionId)),
       resumeSessionId: resume,
       onExit,
+      remote,
     });
     const mode = plan.permissionMode as
       | "default"
