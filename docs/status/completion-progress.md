@@ -3530,6 +3530,33 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 
 - `geometry.ts`：新增 `dispatchAnchor`；`facingSides` / `edgeGeometry` 签名不变，`free` 的选边规则变了（`horizontal` / `vertical` 仍是硬约束；`CanvasOverlays` 的子代理派生线用 `free`，一并按新规则选边）。
 
+## Codex 启动不再打两行警告：会话层信任记录与内嵌模式（2026-10-09）
+
+做了什么：
+
+- 画布内的 Codex 启动时 TUI 打两条 Startup 警告：`--dangerously-bypass-hook-trust` 本身一条；有 `-c` 就退回内嵌模式，Codex 0.156 起又打一条「Running without the shared background server: command-line configuration overrides … requires embedded mode.」。
+- `hook/install/inject.ts::codexArgs` 去掉旗标，改在同一层 `-c` 里带八个 Hook 的信任记录 `hooks.state={"<来源>:<event>:0:0"={trusted_hash="sha256:…"},…}`。Codex 从用户层与会话旗标层都读 `hooks.state`（0.134.0–0.162.0 源码一致），来源是会话层的合成路径 `/<session-flags>/config.toml`（Windows 为 `C:\<session-flags>\config.toml`，远端一律 POSIX）；哈希 `codexHookTrustHash` = `{event_name, hooks:[{type, command, timeout, async}]}` 按键排序的 JSON 的 SHA-256。每个 Hook 表写明超时（`SessionEnd` 1，其余 600，即今天的默认值），哈希不随各版本默认值变化。用户自己没审过的 Hook 不再被放行，画布内与画布外一样要审查。
+- 加 `-c features.daemon_auto_start=false`：画布内的 Codex 本来就得内嵌（Hook 在会话所在进程里跑，接共享服务器就带不上节点的 `ARMADRA_NODE_ID`，`-c` 层也只属于这个进程），之前也是因 `-c` 走内嵌，启动路径不变、不变慢，并发仍由启动闸门（契约 §52）排队；关掉自启后不再打提示。旧版本只把认不出的 `features` 键记进日志，所以不按版本区分；没用 `--no-daemon`，因为 0.156 之前不认、远端又不探版本。
+- 门槛常量改名 `CODEX_SESSION_HOOK_TRUST_MIN`（仍 0.134.0）、`codexTrustsSessionHooks`；`injectionFromLayout` 多 `windows` 选项，`remote.ts` 传 `false`。
+- 文档：画布启动器 §7 重写、§2.1 / §5.2 / §13 / §14 / §15，画布内注入 §4，远端注入，契约 §13.2 示例，指南 agent-collaboration / architecture / local-cli-plugin（更正「0.159 `-c hooks.state` 无效」的说法），探针 README、场景 5 与 packaged-smoke 的断言和说明。
+
+实测（macOS arm64，Codex 0.160.0，临时 `HOME` 与 `CODEX_HOME`，mock 模型提供方指向不可达地址，不登录）：
+
+- `codex app-server <启动器的参数>` 的 `hooks/list`：八个 Hook 全是 `trusted`，`currentHash` 与 `codexHookTrustHash` 相同（两条答案写进 `inject.test.ts`）；不带信任记录时为 `untrusted`。
+- 同样的参数起 TUI（node-pty）：启动后 0 条警告；提交一句话后 `SessionStart`、`UserPromptSubmit` 的 Hook 都跑了且带节点身份；`CODEX_HOME/config.toml` 前后字节相同。对照：旧参数启动即「2 warnings」。
+- `pnpm libs:build && pnpm -r --if-present test`：web 4131、desktop 5390 / 74 跳、shared 380、server 98 / 4 跳、mobile 10、push-relay 9 全过；live 配置的 `passkey-cdp.live.integration.test.ts` 本机失败（与上一节同，和本改动无关），其后的 `node --test scripts/*.test.mjs` 单独跑 73 / 2 跳通过。desktop typecheck、`pnpm check` 通过。
+
+没做 / 偏离：
+
+- Windows 的来源键 `C:\<session-flags>\config.toml` 按 Codex 源码推出，没在 Windows 上对真 Codex 核过；不对时症状是画布内启动停在「Hooks need review」。
+- 以后的 Codex 若改了信任哈希的组成，症状同上；用 `app-server` 的 `hooks/list` 对一次 `currentHash`（画布启动器 §7.2）。
+- 场景 5（真 CLI、C 档）的断言已改，没有用真实账号跑。
+
+接口：
+
+- core：`CODEX_SESSION_HOOK_TRUST_MIN`、`codexTrustsSessionHooks`、`codexHookTrustHash(event, command, timeout?)`、`codexSessionKeySource(windows)`、`codexArgs(command, instructions?, hooks?, windows?)`；删 `CODEX_BYPASS_HOOK_TRUST`、`CODEX_HOOK_TRUST_BYPASS_MIN`、`codexBypassesTrust`。
+- `GET /api/agents/codex/integration` 的 `launchArgs` 只变值：不再有 `--dangerously-bypass-hook-trust`，多 `features.daemon_auto_start=false` 与 `hooks.state=…`。线上 JSON 形状不变。
+
 ## Windows 验收保活后 5.1 无回显（nightly 37906434287，2026-10-09）
 
 做了什么：

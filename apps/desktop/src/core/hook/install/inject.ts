@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   mkdirSync,
@@ -59,8 +60,8 @@ import {
  * into the node's shell is only "launcher + program + the CLI's own flags",
  * and the launcher appends the injected argv and sets the injected variables
  * for the CLI process — only when `ARMADRA_NODE_ID` says this is a canvas
- * node. Codex trusts our session-flag hooks through
- * `--dangerously-bypass-hook-trust`; nothing goes into its `config.toml`.
+ * node. Codex trusts our session-flag hooks through trust records carried in
+ * the same `-c` layer (`hooks.state`); nothing goes into its `config.toml`.
  *
  * Three functions, in the order a launch uses them:
  *
@@ -488,19 +489,13 @@ function writeExecutables(
 /* ---------------------------------- Codex --------------------------------- */
 
 /**
- * The flag that lets Codex run our session-flag hooks without a trust record
- * in the user's `config.toml` (docs/design/canvas-launcher.md §7). Only the
- * command-line flag works: `-c bypass_hook_trust=true` is ignored by the
- * session-flag layer (measured on Codex 0.160.0).
+ * The first Codex whose session-flag layer carries hook trust records
+ * (`hooks.state` read from both the user layer and the `-c` layer, and the
+ * trust hash computed as {@link codexHookTrustHash} does). Read off the
+ * Codex sources from 0.134.0 to 0.162.0 and measured on 0.160.0
+ * (docs/design/canvas-launcher.md §7).
  */
-export const CODEX_BYPASS_HOOK_TRUST = "--dangerously-bypass-hook-trust";
-
-/**
- * The first Codex that honours {@link CODEX_BYPASS_HOOK_TRUST} in its TUI
- * (openai/codex#24317). Where the flag itself first appeared was not
- * verified; the design fixes the gate here.
- */
-export const CODEX_HOOK_TRUST_BYPASS_MIN = "0.134.0";
+export const CODEX_SESSION_HOOK_TRUST_MIN = "0.134.0";
 
 function versionParts(version: string): number[] | undefined {
   const match = /^v?(\d+)\.(\d+)(?:\.(\d+))?/.exec(version.trim());
@@ -509,17 +504,17 @@ function versionParts(version: string): number[] | undefined {
 }
 
 /**
- * Whether a Codex of this version gets the flag and the hooks. An unknown
- * version (not probed yet, the probe failed, unparsable) gets them: that is
- * what every launch did before the gate, and the probe answers within
- * seconds of start-up.
+ * Whether a Codex of this version gets the hooks. An unknown version (not
+ * probed yet, the probe failed, unparsable) gets them: that is what every
+ * launch did before the gate, and the probe answers within seconds of
+ * start-up.
  */
-export function codexBypassesTrust(
+export function codexTrustsSessionHooks(
   version: string | null | undefined,
 ): boolean {
   if (version === undefined || version === null) return true;
   const have = versionParts(version);
-  const need = versionParts(CODEX_HOOK_TRUST_BYPASS_MIN) as number[];
+  const need = versionParts(CODEX_SESSION_HOOK_TRUST_MIN) as number[];
   if (have === undefined) return true;
   for (let index = 0; index < need.length; index += 1) {
     const a = have[index] as number;
@@ -539,24 +534,91 @@ function probedCodexVersion(): string | undefined {
 
 /**
  * Why a canvas Codex starts without hooks, or `undefined` when it does not.
- * Too old a Codex neither knows the flag (it refuses to start) nor runs an
- * untrusted hook (it stops on "Hooks need review", in front of the first
- * delivery) — both worse than no hooks; status falls back to the screen.
+ * Too old a Codex does not read a trust record from the session flags, so it
+ * stops on "Hooks need review", in front of the first delivery — worse than
+ * no hooks; status falls back to the screen.
  */
 export function codexHooksWarning(
   version: string | null | undefined = probedCodexVersion(),
 ): string | undefined {
-  if (codexBypassesTrust(version)) return undefined;
-  return `Codex ${version as string} is older than ${CODEX_HOOK_TRUST_BYPASS_MIN}: canvas launches carry no hooks`;
+  if (codexTrustsSessionHooks(version)) return undefined;
+  return `Codex ${version as string} is older than ${CODEX_SESSION_HOOK_TRUST_MIN}: canvas launches carry no hooks`;
 }
 
 function codexEvents(): string[] {
   return CODEX_HOOK_EVENTS.filter((event) => eventKey(event) !== undefined);
 }
 
-/** One hook table for Codex: `[{hooks=[{type="command",command=…}]}]`. */
-function codexHookTable(command: string): string {
-  return `[{hooks=[{type=${tomlString("command")},command=${tomlString(command)}}]}]`;
+/**
+ * Each hook's timeout, written out rather than left to Codex's default: the
+ * trust hash covers the normalized timeout, and the defaults have moved
+ * between versions (`SessionEnd` is clamped to 1–3 s since 0.145). These are
+ * today's defaults, so nothing about how the hooks run changes.
+ */
+function codexHookTimeout(event: string): number {
+  return event === "SessionEnd" ? 1 : 600;
+}
+
+/** One hook table for Codex: `[{hooks=[{type="command",command=…,timeout=…}]}]`. */
+function codexHookTable(command: string, timeout: number): string {
+  return `[{hooks=[{type=${tomlString("command")},command=${tomlString(command)},timeout=${timeout}}]}]`;
+}
+
+/**
+ * Where Codex says a `-c` hook came from: the synthetic path of the session
+ * flag layer, resolved against `/` (`C:\` on Windows), as it appears in the
+ * hook's state key.
+ */
+export function codexSessionKeySource(windows: boolean): string {
+  return windows
+    ? "C:\\<session-flags>\\config.toml"
+    : "/<session-flags>/config.toml";
+}
+
+/** JSON with every object's keys sorted, as Codex canonicalizes before hashing. */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (typeof value === "object" && value !== null) {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * The trust hash Codex computes for one of our hooks: SHA-256 of the
+ * canonical JSON of `{event_name, hooks: [normalized handler]}` — no matcher,
+ * no status message, `async` false, the timeout as written.
+ */
+export function codexHookTrustHash(
+  event: string,
+  command: string,
+  timeout: number = codexHookTimeout(event),
+): string {
+  const identity = {
+    event_name: eventKey(event),
+    hooks: [{ type: "command", command, timeout, async: false }],
+  };
+  return `sha256:${createHash("sha256").update(canonicalJson(identity)).digest("hex")}`;
+}
+
+/**
+ * The trust records for our hooks, carried in the same `-c` layer as the
+ * hooks themselves: `hooks.state` is read from the session flags too, so
+ * Codex runs exactly these hooks without asking and without a record in the
+ * user's `config.toml`. Another hook — the user's own — is reviewed as it is
+ * outside the canvas.
+ */
+function codexHookState(command: string, windows: boolean): string {
+  const source = codexSessionKeySource(windows);
+  const entries = codexEvents().map((event) => {
+    const key = `${source}:${eventKey(event) as string}:0:0`;
+    return `${tomlString(key)}={trusted_hash=${tomlString(codexHookTrustHash(event, command))}}`;
+  });
+  return `hooks.state={${entries.join(",")}}`;
 }
 
 /** A TOML basic string; JSON's escapes are a subset TOML accepts. */
@@ -565,26 +627,43 @@ function tomlString(value: string): string {
 }
 
 /**
- * What Codex gets: the trust flag, no update prompt, the hooks, the
- * instructions. Without `hooks` (a Codex older than the gate) only the last
- * two.
+ * What Codex gets: no update prompt, no shared background server, the hooks
+ * and their trust records, the instructions. Without `hooks` (a Codex older
+ * than the gate) no hooks and no records.
+ *
+ * Nothing here starts with `--dangerously-`: the trust records replace the
+ * bypass flag, so the TUI prints no warning for it and the user's own
+ * unreviewed hooks are not run on the canvas either.
  */
 export function codexArgs(
   command: string,
   instructions?: string,
   hooks = true,
+  windows = process.platform === "win32",
 ): string[] {
   const args = [
-    ...(hooks ? [CODEX_BYPASS_HOOK_TRUST] : []),
     // The start-up "Update now?" prompt takes the first task as its answer
     // (Enter = upgrade). Key read off Codex 0.155.1 and checked in its TUI.
     "-c",
     "check_for_update_on_startup=false",
+    // Our `-c` layer is per process, and the hooks run where the session
+    // runs: with the shared background server they would run in its process,
+    // with its environment instead of this node's `ARMADRA_NODE_ID`. So a
+    // canvas Codex runs embedded, as any `-c` launch already did; turning off
+    // the auto-start says so, and Codex 0.156+ stops printing "Running
+    // without the shared background server". An older Codex ignores an
+    // unknown feature key.
+    "-c",
+    "features.daemon_auto_start=false",
   ];
   if (hooks) {
     for (const event of codexEvents()) {
-      args.push("-c", `hooks.${event}=${codexHookTable(command)}`);
+      args.push(
+        "-c",
+        `hooks.${event}=${codexHookTable(command, codexHookTimeout(event))}`,
+      );
     }
+    args.push("-c", codexHookState(command, windows));
   }
   if (instructions !== undefined) {
     // Appended as a developer message; `model_instructions_file` would
@@ -962,7 +1041,7 @@ export interface InjectionRequest {
    */
   readonly resume?: boolean;
   /**
-   * Codex's version, for the trust-bypass gate. The cached probe
+   * Codex's version, for the session hook trust gate. The cached probe
    * (`agent/probe.ts::storedProbe`) when absent; `null` = unknown.
    */
   readonly codexVersion?: string | null;
@@ -1014,7 +1093,7 @@ function launchInjection(request: InjectionRequest): Injection {
       artifactLayout(request.dataDir, request.agentId),
       marker.clientBin,
       isFile,
-      { codexHooks: codexBypassesTrust(codexVersionOf(request)) },
+      { codexHooks: codexTrustsSessionHooks(codexVersionOf(request)) },
     ) ?? NOTHING
   );
 }
@@ -1031,7 +1110,11 @@ export function injectionFromLayout(
   layout: ArtifactLayout,
   clientBin: string,
   exists: (path: string | undefined) => path is string,
-  options: { readonly codexHooks?: boolean } = {},
+  options: {
+    readonly codexHooks?: boolean;
+    /** Whether the CLI runs on Windows; this machine's platform when absent. */
+    readonly windows?: boolean;
+  } = {},
 ): Injection | undefined {
   const isFile = exists;
   const skill = isFile(layout.skill);
@@ -1058,6 +1141,7 @@ export function injectionFromLayout(
           hookCommand(clientBin, "codex"),
           codexInstructions(layout, exists),
           options.codexHooks ?? true,
+          options.windows ?? process.platform === "win32",
         ),
         env: [],
       };

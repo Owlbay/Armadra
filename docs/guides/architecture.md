@@ -256,7 +256,7 @@ Agent 节点就是终端节点里跑着一个 CLI，没有中间协议：
    在探测时穿透成真实路径（`launchTarget`）。同一份配置目录上的 Codex 经启动闸门
    `core/agent/launch-gate.ts` 一个一个起：页面敲行前 `launch-slot`、敲完 `launch-result`，
    没起来自动重敲一次（契约 §52）。数据目录之外
-   不写任何文件（Codex 的 Hook 信任用会话级旗标）；升级时旧的全局安装与旧版写下的 Codex
+   不写任何文件（Codex 的 Hook 信任记录放在启动器的 `-c` 层里，以内嵌模式运行）；升级时旧的全局安装与旧版写下的 Codex
    信任记录由 `migrate.ts` 先备份再清掉一次。SSH 终端里的 CLI 由 Worker 同步的产物、远端启动器与同名垫片注入、
    Hook 经 Worker 中继（§3 远端一段）。
 3. 命令 Hook 每个事件调一次 `armadra-hook`；进程内扩展在 CLI 自己的进程里说同一套 HTTP。

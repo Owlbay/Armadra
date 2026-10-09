@@ -53,7 +53,7 @@ core 分不出也不会因此多给任何权限。区别只是省掉每个事件
 
 Hook、技能（`SKILL.md`）与画布说明是一组**注入产物**，生成在 `<数据目录>/integration/<cli>/`，由同目录下的启动器 `run/<cli>` 在 CLI 启动时交给它：画布节点的启动行是 `<launcher> <程序> <旗标>`，启动器路径由 `GET /api/agents` 每行的 `launcher` 给出（契约 §13.1），注入只在环境里有 `ARMADRA_NODE_ID` 时追加；在画布外重跑同一行、或用户自己启动的 CLI 什么都看不到。各 CLI 的参数与恢复时的行为见 [画布内注入](../design/canvas-only-integration.md) §3，启动器见 [画布启动器](../design/canvas-launcher.md)。修订号仍是 `INTEGRATION_REVISION`（`<Hook 修订>×100 + <技能修订>`），变了就在下一次启动时重写产物；Hook 事件契约（`HOOK_CLIENT_REVISION`）不随之变。
 
-数据目录之外不写任何文件：Codex 的 Hook 信任靠启动器追加的会话级旗标 `--dangerously-bypass-hook-trust`。启动不改用户 HOME 下的任何文件：一次性迁移只清数据目录里旧安装器的标记，记在 `<数据目录>/integration/global-migration.json`（`version: 3`）。旧版装进各 CLI 全局配置的东西列在集成页，用户点「清理旧版」才处理。集成页没有「安装 / 卸载」，只有「重新生成」。
+数据目录之外不写任何文件：Codex 的 Hook 信任靠启动器在 `-c` 层里带的信任记录（`hooks.state`），画布内的 Codex 以内嵌模式运行（`-c features.daemon_auto_start=false`），启动时不打警告。启动不改用户 HOME 下的任何文件：一次性迁移只清数据目录里旧安装器的标记，记在 `<数据目录>/integration/global-migration.json`（`version: 3`）。旧版装进各 CLI 全局配置的东西列在集成页，用户点「清理旧版」才处理。集成页没有「安装 / 卸载」，只有「重新生成」。
 
 ### 旧残留与清理
 

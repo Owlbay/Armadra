@@ -17,12 +17,14 @@ import {
   INTEGRATION_REVISION,
 } from "./events";
 import {
-  CODEX_BYPASS_HOOK_TRUST,
   INJECTED_AGENTS,
   artifactLayout,
   canvasInjection,
-  codexBypassesTrust,
+  codexArgs,
+  codexHookTrustHash,
   codexHooksWarning,
+  codexSessionKeySource,
+  codexTrustsSessionHooks,
   currentLauncher,
   launcherPath,
   prepareInjection,
@@ -164,26 +166,48 @@ describe("canvas injection", () => {
     );
   });
 
-  it("gives Codex the trust flag, its hooks, its instructions and no update prompt", () => {
+  it("gives Codex its hooks, their trust records, its instructions, no update prompt and no shared server", () => {
     prepare("codex");
     const layout = artifactLayout(dataDir, "codex");
     const { args, env: vars } = inject("codex");
-    // The flag first, then only `-c` pairs.
-    expect(args[0]).toBe(CODEX_BYPASS_HOOK_TRUST);
-    const rest = args.slice(1);
+    // Only `-c` pairs: no `--dangerously-bypass-hook-trust`, whose start-up
+    // warning the TUI prints on every launch.
+    expect(args.some((arg) => arg.startsWith("--"))).toBe(false);
     expect(
-      rest.filter((_, index) => index % 2 === 0).every((a) => a === "-c"),
+      args.filter((_, index) => index % 2 === 0).every((a) => a === "-c"),
     ).toBe(true);
-    const pairs = rest.filter((_, index) => index % 2 === 1);
-    expect(pairs[0]).toBe("check_for_update_on_startup=false");
+    const pairs = args.filter((_, index) => index % 2 === 1);
+    expect(pairs.slice(0, 2)).toEqual([
+      "check_for_update_on_startup=false",
+      "features.daemon_auto_start=false",
+    ]);
+    const command = `${hookBin} codex`;
     expect(pairs).toContain(
-      `hooks.SessionStart=[{hooks=[{type="command",command=${JSON.stringify(`${hookBin} codex`)}}]}]`,
+      `hooks.SessionStart=[{hooks=[{type="command",command=${JSON.stringify(command)},timeout=600}]}]`,
     );
-    expect(pairs.filter((pair) => pair.startsWith("hooks.")).length).toBe(8);
+    expect(pairs).toContain(
+      `hooks.SessionEnd=[{hooks=[{type="command",command=${JSON.stringify(command)},timeout=1}]}]`,
+    );
+    const tables = pairs.filter(
+      (pair) => pair.startsWith("hooks.") && !pair.startsWith("hooks.state="),
+    );
+    expect(tables.length).toBe(8);
     // Codex has no Notification event; it is not passed.
     expect(pairs.some((pair) => pair.startsWith("hooks.Notification"))).toBe(
       false,
     );
+    // One trust record per hook, keyed by the session flag layer.
+    const state = pairs.find((pair) => pair.startsWith("hooks.state="));
+    const source = codexSessionKeySource(process.platform === "win32");
+    for (const [event, key] of [
+      ["SessionStart", "session_start"],
+      ["SubagentStop", "subagent_stop"],
+    ] as const) {
+      expect(state).toContain(
+        `${JSON.stringify(`${source}:${key}:0:0`)}={trusted_hash=${JSON.stringify(codexHookTrustHash(event, command))}}`,
+      );
+    }
+    expect(state?.match(/trusted_hash=/g)?.length).toBe(8);
     const instructions = pairs.at(-1) as string;
     expect(instructions.startsWith("developer_instructions=")).toBe(true);
     const text = JSON.parse(
@@ -196,27 +220,60 @@ describe("canvas injection", () => {
     expect(vars).toEqual([]);
   });
 
-  it("gates Codex's flag and hooks on its probed version", () => {
+  it("hashes a Codex hook the way Codex does", () => {
+    // Answers of `codex app-server` `hooks/list` (Codex 0.160.0, an empty
+    // temporary CODEX_HOME) for `-c hooks.<Event>=[{hooks=[{type="command",
+    // command="/tmp/x hook codex",timeout=…}]}]`; with these records in
+    // `-c hooks.state` both were listed `trusted`.
+    expect(codexHookTrustHash("SessionStart", "/tmp/x hook codex")).toBe(
+      "sha256:cd41a792c5f93506eaa883c3ea5332ae6fbacb99ee251206cda53b085d9b2eaa",
+    );
+    expect(codexHookTrustHash("SessionEnd", "/tmp/x hook codex")).toBe(
+      "sha256:bf7f45a5b84b1715d6143353c25448e6346fbb421e28605d20d5cfc4a5077522",
+    );
+    expect(codexSessionKeySource(false)).toBe("/<session-flags>/config.toml");
+    expect(codexSessionKeySource(true)).toBe(
+      "C:\\<session-flags>\\config.toml",
+    );
+    // The execution host's copy is POSIX whatever this machine is.
+    const windows = codexArgs("c", undefined, true, true).find((arg) =>
+      arg.startsWith("hooks.state="),
+    );
+    expect(windows).toContain(
+      JSON.stringify("C:\\<session-flags>\\config.toml:stop:0:0"),
+    );
+    const posix = codexArgs("c", undefined, true, false).find((arg) =>
+      arg.startsWith("hooks.state="),
+    );
+    expect(posix).toContain(
+      JSON.stringify("/<session-flags>/config.toml:stop:0:0"),
+    );
+  });
+
+  it("gates Codex's hooks on its probed version", () => {
     prepare("codex");
     const old = canvasInjection({
       dataDir,
       agentId: "codex",
       codexVersion: "0.133.0",
     }).args;
-    expect(old).not.toContain(CODEX_BYPASS_HOOK_TRUST);
     expect(old.some((arg) => arg.startsWith("hooks."))).toBe(false);
     expect(old).toContain("check_for_update_on_startup=false");
+    expect(old).toContain("features.daemon_auto_start=false");
     expect(old.at(-1)?.startsWith("developer_instructions=")).toBe(true);
     for (const version of ["0.134.0", "0.160.1", null]) {
       expect(
-        canvasInjection({ dataDir, agentId: "codex", codexVersion: version })
-          .args[0],
+        canvasInjection({
+          dataDir,
+          agentId: "codex",
+          codexVersion: version,
+        }).args.some((arg) => arg.startsWith("hooks.state=")),
         String(version),
-      ).toBe(CODEX_BYPASS_HOOK_TRUST);
+      ).toBe(true);
     }
-    expect(codexBypassesTrust("0.133.9")).toBe(false);
-    expect(codexBypassesTrust("1.0")).toBe(true);
-    expect(codexBypassesTrust("garbage")).toBe(true);
+    expect(codexTrustsSessionHooks("0.133.9")).toBe(false);
+    expect(codexTrustsSessionHooks("1.0")).toBe(true);
+    expect(codexTrustsSessionHooks("garbage")).toBe(true);
     expect(codexHooksWarning("0.120.0")).toMatch(/0\.120\.0.*no hooks/);
     expect(codexHooksWarning("0.134.0")).toBeUndefined();
 
@@ -228,12 +285,15 @@ describe("canvas injection", () => {
       status: "ok",
       probedAt: new Date().toISOString(),
     });
-    expect(inject("codex").args).not.toContain(CODEX_BYPASS_HOOK_TRUST);
+    expect(inject("codex").args.some((arg) => arg.startsWith("hooks."))).toBe(
+      false,
+    );
     prepare("codex");
-    expect(launcherText("codex")).not.toContain(CODEX_BYPASS_HOOK_TRUST);
+    expect(launcherText("codex")).not.toContain("hooks.state=");
     forgetProbes();
     prepare("codex");
-    expect(launcherText("codex")).toContain(CODEX_BYPASS_HOOK_TRUST);
+    expect(launcherText("codex")).toContain("hooks.state=");
+    expect(launcherText("codex")).not.toContain("--dangerously-");
   });
 
   it("gives OpenCode a fixed config directory and the instructions by env", () => {
@@ -437,7 +497,10 @@ describe("our names", () => {
         expect(name, agentId).toMatch(/^ARMADRA_/);
       }
       if (agentId === "codex") {
-        const hooks = injection.args.filter((arg) => arg.startsWith("hooks."));
+        // The trust records name no program, only the hooks they trust.
+        const hooks = injection.args.filter(
+          (arg) => arg.startsWith("hooks.") && !arg.startsWith("hooks.state="),
+        );
         expect(hooks.length).toBeGreaterThan(0);
         for (const arg of hooks) {
           const command = /command="([^"]+)"/.exec(arg)?.[1] ?? "";
