@@ -27,6 +27,10 @@ import {
   SLOW_INTERVAL_MS,
   type SamplingState,
 } from "./sampling";
+import {
+  currentMemoryPressure,
+  resetMemoryPressure,
+} from "@/terminal/pressure-bus";
 
 /**
  * 共享订阅的三条约束（路线图 §4.3）：
@@ -56,7 +60,10 @@ beforeEach(() => {
   unsubscribeResources.mockResolvedValue(undefined);
 });
 
-afterEach(() => resetSampling());
+afterEach(() => {
+  resetSampling();
+  resetMemoryPressure();
+});
 
 describe("共享采样订阅", () => {
   it("十个看客只发一份订阅，样本广播给所有人", async () => {
@@ -126,6 +133,24 @@ describe("共享采样订阅", () => {
     publish?.({ snapshot: { workspaceId: "w-2", sessions: [] } });
     // 一条也不该广播出去：别人的样本不是这个工作空间的状态更新。
     expect(seen.length).toBe(before);
+    handle.leave();
+  });
+
+  it("本机样本的内存压力转进回收总线，远端与 null 不转", async () => {
+    const handle = joinSampling("w-1", "fast", () => {});
+    await flush();
+    const host = (location: string, pressure: string | null) => ({
+      snapshot: {
+        workspaceId: "w-1",
+        sessions: [],
+        host: { location, memory: { pressure } },
+      },
+    });
+    publish?.(host("remote", "critical"));
+    publish?.(host("local", null));
+    expect(currentMemoryPressure()).toBe("normal");
+    publish?.(host("local", "warning"));
+    expect(currentMemoryPressure()).toBe("warning");
     handle.leave();
   });
 });

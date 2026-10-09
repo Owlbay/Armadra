@@ -127,6 +127,8 @@ describe("the IPC table", () => {
       "diagnostics",
       "dialog",
       "identity",
+      // Performance design A3: the system memory-pressure event.
+      "memory",
       "shell",
       "shortcuts",
       "transport",

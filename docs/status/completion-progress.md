@@ -3628,6 +3628,32 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 
 - `flow/minimap-links.ts`：`minimapLinkLayer`、`minimapLinkSegment`、`minimapLinkWidth`、`boxesExtent`、`MINIMAP_LINK_THROTTLE_MS` 等常量；`Minimap.tsx`：新增 `MinimapToggle`、`MinimapLinkLayer`、`firstMinimapNodeId`，删去 `minimapLinksFrom`、`MINIMAP_LINK_WIDTH`、`MinimapLink`；`lib/use-throttled-value.ts`：`useThrottledValue`。
 
+## 性能包 P2：徽标可见性、内存压力与隐藏名额归还（A2 / A3 / A4，2026-10-09）
+
+做了什么：
+
+- A2：`useOnScreen(ref, enabled)`，effect 依赖 `[ref, enabled]`；`MemoryBadge` 传 `Boolean(sessionId)`。PTY 终端的会话 id 在 WS hello 之后才到，首帧徽标 `return null`，以前观察器永远没挂上，离屏降到 30 秒从未生效。
+- A3 壳侧：`main/memory-pressure.ts` 每 15 秒异步探一次（macOS `sysctl kern.memorystatus_vm_pressure_level` 1/2/4；Linux `/proc/pressure/memory`，`some avg10 ≥ 10` 为 warning、`full avg10 ≥ 5` 为 critical，阈值是自定的；Windows `getSystemMemoryInfo` 空闲 < 10% / < 5%），升档立刻、降档连续两次才推 `memory:pressure { level }`，页面重载后补发非 normal 的当前档。preload 挂 `window.armadra.memory.onPressure`。
+- A3 页面侧：`terminal/pressure-policy.ts`（纯函数 `decide` / `actionFor`，warning 还隐藏名额并释放离屏 ≥ 30 秒的实例，critical 释放全部不可见的，同档 20 秒节流，降回 normal 不动），`pressure-bus.ts`（壳与本机 `resource.sample` 两路取最高档，采样那一路 90 秒没报作废），`memory-pressure.ts`（壳事件进总线，诊断把手 `window.__armadraMemoryPressure.emit(level)` 供探针注入）。`sampling.ts` 只转发 `host.location === "local"` 的非空压力。渲染名额在第一个终端登记时订阅总线并 `releaseHidden()`。
+- A4：`render-budget.ts` 隐藏持有者只暖 `RENDER_HIDDEN_RELEASE_MS = 30_000`，全表一个计时器挂在最早到期那条上；`Infinity` 即旧行为。
+
+实测（macOS arm64，未打包壳，`_shared/perf-diag-20261009/bench/terminal-memory.mjs --repo <本 worktree>`，各跑 1 次）：
+
+- `--terminals 5 --cadence-check`：`fresh-nodes-offscreen-60s` 的 `ps` 31 → 5（含跨平移那个 5 秒窗口里的 3 次；平移后稳态每 30 秒 1 次），`reloaded-offscreen-60s` 30 → 2，`reloaded-visible`（重载后视口仍停在离屏处）18 → 2；同步子进程 46.5–49.1 → 4.2–6.7 ms/s。
+- `--terminals 20 --webgl --cycles 2`：GPU `offscreen-1m` / `offscreen-3m` 140 / 140 MiB（基线 3 分钟 317），回到视口 385 MiB，`data-render` 回到 visible 16 + offscreen 4。
+- 单测：`pressure-policy` 8、`pressure-bus` 7、`memory-pressure`（页面）3、`render-budget` 新增 8、`MemoryBadge` 新增 1（不改实现时失败）、`sampling` 新增 1、`main/memory-pressure` 8。
+
+没做 / 偏离：
+
+- 前端实例的释放（`released`）是 P3 的事，这里只给总线；P3 订阅 `onMemoryPressure(level)`，按 `actionFor(level)` 自己算要释放谁。
+- A4 的 GPU 是 140 MiB，比设计目标 ≤ 130 多 10 MiB（同机 20 个 DOM 终端离屏是 118–123）；没有单独测「注入假压力 → 立刻回落」，A4 的 30 秒已覆盖同一组持有者，单测覆盖了总线触发。
+- Linux / Windows 的探测只有解析与迟滞单测，没在真机上制造压力。
+
+接口：
+
+- IPC：`memory:pressure`（event，shared），载荷 `{ level: "normal" | "warning" | "critical" }`；`window.armadra.memory?.onPressure(listener) → unsubscribe`。
+- web：`pressure-bus.ts` 的 `MemoryPressureLevel`、`emitMemoryPressure(level, source?: "shell" | "sample")`、`onMemoryPressure(listener: (level) => void) → unsubscribe`（只在该回收时与变回 normal 那一次回调）、`currentMemoryPressure()`；`pressure-policy.ts` 的 `decide`、`actionFor`、`MEMORY_PRESSURE_ENABLED`、`PRESSURE_RESCAN_MS`、`WARNING_RELEASE_OFFSCREEN_MS`；`render-budget.ts` 的 `RENDER_HIDDEN_RELEASE_MS`；`useOnScreen(ref, enabled?)`。
+
 ## 性能包 P1：Runtime 资源采样异步化、诊断接口与 tap 按需（契约 §54，2026-10-09）
 
 做了什么：
