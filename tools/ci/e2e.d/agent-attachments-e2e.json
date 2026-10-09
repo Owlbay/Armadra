@@ -1,0 +1,9 @@
+{
+  "id": "agent-attachments-e2e",
+  "tier": "a",
+  "script": "tools/probes/agent-attachments-e2e.mjs",
+  "args": ["{out}"],
+  "requires": ["tmux", "chrome"],
+  "platforms": ["darwin", "linux"],
+  "timeoutMinutes": 10
+}
