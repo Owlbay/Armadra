@@ -28,8 +28,9 @@ import { skillContent } from "./skills";
  * 前面，垫片从 `PATH` 里去掉自己再委托给启动器；启动器看到 `ARMADRA_NODE_ID`
  * 才在参数后面接上注入的 argv、给 CLI 设注入的变量。于是页面、依赖编排、节能唤醒
  * 拼的都是一行 `claude …`，与远端家目录在哪、同步有没有成功都无关——同步失败时
- * 没有垫片，CLI 照常不带注入启动。Codex 的 Hook 信任靠启动器带的
- * `--dangerously-bypass-hook-trust`，执行主机上也不写 `~/.codex/config.toml`。
+ * 没有垫片，CLI 照常不带注入启动。Codex 的 Hook 信任靠启动器在同一层 `-c` 里带的
+ * 信任记录（`hooks.state`，键按 POSIX 的会话层路径），执行主机上也不写
+ * `~/.codex/config.toml`。
  *
  * 纯函数：只根据 Worker 答的位置与控制端这份 Hook 客户端生成文件，不碰磁盘。
  */
@@ -137,7 +138,9 @@ export function remoteIntegrationFiles(
     const layout = artifactLayout(site.root, agentId, posix.join);
     const present = (path: string | undefined): path is string =>
       path !== undefined && written.has(path);
-    const injection = injectionFromLayout(agentId, layout, clientBin, present);
+    const injection = injectionFromLayout(agentId, layout, clientBin, present, {
+      windows: false,
+    });
     if (injection === undefined) continue;
     const executables = launcherFiles(
       {

@@ -278,8 +278,11 @@ describe("the copy synced to an execution host", () => {
       byPath.get("/srv/armadra/integration/7/shims/claude")?.content,
     ).toContain(`exec ${posix.join(run, "claude")} claude "$@"`);
     const codex = byPath.get(posix.join(run, "codex"))?.content ?? "";
-    expect(codex).toContain("--dangerously-bypass-hook-trust");
+    expect(codex).not.toContain("--dangerously-bypass-hook-trust");
+    expect(codex).toContain("features.daemon_auto_start=false");
     expect(codex).toContain("hooks.SessionStart=");
+    // The execution host is POSIX: the trust records are keyed that way.
+    expect(codex).toContain("/<session-flags>/config.toml:session_start:0:0");
   });
 
   it.runIf(posixOnly)("injects through the synced shim, run by /bin/sh", () => {

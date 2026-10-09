@@ -163,7 +163,7 @@ export interface SyncResult {
 /**
  * 按哈希落文件。每个路径都必须在 `<状态目录>/integration/` 之内：这个动作不是
  * 一个通用的「写这台机器上任意文件」。旧控制端还会带 `codexCommand`，忽略——
- * Codex 的 Hook 信任改由启动器的 `--dangerously-bypass-hook-trust` 给。
+ * Codex 的 Hook 信任改由启动器在 `-c` 层里带的信任记录（`hooks.state`）给。
  */
 export function sync(
   stateDir: string | undefined,
