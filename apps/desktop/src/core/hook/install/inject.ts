@@ -23,6 +23,12 @@ import {
 } from "./events";
 import { opencodePluginSource, piExtensionSource } from "./extension-template";
 import {
+  MOD_MODULE_FILE,
+  claudeModHooks,
+  claudeModManifest,
+  claudeModSource,
+} from "./claude-mod/template";
+import {
   type LauncherSpec,
   launcherFiles,
   runDirectory,
@@ -115,6 +121,19 @@ export interface ArtifactLayout {
   readonly instructions?: string;
   /** Claude's `--settings` file. */
   readonly settings?: string;
+  /**
+   * Claude's `--settings` file when the mod is loaded: PermissionRequest
+   * alone, the mod carries every other event (contract §57).
+   */
+  readonly settingsPermission?: string;
+  /** Claude's second `--plugin-dir`: the mod `armadra-mod`. */
+  readonly modDir?: string;
+  /** The mod's `.claude-plugin/plugin.json`. */
+  readonly modManifest?: string;
+  /** The mod's `hooks/hooks.json`, naming {@link modModule}. */
+  readonly modHooks?: string;
+  /** The mod's hooks module, `hooks/armadra.ts`. */
+  readonly modModule?: string;
   /** Claude's and Copilot's `--plugin-dir`. */
   readonly pluginDir?: string;
   /** The plugin manifest inside {@link pluginDir}. */
@@ -156,14 +175,20 @@ export function artifactLayout(
   switch (agentId) {
     case "claude": {
       const pluginDir = join(dir, "plugin");
+      const modDir = join(dir, "mod");
       return {
         dir,
         marker,
         instructions,
         settings: join(dir, "settings.json"),
+        settingsPermission: join(dir, "settings-permission.json"),
         pluginDir,
         manifest: join(pluginDir, ".claude-plugin", "plugin.json"),
         skill: skillUnder(pluginDir, join),
+        modDir,
+        modManifest: join(modDir, ".claude-plugin", "plugin.json"),
+        modHooks: join(modDir, "hooks", "hooks.json"),
+        modModule: join(modDir, "hooks", MOD_MODULE_FILE),
       };
     }
     case "codex":
@@ -364,14 +389,26 @@ export function artifactFiles(
   };
   switch (agentId) {
     case "claude": {
-      const events: JsonObject = {};
-      appendManagedGroup(events, CLAUDE_HOOK_EVENTS, {
+      const entry = {
         type: "command",
         command: hookCommand(clientBin, agentId),
         timeout: HOOK_TIMEOUT_SECONDS,
-      });
+      };
+      const events: JsonObject = {};
+      appendManagedGroup(events, CLAUDE_HOOK_EVENTS, entry);
       files.set(layout.settings as string, json({ hooks: events }));
+      // With the mod loaded the settings hooks are PermissionRequest alone:
+      // it waits for a person on the canvas, and no mod may answer it.
+      const permission: JsonObject = {};
+      appendManagedGroup(permission, ["PermissionRequest"], entry);
+      files.set(
+        layout.settingsPermission as string,
+        json({ hooks: permission }),
+      );
       files.set(layout.manifest as string, json(manifest));
+      files.set(layout.modManifest as string, json(claudeModManifest()));
+      files.set(layout.modHooks as string, json(claudeModHooks()));
+      files.set(layout.modModule as string, claudeModSource(clientBin));
       break;
     }
     case "codex":
@@ -673,6 +710,95 @@ export function codexArgs(
   return args;
 }
 
+/* ------------------------------- Claude mods ------------------------------- */
+
+/**
+ * The first Claude Code whose `classic.*` events carry the settings hooks'
+ * stdin shape (2.1.293 fixed them; 2.1.287–2.1.292 load mods but hand
+ * `classic.PreToolUse` another shape). Contract §57.
+ */
+export const CLAUDE_MODS_MIN = "2.1.293";
+
+/**
+ * Releases on which the mod is known to misbehave: listing one closes the
+ * gate for it without touching the generated module.
+ */
+export const CLAUDE_MODS_BROKEN: readonly string[] = [];
+
+/**
+ * What makes the launcher start Claude with the full settings hooks instead
+ * of the mod, read in the node's own shell: safe mode loads no plugin at all,
+ * and with nonessential traffic off the host refuses a plugin's every fetch.
+ */
+export const CLAUDE_MODS_FALLBACK_ENV = [
+  "CLAUDE_CODE_SAFE_MODE",
+  "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+] as const;
+
+/** Why a canvas Claude starts without the mod (`agents.integration.mods.reason`). */
+export type ClaudeModsReason =
+  | "version_below_min"
+  | "version_unknown"
+  | "windows_launcher"
+  | "remote_unprobed";
+
+export interface ClaudeModsGate {
+  readonly enabled: boolean;
+  readonly reason: ClaudeModsReason | null;
+}
+
+/**
+ * Whether a Claude Code of this version gets the mod. Unknown (not probed
+ * yet, the probe failed, unparsable) answers no — the opposite of Codex's
+ * gate: the settings hooks are the measured path, the mod the newer one, and
+ * the probe answers within seconds of start-up.
+ */
+export function claudeLoadsMods(version: string | null | undefined): boolean {
+  return claudeModsGate(version, { windows: false }).enabled;
+}
+
+/** The gate with its reason, as the integration state reports it. */
+export function claudeModsGate(
+  version: string | null | undefined,
+  options: { readonly windows?: boolean; readonly remote?: boolean } = {},
+): ClaudeModsGate {
+  if (options.windows ?? process.platform === "win32") {
+    // The Windows launcher is a `.launch` file of literal lines: it has no
+    // branch for the environment fallback yet.
+    return { enabled: false, reason: "windows_launcher" };
+  }
+  if (options.remote === true) {
+    return { enabled: false, reason: "remote_unprobed" };
+  }
+  const have =
+    version === undefined || version === null
+      ? undefined
+      : versionParts(version);
+  if (have === undefined) return { enabled: false, reason: "version_unknown" };
+  const need = versionParts(CLAUDE_MODS_MIN) as number[];
+  if (CLAUDE_MODS_BROKEN.includes(have.join("."))) {
+    return { enabled: false, reason: "version_below_min" };
+  }
+  for (let index = 0; index < need.length; index += 1) {
+    const a = have[index] as number;
+    const b = need[index] as number;
+    if (a !== b) {
+      return a > b
+        ? { enabled: true, reason: null }
+        : { enabled: false, reason: "version_below_min" };
+    }
+  }
+  return { enabled: true, reason: null };
+}
+
+/** The built-in Claude's cached probe version, read only. */
+export function probedClaudeVersion(): string | undefined {
+  const probe = storedProbe("claude");
+  return probe?.status === "ok" && probe.version !== null
+    ? probe.version
+    : undefined;
+}
+
 /* --------------------------------- launcher -------------------------------- */
 
 /** `<data>/integration/launcher.json`: the launcher layer's marker. */
@@ -824,6 +950,9 @@ function writeLaunchers(
     shimDir: shimsDirectory(dataDir, nativeJoin),
     args: injection.args,
     env: injection.env,
+    ...(injection.fallback === undefined
+      ? {}
+      : { fallback: injection.fallback }),
     credential: { client: clientBin, variables: variablesFor(agentId) },
     ...(agentId === "ama"
       ? { amaKeys: { client: clientBin, variables: AMA_KEY_VARIABLES } }
@@ -938,6 +1067,10 @@ function current(
   }
   const expected = [
     layout.settings,
+    layout.settingsPermission,
+    layout.modManifest,
+    layout.modHooks,
+    layout.modModule,
     layout.module,
     layout.pluginHooks,
     layout.manifest,
@@ -1026,6 +1159,19 @@ export function removeInjection(
   }
 }
 
+/**
+ * Takes the Claude mod's folder away so the next prepare writes it afresh:
+ * what every core start does (contract §57). Claude Code 2.1.287–2.1.294
+ * writes `tsconfig.json` and `.claude-plugin/types/` into a `--plugin-dir`
+ * at every load, the connected MCP tools' names among them; a start leaves
+ * none of that behind. Between starts the folder is only byte-compared:
+ * removing files there would reload the module in every running session.
+ */
+export function resetClaudeMod(dataDir: string): void {
+  const dir = artifactLayout(dataDir, "claude").modDir;
+  if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
+}
+
 /* --------------------------------- inject --------------------------------- */
 
 export interface InjectionRequest {
@@ -1045,6 +1191,11 @@ export interface InjectionRequest {
    * (`agent/probe.ts::storedProbe`) when absent; `null` = unknown.
    */
   readonly codexVersion?: string | null;
+  /**
+   * Claude Code's version, for the mod gate (contract §57). The cached probe
+   * when absent; `null` = unknown, which keeps the mod off.
+   */
+  readonly claudeVersion?: string | null;
 }
 
 export interface Injection {
@@ -1055,6 +1206,15 @@ export interface Injection {
   readonly args: readonly string[];
   /** Set by the launcher for the CLI process only. */
   readonly env: readonly (readonly [string, string])[];
+  /**
+   * The argv the launcher appends instead when any of `whenEnvAny` is set
+   * in the node's environment (Claude with the mod: the full settings hooks
+   * under safe mode or with nonessential traffic off). POSIX launchers only.
+   */
+  readonly fallback?: {
+    readonly whenEnvAny: readonly string[];
+    readonly args: readonly string[];
+  };
 }
 
 const NOTHING: Injection = { args: [], env: [] };
@@ -1076,6 +1236,12 @@ export function canvasInjection(request: InjectionRequest): Injection {
   return launchInjection(request);
 }
 
+function claudeVersionOf(request: InjectionRequest): string | null | undefined {
+  return request.claudeVersion !== undefined
+    ? request.claudeVersion
+    : probedClaudeVersion();
+}
+
 function codexVersionOf(request: InjectionRequest): string | null | undefined {
   return request.codexVersion !== undefined
     ? request.codexVersion
@@ -1093,7 +1259,12 @@ function launchInjection(request: InjectionRequest): Injection {
       artifactLayout(request.dataDir, request.agentId),
       marker.clientBin,
       isFile,
-      { codexHooks: codexTrustsSessionHooks(codexVersionOf(request)) },
+      {
+        codexHooks: codexTrustsSessionHooks(codexVersionOf(request)),
+        claudeMods:
+          request.agentId === "claude" &&
+          claudeModsGate(claudeVersionOf(request)).enabled,
+      },
     ) ?? NOTHING
   );
 }
@@ -1112,6 +1283,12 @@ export function injectionFromLayout(
   exists: (path: string | undefined) => path is string,
   options: {
     readonly codexHooks?: boolean;
+    /**
+     * Whether Claude gets the mod (contract §57): the PermissionRequest-only
+     * settings and a second `--plugin-dir`, with the full settings hooks as
+     * the launcher's environment fallback. Off when absent.
+     */
+    readonly claudeMods?: boolean;
     /** Whether the CLI runs on Windows; this machine's platform when absent. */
     readonly windows?: boolean;
   } = {},
@@ -1122,19 +1299,39 @@ export function injectionFromLayout(
     ? layout.instructions
     : undefined;
   switch (agentId) {
-    case "claude":
+    case "claude": {
+      const plugin = isFile(layout.manifest)
+        ? ["--plugin-dir", layout.pluginDir as string]
+        : [];
+      const append =
+        instructions === undefined
+          ? []
+          : ["--append-system-prompt-file", instructions];
+      const plain = [
+        ...(isFile(layout.settings) ? ["--settings", layout.settings] : []),
+        ...plugin,
+        ...append,
+      ];
+      const mods =
+        options.claudeMods === true &&
+        isFile(layout.settingsPermission) &&
+        isFile(layout.modManifest) &&
+        isFile(layout.modHooks) &&
+        isFile(layout.modModule);
+      if (!mods) return { args: plain, env: [] };
       return {
         args: [
-          ...(isFile(layout.settings) ? ["--settings", layout.settings] : []),
-          ...(isFile(layout.manifest)
-            ? ["--plugin-dir", layout.pluginDir as string]
-            : []),
-          ...(instructions === undefined
-            ? []
-            : ["--append-system-prompt-file", instructions]),
+          "--settings",
+          layout.settingsPermission as string,
+          ...plugin,
+          "--plugin-dir",
+          layout.modDir as string,
+          ...append,
         ],
         env: [],
+        fallback: { whenEnvAny: CLAUDE_MODS_FALLBACK_ENV, args: plain },
       };
+    }
     case "codex":
       return {
         args: codexArgs(

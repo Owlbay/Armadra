@@ -13,6 +13,7 @@ import { configPath as codexConfigPath } from "./codex";
 import {
   HOOK_CLIENT_REVISION,
   INTEGRATION_REVISION,
+  MOD_REVISION,
   SKILLS_REVISION,
 } from "./events";
 import {
@@ -25,6 +26,7 @@ import {
   type IntegrationOptions,
   canvasAgentsOf,
   install,
+  modsState,
   prepareAtStartup,
   state,
   uninstall,
@@ -81,9 +83,9 @@ describe("the canvas integration", () => {
    * The composed revision is what makes hook and skill one switch: a change to
    * either half has to move it, or a stale artifact reads as current.
    */
-  it("carries both halves in the revision", () => {
+  it("carries every half in the revision", () => {
     expect(INTEGRATION_REVISION).toBe(
-      HOOK_CLIENT_REVISION * 100 + SKILLS_REVISION,
+      HOOK_CLIENT_REVISION * 10000 + MOD_REVISION * 100 + SKILLS_REVISION,
     );
   });
 
@@ -429,4 +431,78 @@ describe("canvasAgents", () => {
       });
     },
   );
+});
+
+describe("the Claude mod in the integration state (contract §57.5)", () => {
+  const windows = process.platform === "win32";
+
+  it("reports the gate, its reason and the hellos heard", () => {
+    const heard = [
+      {
+        nodeId: "node-1",
+        version: "2.1.293",
+        profile: "terminal" as const,
+        transport: "socket" as const,
+        reportedAt: "2026-10-10T00:00:00.000Z",
+      },
+    ];
+    const unknown = state("claude", {
+      ...options("claude"),
+      modSessions: () => [],
+    });
+    expect(unknown.mods).toEqual({
+      gate: "disabled",
+      reason: windows ? "windows_launcher" : "version_unknown",
+      minVersion: "2.1.293",
+      probedVersion: null,
+      sessions: [],
+    });
+    rememberProbe({
+      agentId: "claude",
+      launchCmd: "claude",
+      version: "2.1.293",
+      status: "ok",
+      probedAt: new Date().toISOString(),
+    });
+    const probed = state("claude", {
+      ...options("claude"),
+      modSessions: () => heard,
+    });
+    expect(probed.mods).toMatchObject({
+      gate: windows ? "disabled" : "enabled",
+      reason: windows ? "windows_launcher" : null,
+      probedVersion: "2.1.293",
+      sessions: heard,
+    });
+    expect(state("codex", options("codex")).mods).toBeUndefined();
+    expect(modsState("2.1.292", [], false)).toMatchObject({
+      gate: "disabled",
+      reason: "version_below_min",
+    });
+    expect(modsState("2.1.300", [], true).reason).toBe("windows_launcher");
+  });
+
+  it("rebuilds the mod folder at every start, and only the mod folder", () => {
+    prepareAtStartup(options("claude"));
+    const layout = artifactLayout(join(root, "data"), "claude");
+    const module = readFileSync(layout.modModule as string, "utf8");
+    // What Claude writes into a --plugin-dir at load (2.1.287–2.1.294).
+    const types = join(layout.modDir as string, ".claude-plugin", "types");
+    mkdirSync(types, { recursive: true });
+    writeFileSync(join(types, "index.d.ts"), "// tools\n");
+    writeFileSync(join(layout.modDir as string, "tsconfig.json"), "{}\n");
+    const skill = readFileSync(layout.skill, "utf8");
+    prepareAtStartup(options("claude"));
+    expect(existsSync(types)).toBe(false);
+    expect(existsSync(join(layout.modDir as string, "tsconfig.json"))).toBe(
+      false,
+    );
+    expect(readFileSync(layout.modModule as string, "utf8")).toBe(module);
+    expect(readFileSync(layout.skill, "utf8")).toBe(skill);
+    // Between starts a launch only byte-compares: Claude's files stay.
+    mkdirSync(types, { recursive: true });
+    install("claude", options("claude"));
+    expect(existsSync(types)).toBe(true);
+    expect(MOD_REVISION).toBeGreaterThan(0);
+  });
 });

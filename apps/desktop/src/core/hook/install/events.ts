@@ -21,18 +21,27 @@ export const HOOK_CLIENT_REVISION = 5;
 export const SKILLS_REVISION = 18;
 
 /**
+ * The revision of the Claude Code mod (`<data>/integration/claude/mod/`,
+ * contract §57): the generated hooks module, its manifest and the
+ * PermissionRequest-only settings beside it. Bump it whenever the generated
+ * source changes, so a launcher written for the old module is not trusted.
+ */
+export const MOD_REVISION = 1;
+
+/**
  * One number for "is this CLI integrated, and is it current" — the hook
- * revision and the skill revision folded together
- * (docs/design/agent-integration.md §2).
+ * revision, the mod revision and the skill revision folded together
+ * (docs/design/agent-integration.md §2, contract §57).
  *
- * Hook and skill are one install unit, so they have one staleness question.
- * The composition is positional rather than a sum so that a report can be read
- * back: `<hook>×100 + <skill>` names both halves, and either one moving moves
- * the whole. It is not a wire constant — nobody parses it apart — but a number
- * a person reading a bug report can decompose is worth the arithmetic.
+ * Hook, mod and skill are one install unit, so they have one staleness
+ * question. The composition is positional rather than a sum so that a report
+ * can be read back: `<hook>×10000 + <mod>×100 + <skill>` names all three
+ * halves (`50118` is hook 5, mod 1, skill 18), and any one moving moves the
+ * whole. It is not a wire constant — nobody parses it apart — but a number a
+ * person reading a bug report can decompose is worth the arithmetic.
  */
 export const INTEGRATION_REVISION =
-  HOOK_CLIENT_REVISION * 100 + SKILLS_REVISION;
+  HOOK_CLIENT_REVISION * 10000 + MOD_REVISION * 100 + SKILLS_REVISION;
 
 /** The substring that identifies a command as ours. */
 export const CLIENT_NAME = "armadra-hook";

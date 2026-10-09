@@ -475,3 +475,48 @@ test("an entry that needs WebKit is skipped with the install command when it is 
     remove();
   }
 });
+
+test("an entry that needs Claude Code is skipped with the reason when there is none", async () => {
+  const { root, remove } = fixture();
+  try {
+    const entries = [
+      {
+        id: "mod",
+        tier: "a",
+        script: "pass.mjs",
+        args: ["{out}"],
+        requires: ["claude"],
+        timeoutMinutes: 1,
+      },
+    ];
+    const without = await runTier({
+      tier: "a",
+      root,
+      out: join(root, "out-without"),
+      log: quiet,
+      env: { PATH: process.env.PATH },
+      probe: {
+        ...present,
+        claude: () => ({ reason: "no Claude Code ≥ 2.1.293" }),
+      },
+      manifest: { entries },
+    });
+    assert.equal(without.entries[0].status, "skipped");
+    assert.match(without.entries[0].reason, /2\.1\.293/);
+    const withIt = await runTier({
+      tier: "a",
+      root,
+      out: join(root, "out-with"),
+      log: quiet,
+      env: { PATH: process.env.PATH },
+      probe: {
+        ...present,
+        claude: () => ({ program: "/fake/claude", version: "2.1.293" }),
+      },
+      manifest: { entries },
+    });
+    assert.equal(withIt.entries[0].status, "passed");
+  } finally {
+    remove();
+  }
+});

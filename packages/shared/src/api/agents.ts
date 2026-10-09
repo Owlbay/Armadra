@@ -174,6 +174,35 @@ export const legacyIntegrationFindingSchema = z.object({
   detail: z.string(),
 });
 
+/** Why canvas launches of Claude start without the mod (契约 §57.5)。 */
+export const MOD_GATE_REASONS = [
+  "version_below_min",
+  "version_unknown",
+  "windows_launcher",
+  "remote_unprobed",
+] as const;
+
+/** One session whose mod said hello (`POST /node/mod`). */
+export const modSessionSchema = z.object({
+  nodeId: z.string(),
+  version: z.string(),
+  profile: z.enum(["terminal", "acp"]),
+  transport: z.enum(["socket", "tcp", "process"]),
+  reportedAt: z.string(),
+});
+
+/**
+ * `agents.integration.mods`（契约 §57.5）：门开没开、为什么、最低版本、探测到的
+ * 版本，以及这个 core 进程收到的 hello。只在内存里，core 重启后为空。
+ */
+export const integrationModsSchema = z.object({
+  gate: z.enum(["enabled", "disabled"]),
+  reason: z.enum(MOD_GATE_REASONS).nullable(),
+  minVersion: z.string(),
+  probedVersion: z.string().nullable(),
+  sessions: z.array(modSessionSchema).default([]),
+});
+
 /**
  * `GET /api/agents/{id}/integration`, and what install / uninstall answer with
  * (docs/design/agent-integration.md §5).
@@ -255,6 +284,8 @@ export const integrationStateSchema = z.looseObject({
   warning: z.string().optional(),
   /** 能不能在画布中创建 Agent（契约 §48，自 1.22 起）；旧 core 不带。 */
   canvasAgents: canvasAgentsSchema.optional(),
+  /** Claude 的 mod 门与本进程收到的 hello（契约 §57.5，自 1.29 起）；只有 claude 带。 */
+  mods: integrationModsSchema.optional(),
 });
 
 /**

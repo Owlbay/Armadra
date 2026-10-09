@@ -32,14 +32,14 @@ const coreEntry = join(repo, "apps/desktop/out/core/main.js");
 const require = createRequire(join(repo, "apps/desktop/package.json"));
 const { WebSocket } = require("ws");
 
-export async function startCore({ dataDir, port = 0 }) {
+export async function startCore({ dataDir, port = 0, env = {} }) {
   // 临时 HOME：core 与它起的 tmux 不读操作员的配置（`~/.tmux.conf`、CLI
-  // 登录状态）。随 core 退出删掉。
+  // 登录状态）。随 core 退出删掉。`env` 叠在最后（探针自己的键）。
   const home = probeHome("armadra-core-terminal-home-");
   const child = spawn(
     process.execPath,
     [coreEntry, "--listen", `tcp:127.0.0.1:${port}`, "--data-dir", dataDir],
-    { stdio: ["ignore", "pipe", "pipe"], env: isolatedEnv(home) },
+    { stdio: ["ignore", "pipe", "pipe"], env: isolatedEnv(home, env) },
   );
   child.once("exit", () => home.remove());
   let stderr = "";
@@ -69,6 +69,7 @@ export async function startCore({ dataDir, port = 0 }) {
   });
   return {
     child,
+    home: home.path,
     base: `http://${address}`,
     ws: `ws://${address}`,
     stderr: () => stderr,

@@ -1,4 +1,7 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { initializeContextSequence } from "../terminal/sequences";
 import { install as installSettings, settingsDomain } from "../settings";
 import { uuidV7 } from "../workspaces/support";
 import { type HookFixture, hookFixture, insertSession } from "./fixture";
@@ -660,3 +663,133 @@ describe("a report from another CLI than the node's", () => {
 });
 
 type AnyStatus = Record<string, unknown>;
+
+describe("a terminalBinding without a sourceRevision (contract §57.2)", () => {
+  const counter = (it_: HookFixture, sessionId: string, generation: number) => {
+    const bytes = readFileSync(
+      join(
+        it_.core.directory,
+        "context-sequences",
+        `${sessionId}-${generation}.seq`,
+      ),
+    );
+    return Number(bytes.readBigUInt64BE(0));
+  };
+
+  async function post(
+    it_: HookFixture,
+    terminalBinding: unknown,
+    payload: unknown = { hook_event_name: "Stop", session_id: "s-1" },
+    token: string | null = it_.service.issueNodeToken(it_.nodeId),
+  ) {
+    return it_.postHook(
+      "claude",
+      { nodeId: it_.nodeId, version: 1, payload, terminalBinding },
+      {
+        "x-armadra-hook-token": it_.bearer,
+        ...(token === null ? {} : { "x-armadra-node-token": token }),
+        "x-armadra-hook-client": "5",
+      },
+    );
+  }
+
+  function reports(it_: HookFixture): number[] {
+    return (
+      it_.core.database
+        .prepare(
+          "SELECT source_revision FROM run_reports WHERE node_id = ? ORDER BY source_revision",
+        )
+        .all(it_.nodeId) as { source_revision: number }[]
+    ).map((row) => Number(row.source_revision));
+  }
+
+  it("draws the next revision from the session's own counter, in order", async () => {
+    const it_ = fixture();
+    const sessionId = uuidV7();
+    insertSession(it_, { id: sessionId, status: "running", generation: 1 });
+    expect(
+      initializeContextSequence(
+        join(it_.core.directory, "context-sequences"),
+        sessionId,
+        1,
+      ),
+    ).toBe(true);
+    expect((await post(it_, { sessionId, generation: 1 })).status).toBe(204);
+    expect(counter(it_, sessionId, 1)).toBe(1);
+    expect(
+      (
+        await post(
+          it_,
+          { sessionId, generation: 1 },
+          { hook_event_name: "SessionStart", session_id: "s-1" },
+        )
+      ).status,
+    ).toBe(204);
+    expect(counter(it_, sessionId, 1)).toBe(2);
+    expect(reports(it_)).toEqual([1, 2]);
+    // A numbered client draws from the same counter and is read as before.
+    expect(
+      (
+        await post(
+          it_,
+          { sessionId, generation: 1, sourceRevision: "3" },
+          { hook_event_name: "Stop", session_id: "s-1" },
+        )
+      ).status,
+    ).toBe(204);
+    expect(reports(it_)).toEqual([1, 2, 3]);
+    expect(counter(it_, sessionId, 1)).toBe(2);
+    const bytes = readFileSync(
+      join(it_.core.directory, "context-sequences", `${sessionId}-1.seq`),
+    );
+    expect(bytes.length).toBe(16);
+    expect(bytes.readBigUInt64BE(8)).toBe(~2n & 0xffff_ffff_ffff_ffffn);
+  });
+
+  it("drops it for a session that is not the node's current one, or unverified", async () => {
+    const it_ = fixture();
+    const sessionId = uuidV7();
+    insertSession(it_, { id: sessionId, status: "exited", generation: 1 });
+    initializeContextSequence(
+      join(it_.core.directory, "context-sequences"),
+      sessionId,
+      1,
+    );
+    expect((await post(it_, { sessionId, generation: 1 })).status).toBe(204);
+    expect(it_.status()).toBeUndefined();
+    expect(counter(it_, sessionId, 1)).toBe(0);
+
+    const live = uuidV7();
+    insertSession(it_, { id: live, status: "running", generation: 1 });
+    initializeContextSequence(
+      join(it_.core.directory, "context-sequences"),
+      live,
+      1,
+    );
+    expect(
+      (await post(it_, { sessionId: live, generation: 1 }, undefined, null))
+        .status,
+    ).toBe(204);
+    expect(it_.status()).toBeUndefined();
+    expect(counter(it_, live, 1)).toBe(0);
+    // Another key, or a revision that is no string: a client we do not know.
+    expect(
+      (await post(it_, { sessionId: live, generation: 1, extra: 1 })).status,
+    ).toBe(204);
+    expect(
+      (await post(it_, { sessionId: live, generation: 1, sourceRevision: 4 }))
+        .status,
+    ).toBe(204);
+    expect(it_.status()).toBeUndefined();
+    expect(counter(it_, live, 1)).toBe(0);
+  });
+
+  it("keeps the report without a binding when there is no counter to draw from", async () => {
+    const it_ = fixture();
+    const sessionId = uuidV7();
+    insertSession(it_, { id: sessionId, status: "running", generation: 1 });
+    expect((await post(it_, { sessionId, generation: 1 })).status).toBe(204);
+    expect(it_.status()?.state).toBe("done");
+    expect(reports(it_)).toEqual([]);
+  });
+});

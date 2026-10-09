@@ -42,11 +42,11 @@ checkpoint 和质量门见[真实双 Agent 入口](../../docs/guides/local-cli-p
 
 按[补全架构](../../docs/design/completion-architecture.md) §12 分三档。A 档由 `tools/ci/e2e.mjs --tier a` 按 `tools/ci/e2e.d/` 的清单跑（一条一个文件 `<id>.json`，新增探针就新增一个文件）（[执行计划](../../docs/design/completion-plan.md) G0-4 建）；外部服务的替身来自 `tools/dev-stack/`，没有 Docker 时相关条目记 `skipped`。
 
-| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                                                                                                                                                                                                 | 何时跑                              | 失败时       |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |
-| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`core-terminal-program-status`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`overlay-safe-area`、`realtime-e2e`、`join-no-refresh`、`ws-mux-e2e`、`acp-e2e`、`push-e2e`、`workflow-e2e`、`agent-e2e-self-test`（场景 11 / 12 的 `--self-test`） | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
-| B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`terminal-memory`、`update-e2e`、`server-e2e --container`、`server-e2e --proxy=caddy`、`crash-report-e2e`、`mobile-shell-e2e`、`windows-acceptance`（windows runner 作业）                                                                                   | `nightly.yml`                       | 开 issue     |
-| C   | `agent-e2e`（真 CLI 与额度，`ARMADRA_E2E_REAL=1`，见「C 档运行手册」）、`canvas-stress`（真实会话）、`windows-acceptance`（Windows 真机）                                                                                                                                                                                              | 手动；清单在执行计划 §5             | 记进状态文档 |
+| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                                                                                                                                                                                                                                                                    | 何时跑                              | 失败时       |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |
+| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`core-terminal-program-status`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`overlay-safe-area`、`realtime-e2e`、`join-no-refresh`、`ws-mux-e2e`、`acp-e2e`、`push-e2e`、`workflow-e2e`、`agent-e2e-self-test`（场景 11 / 12 的 `--self-test`）、`claude-mod-launch`（要 Claude Code ≥ 2.1.293，没有时记 skipped） | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
+| B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`terminal-memory`、`update-e2e`、`server-e2e --container`、`server-e2e --proxy=caddy`、`crash-report-e2e`、`mobile-shell-e2e`、`windows-acceptance`（windows runner 作业）                                                                                                                                                      | `nightly.yml`                       | 开 issue     |
+| C   | `agent-e2e`（真 CLI 与额度，`ARMADRA_E2E_REAL=1`，见「C 档运行手册」）、`canvas-stress`（真实会话）、`windows-acceptance`（Windows 真机）                                                                                                                                                                                                                                                                 | 手动；清单在执行计划 §5             | 记进状态文档 |
 
 其余脚本（`browser-cdp`、`git-tool-window`、`forge-panel`、`connection-drag`、`canvas-tidy`、`browser-agent-e2e`、`timezone-picker`、`language-load`、`launch-concurrency`）是单项核验，本地按需手动跑；`relay-web-e2e` 要 armadra-cloud 的检出，也是本地手动跑（见「中继托管页面端到端」）。平台探针 `personal-roundtrip`、`multi-source`、`link-join`（A 档）与 `nat-core-offline`、`webkit-roundtrip`（B 档）同样要 armadra-cloud 的检出（CI 上记 skipped）；后两者与 `multi-source` 的中继在容器里（要 Docker），`pnpm platform:e2e` 一次跑完，共用件在 `platform-lib.mjs`。
 
@@ -602,3 +602,15 @@ pnpm --filter @armadra/mobile sync
 node tools/probes/mobile-shell-e2e.mjs --platform ios [--device "iPhone 16"|auto] [输出目录]
 node tools/probes/mobile-shell-e2e.mjs --platform android [输出目录]   # 模拟器已起、adb 看得到
 ```
+
+## Claude Code mod（契约 §57）
+
+`claude-mod-launch.mjs`：起临时 core（临时数据目录、临时 HOME 与 `CLAUDE_CONFIG_DIR`、`ARMADRA_NO_GLOBAL_WRITES=1`），把被测的 Claude Code 放在 core 的 `PATH` 最前面，等 core 自己的版本探测打开门、重新生成启动器，再在画布 Agent 终端里经 `run/claude` 跑 `claude -p`，模型是本机的假 Messages API（假 key，不登录任何账号）。断言 mod 的 hello、`hook` 来源的状态与 core 代分配的 `sourceRevision`；两个环境变量下启动器退回全套设置 hook 且没有 hello；手动起 mod 并关掉非必要网络时事件仍到达；有引擎自带类型时用它类型检查生成的模块；操作员自己的 `~/.claude/settings.json` 前后一致。Claude Code 取 `ARMADRA_CLAUDE_BIN`，否则 `PATH` 上的 `claude`，低于门槛时打印原因并以 0 退出。`--record-compat` 把通过的版本并进 `compatibility.json` 的 `claudeMods.verified`。
+
+```sh
+pnpm libs:build && pnpm --filter @armadra/desktop build
+npm install --prefix /tmp/claude-2.1.293 @anthropic-ai/claude-code@2.1.293   # 不动全局安装
+ARMADRA_CLAUDE_BIN=/tmp/claude-2.1.293/node_modules/.bin/claude node tools/probes/claude-mod-launch.mjs
+```
+
+core 单测里 `ARMADRA_CLAUDE_PROBE=1`（同样读 `ARMADRA_CLAUDE_BIN`）时额外跑引擎的 `claude plugin validate` 与 `claude plugin test`（`claude-mod/template.test.ts`）。

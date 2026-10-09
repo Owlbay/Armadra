@@ -39,6 +39,15 @@ export interface LauncherSpec {
   /** 启动器只给 CLI 进程设的变量（`canvasInjection` 答的 `env`）。 */
   readonly env: readonly (readonly [string, string])[];
   /**
+   * 环境分支（契约 §57）：节点环境里 `whenEnvAny` 任一个非空时改接 `args`。
+   * Claude 挂 mod 时用它在安全模式或关掉非必要网络时退回全套设置 hook。
+   * 缺席时没有这一段。
+   */
+  readonly fallback?: {
+    readonly whenEnvAny: readonly string[];
+    readonly args: readonly string[];
+  };
+  /**
    * 节点凭据（契约 §20.4）：节点终端环境里有 `ARMADRA_CREDENTIAL_REF` 时，启动器调
    * `client credential` 兑换，只认 `variables` 里的名字，在自己的进程里设好再
    * `exec`。缺席（执行主机那份）时不生成这一段。
@@ -167,6 +176,29 @@ function amaKeyLines(spec: LauncherSpec): string[] {
 }
 
 /**
+ * 环境分支那一段：变量名是我们的常量，逐个 `[ -n "${名:-}" ]`，任一成立就带
+ * 另一组字面 argv `exec`。同样没有 `eval`，值不进 argv。
+ */
+function fallbackLines(spec: LauncherSpec): string[] {
+  const fallback = spec.fallback;
+  if (fallback === undefined || fallback.whenEnvAny.length === 0) return [];
+  for (const name of fallback.whenEnvAny) {
+    if (!ENV_NAME.test(name)) {
+      throw new Error(`not an environment variable name: ${name}`);
+    }
+  }
+  const test = fallback.whenEnvAny
+    .map((name) => `[ -n "\${${name}:-}" ]`)
+    .join(" || ");
+  const tail = fallback.args.map((arg) => posixQuote(arg)).join(" ");
+  return [
+    `if ${test}; then`,
+    `  exec "$@"${tail === "" ? "" : ` ${tail}`}`,
+    "fi",
+  ];
+}
+
+/**
  * `run/<cli>` 的正文。
  *
  * 两个 `exec`，没有子进程：CLI 顶替启动器的 pid，进程树与直接起 CLI 一样。
@@ -185,6 +217,7 @@ export function posixLauncher(spec: LauncherSpec): string {
     ...exportLines(spec.env),
     ...credentialLines(spec),
     ...amaKeyLines(spec),
+    ...fallbackLines(spec),
     `exec "$@"${tail === "" ? "" : ` ${tail}`}`,
     "",
   ].join("\n");

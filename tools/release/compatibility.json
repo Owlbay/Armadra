@@ -1,5 +1,5 @@
 {
-  "$comment": "发布兼容范围的唯一来源，渲染进 Release 说明的 armadra-compatibility 围栏（docs/design/updates-and-service-install.md §1.4）。minimumInstalled 不得高于当前版本，由 tools/release/version.mjs check 锁定；桌面壳与服务器壳同版本发布，两者的版本一致性由同一条检查看住。acp 记各家 ACP 入口实跑验证过的版本区间（docs/design/acp-session-view.md §12），verified 为 null 表示还没有真跑记录（agent-e2e 场景 12 真跑通过后由 --record-compat 写入，只扩不缩）；它不进围栏，程序名与 apps/desktop/src/core/acp/adapters.ts 的表由 adapters.test.ts 对齐。 agent 是随桌面壳打包的 @armadra/agent 精确版本与适配器的宿主 API 版本（docs/design/coordinator-agent.md §2.6），同样不进围栏；version.mjs check 校验它与 apps/desktop/package.json、pnpm-lock.yaml 一致，升级是一次显式改动。platform 是 @armadra/platform-protocol 的精确版本、vendored tgz 及其 sha256 与两个镜像 tag（docs/design/platform/dev-stack-and-verification.md §1.3），同样不进围栏（已发布客户端严格解析围栏），由 version.mjs check 校验。mobile 是手机 / 平板 App 对所连主机的要求：App 有自己的版本线（apps/mobile/package.json），与桌面 / 服务器 core 是否兼容只看协议，minimumHostProtocol 是 App 内页面能用的最老 core 协议，页面副本在 apps/web/src/mobile/host-compatibility.ts，由 version.mjs mobile check 与 core 的 PROTOCOL_MAJOR / PROTOCOL_MINOR 对齐，同样不进围栏。",
+  "$comment": "发布兼容范围的唯一来源，渲染进 Release 说明的 armadra-compatibility 围栏（docs/design/updates-and-service-install.md §1.4）。minimumInstalled 不得高于当前版本，由 tools/release/version.mjs check 锁定；桌面壳与服务器壳同版本发布，两者的版本一致性由同一条检查看住。acp 记各家 ACP 入口实跑验证过的版本区间（docs/design/acp-session-view.md §12），verified 为 null 表示还没有真跑记录（agent-e2e 场景 12 真跑通过后由 --record-compat 写入，只扩不缩）；它不进围栏，程序名与 apps/desktop/src/core/acp/adapters.ts 的表由 adapters.test.ts 对齐。 agent 是随桌面壳打包的 @armadra/agent 精确版本与适配器的宿主 API 版本（docs/design/coordinator-agent.md §2.6），同样不进围栏；version.mjs check 校验它与 apps/desktop/package.json、pnpm-lock.yaml 一致，升级是一次显式改动。platform 是 @armadra/platform-protocol 的精确版本、vendored tgz 及其 sha256 与两个镜像 tag（docs/design/platform/dev-stack-and-verification.md §1.3），同样不进围栏（已发布客户端严格解析围栏），由 version.mjs check 校验。mobile 是手机 / 平板 App 对所连主机的要求：App 有自己的版本线（apps/mobile/package.json），与桌面 / 服务器 core 是否兼容只看协议，minimumHostProtocol 是 App 内页面能用的最老 core 协议，页面副本在 apps/web/src/mobile/host-compatibility.ts，由 version.mjs mobile check 与 core 的 PROTOCOL_MAJOR / PROTOCOL_MINOR 对齐，同样不进围栏。claudeMods 是 Claude Code mod 的版本门（契约 §57）：minVersion 与 core 的 CLAUDE_MODS_MIN 由 inject.test.ts 对齐，verified 是 tools/probes/claude-mod-launch.mjs --record-compat 真跑通过的区间（null 表示还没有，只扩不缩），同样不进围栏。",
   "minimumInstalled": "0.1.0",
   "acp": {
     "protocolVersion": 1,
@@ -36,6 +36,13 @@
         "program": "ama",
         "verified": null
       }
+    }
+  },
+  "claudeMods": {
+    "minVersion": "2.1.293",
+    "verified": {
+      "min": "2.1.293",
+      "max": "2.1.295"
     }
   },
   "agent": {

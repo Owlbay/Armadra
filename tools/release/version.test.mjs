@@ -33,10 +33,12 @@ import {
   normalize,
   normalizeAcp,
   normalizeAgentPin,
+  normalizeClaudeMods,
   normalizeMobile,
   normalizePlatformPin,
   readAcpCompatibility,
   readAgentPin,
+  readClaudeModsCompatibility,
   readCompatibility,
   readMobileCompatibility,
   readPlatformPin,
@@ -570,4 +572,29 @@ test("the mobile entry is strict and stays out of the fence", () => {
     }),
   );
   assert.deepEqual(Object.keys(fence), ["minimumInstalled"]);
+});
+
+test("the claudeMods key sits beside the fence, and only widens what it verified", () => {
+  assert.equal("claudeMods" in readCompatibility(), false);
+  assert.equal(readClaudeModsCompatibility().minVersion, "2.1.293");
+  assert.throws(
+    () => normalize({ minimumInstalled: "0.1.0", claudeMods: {} }),
+    /unknown compatibility key/,
+  );
+  assert.deepEqual(
+    normalizeClaudeMods({
+      minVersion: "2.1.293",
+      verified: { min: "2.1.293", max: "2.1.295" },
+    }),
+    { minVersion: "2.1.293", verified: { min: "2.1.293", max: "2.1.295" } },
+  );
+  for (const bad of [
+    null,
+    { minVersion: "x", verified: null },
+    { minVersion: "2.1.293", verified: { min: "2.1.200" } },
+    { minVersion: "2.1.293", verified: { min: "2.1.296", max: "2.1.293" } },
+    { minVersion: "2.1.293", verified: null, extra: 1 },
+  ]) {
+    assert.throws(() => normalizeClaudeMods(bad), JSON.stringify(bad));
+  }
 });
