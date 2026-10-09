@@ -3478,3 +3478,30 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - core：`host.ts` 的 `SESSION_NEW_TIMEOUT_MS`、`AcpStartPhase`、`AcpStartTimings`、`AcpPrestarted`、`callbackRelay`、`adapterStartOptions`、`negotiate`、`ACP_CLIENT_INFO`，`AcpStartOptions.{sessionTimeoutMs,prestarted,onPhase,onTimings}`；`prestart.ts` 的 `AcpPrestartPool`（`key / prestart / claim / dispose / killAllSync`）、`launchSignature`、`spawnPrestarted`、`AcpWarmer`、`bundledCli`、`programFingerprint`、`adapterPhases`、`setAcpWarmer`、`warmAfterInstall`；`acp/index.ts::acpPrestartPool()`。
 - 共享：`ACP_START_PHASES`、`acpStartPhaseSchema`、`acpStartingEventSchema`、`acpPrestartRequestSchema`。
 - 页面：`acpApi.prestart(workspaceId, agentId)`、`usePrestartOnOpen(agents)`。
+
+## nightly 37858782422 的三个失败作业（2026-10-09）
+
+做了什么：
+
+- **macOS 打包 `packaged-smoke`「Armadra serve 起来并打印配对链接」**（产品缺陷）：探针给 serve 的数据目录在 macOS 临时目录下，`<dataDir>/controller.sock` 105 字节，超出 `sun_path`（macOS 103、Linux 107 可用字节），`listen EINVAL` 让 `run()` 中途失败；失败路径先关了库，而终端启动对账、依赖与工作流扫描、ACP 空闲预热仍在跑，日志满是 `database is not open`，进程也不退出，探针等满 60 s。
+  - `controller/channel.ts`：路径放不下时改落 `<tmpdir>/armadra-ctl-<数据目录哈希16位>/c.sock`，目录须是本用户的真目录且 0700，socket 0600；客户端只从 `endpoints.json` 读地址，无需改动。
+  - `main.ts`：关停与启动失败走同一个 `teardown`——控制通道、运行、Gateway、中继、监听 → 各域经新增的 `CoreContext.onStop` 登记的收尾（逆序；一个失败记 warn 不拦后面）→ 实时板、语言服务 → 关库。登记的域：终端（等启动对账结束再 `shutdown`，对账期间开始关停就不再武装周期任务）、调度、依赖、工作流、资源、用量、模型目录、ACP（撤预热计时器、收预启动池）。
+- **iOS XCUITest**（用例没跟上，外加时序）：#205 把「安全」分区改名为「账号与安全」，OAuth 深链之后的断言找不到；开屏动画盖在页面上且按下即跳过，用例的第一下点按被吞掉，30fps 动画还让慢模拟器上的无障碍快照超时。Debug 构建认启动参数 `-ArmadraUITest`，在文档开始前把 `armadra.splash.shown` 记进 `sessionStorage`，用例都带这个参数；断言改认「账号与安全 / Account & security」。
+- **Android 插桩**：用例 a 在 CI 上报「Process crashed」，日志里 logcat 为空、插桩报告未上传，无法定位；本机 API 36 模拟器通过，分支上的 nightly 也通过（未改用例）。nightly 补传 `app/build/reports/androidTests/` 与 `outputs/androidTest-results/`（含逐条用例的 logcat），下次再崩能看到栈。
+
+实测（macOS arm64，基于 main 8049c762）：
+
+- 新增用例：`main.test.ts` 三条（启动失败先停域再关库、正常关停逆序且失败不拦、深数据目录照常起来并公布挪过去的地址；后者在修复前复现 `EINVAL`），`controller/channel.test.ts` 两条（路径选择、私有目录与权限）。
+- `pnpm libs:build && pnpm -r --if-present test`：web 4131、desktop 5395 / 67 跳、shared 380、server 98 / 4 跳、mobile 10、push-relay 9 全过；live 配置的 `passkey-cdp.live.integration.test.ts` 在本机失败，基线 8049c762 同样失败，与本改动无关。desktop / server typecheck、`pnpm check` 通过。
+- 本机 iOS 模拟器（Xcode 27、iPhone 18 Pro）跑 `mobile-shell-e2e --platform ios`：修复前两条都失败（点按被开屏吞掉；OAuth 后找不到「安全」），修复后两条通过；Android（API 36）通过。
+- 分支 nightly：见 PR。
+
+没做 / 偏离：
+
+- 身份私有通道 `core-control.sock` 的路径桌面壳是按数据目录推出来的，这次没有挪；超长时它照旧只记 warn、不拖垮 core。
+- Android 的 CI 崩溃没有根因，只补了诊断产物。
+
+接口：
+
+- core：`CoreContext.onStop?(stop)`（可选，只有 `run` 装配的 core 有）；`controllerSocketPath(dataDir)` 与 `maxSocketPath()` 导出。线上 JSON 形状不变。
+- iOS：Debug 构建的启动参数 `-ArmadraUITest`（只关开屏动画）。
