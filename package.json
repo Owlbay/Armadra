@@ -18,7 +18,7 @@
     "contract": "node tools/contract/generate.mjs",
     "contract:check": "node tools/contract/generate.mjs --check",
     "ci:workflows": "node tools/ci/validate-workflows.mjs",
-    "release:check": "node tools/release/version.mjs check",
+    "release:check": "node tools/release/version.mjs check && node tools/release/version.mjs mobile check",
     "notices": "node tools/notices.mjs",
     "notices:check": "node tools/notices.mjs --check",
     "release:dry-run": "node tools/release/dry-run.mjs",
