@@ -14,6 +14,7 @@ import {
   RENDER_BUDGET_RANGE,
   setRenderBudget as applyRenderBudget,
 } from "../terminal/render-budget";
+import { effectiveRenderBudget } from "../terminal/renderer-policy";
 import { syncNativeStatusBar } from "../mobile/status-bar";
 import { activeSourceId, scoped } from "../sources/scope";
 import {
@@ -618,7 +619,8 @@ export function useResolvedTheme(): ResolvedTheme {
  * App 挂一次；`sonner` 与 tokens.css 都盯着 `data-theme`。
  *
  * 渲染名额也在这里推给登记处（终端宿主设计 §7.1）：那是个模块级的单例，
- * 没有 React 状态，只能由这条「偏好 → 世界」的通路把当前值送过去。
+ * 没有 React 状态，只能由这条「偏好 → 世界」的通路把当前值送过去。`auto`
+ * 渲染器把上限压到 `AUTO_WEBGL_SLOTS`（`renderer-policy.ts`）。
  */
 export function syncDocumentPreferences(): () => void {
   const apply = () => {
@@ -629,7 +631,9 @@ export function syncDocumentPreferences(): () => void {
     root.style.colorScheme = resolved;
     syncNativeStatusBar(resolved);
     root.lang = state.locale;
-    applyRenderBudget(state.renderBudget);
+    applyRenderBudget(
+      effectiveRenderBudget(state.renderBudget, state.terminal.renderer),
+    );
   };
   apply();
   const unsubscribe = usePreferencesStore.subscribe(apply);

@@ -34,7 +34,6 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/ui/context-menu";
-import { loseWebglContexts } from "./render-budget";
 import { terminalAppearance } from "./surface/appearance";
 import { pasteIntoTerminal, writeClipboard } from "./surface/clipboard";
 import { useSurfaceRefs } from "./surface/refs";
@@ -47,6 +46,7 @@ import { useRenderBudget } from "./surface/use-render-budget";
 import { useHibernation } from "./surface/use-hibernation";
 import { useAdoptedSession, useTerminalSession } from "./surface/use-session";
 import { useTerminalTransport } from "./surface/use-transport";
+import { useLowZoom, useWebglRenderer } from "./surface/use-webgl";
 import { useXtermInstance } from "./surface/use-xterm";
 import type { ConnectionStatus, TerminalSurfaceProps } from "./surface/types";
 
@@ -129,9 +129,12 @@ function TerminalSurfaceImpl({
 
   /* ------------------------------ 视图状态 -------------------------------- */
 
+  const lowZoom = useLowZoom(preferences.repaintThrottle === "lowZoom");
   const {
     render,
     active,
+    writeThrough,
+    throttled,
     budgeted,
     setFocused,
     flushOutput,
@@ -144,10 +147,12 @@ function TerminalSurfaceImpl({
     pageVisible: lifecycle.pageVisible,
     detached,
     connection: status.connection,
-    webgl: preferences.webgl,
+    renderer: preferences.renderer,
+    repaintThrottle: preferences.repaintThrottle,
+    lowZoom,
   });
   refs.visibleRef.current = active;
-  refs.writeThroughRef.current = active;
+  refs.writeThroughRef.current = writeThrough;
 
   React.useEffect(() => {
     onStatusChange?.({ ...status, render });
@@ -179,61 +184,13 @@ function TerminalSurfaceImpl({
 
   /* ------------------------------ WebGL（可选） --------------------------- */
 
-  /**
-   * §18.2 规则 5：默认 DOM 渲染器（画布 CSS 缩放下文字始终清晰）。
-   * WebGL 是设置项，按需异步装；丢上下文就卸掉退回 DOM，不重建终端。
-   *
-   * addon 的挂载条件是**渲染名额**（设计 §7.1），不是 `active`：WebGL 上下文是
-   * 设备级的稀缺资源，浏览器给的数量有限，超了之后它会强制驱逐一个——表现是
-   * 某个终端毫无征兆地黑屏或画成 "lost context" 占位。名额由模块级协调器统一
-   * 发（`render-budget.ts`），离屏的持有者**继续暖着**，这样平移回来不用重建
-   * 渲染器；`active` 只管写穿与 fit，两件事分开。丢名额不动 `Terminal` 实例；
-   * 实例只在生命周期走到 `released` 时整块销毁（`use-lifecycle.ts`），PTY 不受影响。
-   *
-   * 丢上下文（休眠唤醒、GPU 进程重启）时除了卸 addon，还要**上报**：可见性一点
-   * 没变，没有这一声协调器不会知道，终端就无限期停在 DOM 渲染器上。
-   */
-  React.useEffect(() => {
-    const terminal = refs.terminalRef.current;
-    if (!terminal || !mounted || !preferences.webgl || !budgeted) return;
-    let addon: { dispose: () => void } | null = null;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const { WebglAddon } = await import("@xterm/addon-webgl");
-        if (cancelled) return;
-        const instance = new WebglAddon();
-        instance.onContextLoss(() => {
-          instance.dispose();
-          reportContextLoss();
-        });
-        terminal.loadAddon(instance);
-        addon = instance;
-      } catch {
-        // WebGL 不可用（软件渲染、驱动黑名单）：留在 DOM 渲染器上。
-      }
-    })();
-    return () => {
-      cancelled = true;
-      if (!addon) return;
-      // canvas 必须在 dispose **之前**抓：dispose 会把它们从 DOM 上摘掉。
-      const canvases = refs.containerRef.current?.querySelectorAll("canvas");
-      const held = canvases ? Array.from(canvases) : [];
-      // 这一句就是「字距散开」的源头：它跑在 cleanup 里，元素已被 React 摘掉，
-      // 新的 DOM 渲染器按 0 宽推字距。治它的门在 `useRefit`（`dom-spacing.ts`）。
-      addon.dispose();
-      // dispose 既不 GC 也不弄丢上下文，不补这一刀就会留下占着名额的僵尸。
-      loseWebglContexts(held);
-    };
-    // `generation`：显示层重建后要给新实例重新装 addon。
-  }, [
-    refs,
+  const webglActive = useWebglRenderer(refs, {
     mounted,
     generation,
-    preferences.webgl,
+    renderer: preferences.renderer,
     budgeted,
     reportContextLoss,
-  ]);
+  });
 
   /* ------------------------- 重新可见后补一次 fit ------------------------- */
 
@@ -337,6 +294,9 @@ function TerminalSurfaceImpl({
           // 知道。压力脚本与线上排查读的都是这一个属性。
           data-render={render}
           data-lifecycle={lifecycle.phase}
+          // 渲染器与限帧（性能设计 §2.5）：`auto` 下哪几个真的上了 WebGL，对照实验靠它数。
+          data-renderer={webglActive ? "webgl" : "dom"}
+          data-throttled={throttled ? "" : undefined}
           className="nodrag nowheel relative h-full w-full overflow-hidden bg-[var(--term-bg)]"
           onDragOver={(event) => {
             if (

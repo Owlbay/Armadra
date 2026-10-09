@@ -44,8 +44,9 @@ export interface RenderInputs {
   /** 持有一个渲染名额（见 `render-budget.ts`）。 */
   budgeted: boolean;
   /**
-   * 开着 WebGL 渲染器。名额只约束 WebGL 上下文；DOM 渲染器下没抢到名额的
-   * 可见终端也直写，不该因为名额被降成批写（性能设计 §2.4 B3）。
+   * 渲染器是纯 `webgl` 档（`rendererGatesRender`）。名额只约束 WebGL 上下文；
+   * DOM 与 `auto` 档下没抢到名额的可见终端也直写，不该因为名额被降成批写
+   * （性能设计 §2.4 B3、§2.5）。
    */
   webgl: boolean;
 }
