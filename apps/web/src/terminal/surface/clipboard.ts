@@ -37,11 +37,42 @@ export function writeClipboard(text: string | undefined | null): void {
   }
 }
 
-/** 右键菜单「粘贴」。xterm 的 `paste()` 自己处理括号粘贴。 */
+/** 剪贴板里的图片（`navigator.clipboard.read`）→ `File`；读不到答空。 */
+async function clipboardImages(): Promise<File[]> {
+  const read = navigator.clipboard?.read;
+  if (typeof read !== "function") return [];
+  const files: File[] = [];
+  try {
+    for (const item of await navigator.clipboard.read()) {
+      const type = item.types.find((entry) => entry.startsWith("image/"));
+      if (!type) continue;
+      const blob = await item.getType(type);
+      files.push(
+        new File([blob], `image.${type.slice(6).split("+")[0]}`, { type }),
+      );
+    }
+  } catch {
+    return [];
+  }
+  return files;
+}
+
+/**
+ * 右键菜单「粘贴」。xterm 的 `paste()` 自己处理括号粘贴。剪贴板里是图片时
+ * 交给 `pasteFiles`（上传再粘路径，契约 §55）。
+ */
 export async function pasteIntoTerminal(
   terminal: Terminal | null,
+  pasteFiles?: (files: readonly File[]) => void,
 ): Promise<void> {
   if (!terminal) return;
+  if (pasteFiles) {
+    const images = await clipboardImages();
+    if (images.length > 0) {
+      pasteFiles(images);
+      return;
+    }
+  }
   try {
     const text = await navigator.clipboard?.readText();
     if (text) terminal.paste(text);
