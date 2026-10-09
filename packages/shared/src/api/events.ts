@@ -28,6 +28,7 @@ import {
 import { boardCommentEventSchema } from "./realtime.js";
 import { resourceSnapshotSchema } from "./resources.js";
 import { sshPromptSchema } from "./ssh.js";
+import { programStatusSchema } from "./terminals.js";
 import {
   workflowDraftEventSchema,
   workflowGateEventSchema,
@@ -135,6 +136,16 @@ export const workspaceEventSchema = z.discriminatedUnion("type", [
     nodeId: z.string(),
     state: z.enum(["hibernated", "resuming", "running", "failed"]),
     reason: z.string().optional(),
+  }),
+  /**
+   * 终端程序自报的状态变了（契约 §53）。`status` 缺席：这个终端不再有记录。
+   * 每个会话最多 4 帧每秒；不进 outbox。
+   */
+  z.object({
+    type: z.literal("terminal.program"),
+    sessionId: z.string(),
+    nodeId: z.string().optional(),
+    status: programStatusSchema.optional(),
   }),
   z.object({
     type: z.literal("board.changed"),
@@ -350,6 +361,10 @@ export type CanvasPresenceEvent = Extract<
 export type TerminalLeaseEvent = Extract<
   WorkspaceEvent,
   { type: "terminal.lease" }
+>;
+export type TerminalProgramEvent = Extract<
+  WorkspaceEvent,
+  { type: "terminal.program" }
 >;
 export type TerminalHibernationEvent = Extract<
   WorkspaceEvent,

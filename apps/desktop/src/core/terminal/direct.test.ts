@@ -79,6 +79,26 @@ async function waitFor(
 const key = (): SessionKey => sessionKey("node-a");
 
 describeUnix("the direct backend", () => {
+  /** 契约 §53：没有任何附着时也能读到程序输出，并把查询的回应写回给它。 */
+  it("taps the program's output with nothing attached, and answers into its input", async () => {
+    backend = new DirectBackend();
+    const chunks: Buffer[] = [];
+    backend.programTap.subscribe((tapped, generation, chunk) => {
+      if (tapped === key() && generation === 1) chunks.push(chunk);
+    });
+    // 先报一条状态，再等一行输入，带个前缀打出来。
+    await backend.create(
+      spec("/bin/sh", [
+        "-c",
+        "printf '\\033]7501;state=working\\007'; IFS= read -r line; printf 'got:%s.' \"$line\"; sleep 5",
+      ]),
+    );
+    const read = () => Buffer.concat(chunks).toString("latin1");
+    await waitFor(read, "\u001b]7501;state=working\u0007");
+    await backend.programTap.answer(key(), Buffer.from("ok\r"));
+    await waitFor(read, "got:ok.");
+  });
+
   it("streams a real PTY's output to an attachment", async () => {
     backend = new DirectBackend();
     await backend.create(

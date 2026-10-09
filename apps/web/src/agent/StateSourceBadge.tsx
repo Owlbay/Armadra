@@ -19,18 +19,22 @@ import { useT } from "@/app/preferences-store";
  * 是实心的品牌色，猜测（observed）是空心的灰点——一眼就分得出「有人报过」
  * 和「我们自己看出来的」，说明留在悬停提示与无障碍名里。
  */
-const SOURCE_STYLES: Record<AgentStateSource, string> = {
+/** `program`：终端里的程序自报（契约 §53），和猜测一样只是提示。 */
+export type HeaderStateSource = AgentStateSource | "program";
+
+const SOURCE_STYLES: Record<HeaderStateSource, string> = {
   hook: "bg-[var(--brand)]",
   extension: "bg-[var(--brand)]",
   // ACP 会话由协议本身报回合，与上报同等（ACP 会话视图 §4.1）。
   acp: "bg-[var(--brand)]",
   observed: "border border-[var(--border-strong)] bg-transparent",
+  program: "border border-[var(--brand)] bg-transparent",
 };
 
 export function StateSourceBadge({
   source,
 }: {
-  source: AgentStateSource | undefined;
+  source: HeaderStateSource | undefined;
 }) {
   const t = useT();
   if (!source) return null;

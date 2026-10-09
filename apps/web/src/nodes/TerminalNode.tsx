@@ -36,11 +36,13 @@ import { PendingLaunchButton } from "@/agent/PendingLaunchButton";
 import { ManualRunButton } from "@/agent/ManualRunButton";
 import { StateSourceBadge } from "@/agent/StateSourceBadge";
 import { useSimpleMode } from "@/acp/simple-mode";
+import { useAgentStatus, useAgentStatusStore } from "@/agent/status-store";
 import {
-  agentHeaderState,
-  useAgentStatus,
-  useAgentStatusStore,
-} from "@/agent/status-store";
+  headerStateFor,
+  useProgramSeen,
+  useProgramStatus,
+  useProgramStatusStore,
+} from "@/agent/program-status-store";
 import {
   BELL_FLASH_MS,
   TerminalSurface,
@@ -77,6 +79,8 @@ const SessionView = React.lazy(() => import("@/acp/SessionView"));
 function markNodeRead(nodeId: string): void {
   const store = useAgentStatusStore.getState();
   if (store.statuses[scoped(nodeId)]?.unread) store.markRead(nodeId);
+  // 程序自报的 `done` / `error` 同理：看过就收起光晕（契约 §53）。
+  useProgramStatusStore.getState().markSeen(nodeId);
 }
 
 /**
@@ -95,6 +99,10 @@ export function TerminalNode({ id, node, selected, collapsed }: NodeBodyProps) {
       data.ssh.hostId)
     : null;
   const agentStatus = useAgentStatus(id);
+  // 终端程序自报的状态（契约 §53）。普通终端也有：一个跑部署脚本
+  // 的 shell 一样会停下来等人。
+  const programStatus = useProgramStatus(id);
+  const programSeen = useProgramSeen(id);
   // 节点体二选一（ACP 设计 §4.1）：头部、徽标、菜单两种驱动共用。
   const driver = driverOf(agent);
   const surfaceRef = React.useRef<TerminalSurfaceHandle>(null);
@@ -208,7 +216,13 @@ export function TerminalNode({ id, node, selected, collapsed }: NodeBodyProps) {
   // 没有在跑的 CLI，任何上报都是上一代的。
   const launchFailed =
     Boolean(agent) && driver === "terminal" && surface.launch === "failed";
-  const header = agent && !launchFailed ? agentHeaderState(agentStatus) : {};
+  // 合并规则在 `program-status-store.ts`：活的上报说了算，程序自报补进度；
+  // 没有上报时程序自报画节点头。
+  const header = launchFailed
+    ? {}
+    : headerStateFor(Boolean(agent), agentStatus, programStatus, programSeen);
+  const headerSource =
+    header.source === "program" ? "program" : agentStatus?.stateSource;
 
   // 审批答复是替 Agent 代答（设计 S5）：服务器壳上这块画布的 driver、以及
   // 终端是自己起的 operator 答得了（契约 §23），别人看得见「在等审批」，但不
@@ -564,17 +578,18 @@ export function TerminalNode({ id, node, selected, collapsed }: NodeBodyProps) {
             ? {
                 status: {
                   tone: header.pill.tone,
-                  label: t(header.pill.labelKey),
+                  label:
+                    header.progress === undefined
+                      ? t(header.pill.labelKey)
+                      : `${t(header.pill.labelKey)} ${t("agent.program.progress", { percent: header.progress })}`,
                 },
               }
             : {})}
         {...(header.glow ? { glow: header.glow } : {})}
         {...(approval ? { approval } : {})}
-        {...(agent && !exited && !simple
+        {...((agent || headerSource === "program") && !exited && !simple
           ? {
-              headerMark: (
-                <StateSourceBadge source={agentStatus?.stateSource} />
-              ),
+              headerMark: <StateSourceBadge source={headerSource} />,
             }
           : {})}
         // 简洁模式：头部只留状态胶囊与审批（ACP 设计 §8 第 3 条）。

@@ -407,4 +407,106 @@ describe.skipIf(!tmuxAvailable)("against a real tmux", () => {
     await backend.detach(key, phone.attachmentId);
     await backend.terminate(key, "session");
   }, 30_000);
+
+  /**
+   * 契约 §53：tmux 吞掉它不认识的 OSC，所以程序状态从 `pipe-pane` 读——没有
+   * 客户端挂着也读得到，裸序列与 DCS 透传包着的都在。
+   */
+  it("taps the pane's raw output, OSC 7501 included, with nobody attached", async () => {
+    const directory = tempDir();
+    const backend = new TmuxBackend({ dataDir: directory, version: "test" });
+    const key = sessionKey("program-tap");
+    const seen: Buffer[] = [];
+    backend.programTap.subscribe((tapped, generation, chunk) => {
+      if (tapped === key && generation === 1) seen.push(chunk);
+    });
+    const handle = await backend.create({
+      sessionKey: key,
+      workspaceId: "program-tap-workspace",
+      generation: 1,
+      cwd: directory,
+      shell: "/bin/sh",
+      args: [],
+      env: [],
+      size: { cols: 80, rows: 24 },
+    });
+    const name = handle.backendRef!;
+    const fifo = join(directory, "program-taps", `${name}.fifo`);
+    expect(statSync(fifo).isFIFO()).toBe(true);
+    expect(statSync(fifo).mode & 0o077).toBe(0);
+
+    const tmux = (...args: string[]) =>
+      execFileSync("tmux", ["-S", backend.socket, ...args], {
+        encoding: "utf8",
+        env: { ...process.env, PATH: agentPath(process.env) },
+      }).trim();
+    tmux(
+      "send-keys",
+      "-t",
+      name,
+      "printf '\\033]7501;state=working:progress=40\\033\\\\'; " +
+        "printf '\\033Ptmux;\\033\\033]7501;state=blocked\\033\\033\\\\\\033\\\\'; " +
+        "printf '\\033]9;4;1;55\\007'",
+      "Enter",
+    );
+    const text = () => Buffer.concat(seen).toString("latin1");
+    for (let tries = 0; tries < 50 && !text().includes("9;4;1;55"); tries += 1)
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(text()).toContain("\u001b]7501;state=working:progress=40\u001b\\");
+    expect(text()).toContain("\u001bPtmux;\u001b\u001b]7501;state=blocked");
+    expect(text()).toContain("\u001b]9;4;1;55\u0007");
+
+    // The answer goes into the pane as input, not as tmux keys.
+    tmux("send-keys", "-t", name, "cat -v", "Enter");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await backend.programTap.answer(key, Buffer.from("\u001b]7501;?\u001b\\"));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(tmux("capture-pane", "-p", "-t", name)).toContain("^[]7501;?^[\\");
+
+    await backend.terminate(key, "session");
+    expect(existsSync(fifo)).toBe(false);
+  }, 30_000);
+
+  it("re-taps a session it adopts after a restart", async () => {
+    const directory = tempDir();
+    const first = new TmuxBackend({ dataDir: directory, version: "test" });
+    const key = sessionKey("program-adopt");
+    const handle = await first.create({
+      sessionKey: key,
+      workspaceId: "program-adopt-workspace",
+      generation: 1,
+      cwd: directory,
+      shell: "/bin/sh",
+      args: [],
+      env: [],
+      size: { cols: 80, rows: 24 },
+    });
+    await first.detachAll();
+    const second = new TmuxBackend({ dataDir: directory, version: "test" });
+    const seen: Buffer[] = [];
+    second.programTap.subscribe((_key, _generation, chunk) => seen.push(chunk));
+    await second.adopt(key, handle.backendRef!, 1);
+    execFileSync(
+      "tmux",
+      [
+        "-S",
+        second.socket,
+        "send-keys",
+        "-t",
+        handle.backendRef!,
+        "printf '\\033]7501;state=done\\007'",
+        "Enter",
+      ],
+      { env: { ...process.env, PATH: agentPath(process.env) } },
+    );
+    const text = () => Buffer.concat(seen).toString("latin1");
+    for (
+      let tries = 0;
+      tries < 50 && !text().includes("state=done");
+      tries += 1
+    )
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(text()).toContain("\u001b]7501;state=done\u0007");
+    await second.terminate(key, "session");
+  }, 30_000);
 });

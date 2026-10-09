@@ -8,6 +8,7 @@ import {
   type BackendNotice,
   type BackendRef,
   type ForegroundInfo,
+  type ProgramTap,
   type SessionKey,
   type TerminalHandle,
   type TerminalSize,
@@ -175,6 +176,29 @@ class FakeBackend implements AdoptableBackend {
   async detachAll(): Promise<void> {
     this.calls.push("detachAll");
   }
+
+  private readonly programListeners: ((
+    key: SessionKey,
+    generation: number,
+    chunk: Buffer,
+  ) => void)[] = [];
+
+  readonly programTap: ProgramTap = {
+    subscribe: (listener) => {
+      this.programListeners.push(listener);
+    },
+    answer: async (key, bytes) => {
+      this.calls.push(
+        `answer:${key}:${JSON.stringify(bytes.toString("utf8"))}`,
+      );
+    },
+  };
+
+  /** What the program wrote, as the tap would hand it over. */
+  print(key: string, generation: number, text: string): void {
+    for (const listener of this.programListeners)
+      listener(key as SessionKey, generation, Buffer.from(text, "latin1"));
+  }
 }
 
 let open: Fixture | undefined;
@@ -191,6 +215,8 @@ interface Harness {
   advance: (ms: number) => void;
   /** 每一次租约换手，按发生顺序。 */
   leases: LeaseEvent[];
+  /** 契约 §53 的每一帧。 */
+  programs: { sessionId: string; nodeId: string | null; state?: string }[];
 }
 
 interface LeaseEvent {
@@ -221,10 +247,18 @@ function harness(
     Object.defineProperty(backend, "resizeViewer", { value: undefined });
   }
   const leases: LeaseEvent[] = [];
+  const programs: Harness["programs"] = [];
   const manager = new TerminalManager({
     database,
     backends: new Map([["tmux", backend]]),
     effective: "tmux",
+    onProgramStatus: (event) => {
+      programs.push({
+        sessionId: event.sessionId,
+        nodeId: event.nodeId,
+        ...(event.status === undefined ? {} : { state: event.status.state }),
+      });
+    },
     onLease: (event) => {
       leases.push({
         sessionId: event.sessionId,
@@ -242,6 +276,7 @@ function harness(
     backend,
     database,
     leases,
+    programs,
     advance: (ms) => {
       now += ms;
     },
@@ -500,6 +535,70 @@ describe("the sweep", () => {
     // No node at all, but the workspace is open and the row is this core's —
     // the policy needs *both* an old clock and nothing able to reach it.
     expect(await manager.sweep()).toEqual([session.id]);
+  });
+});
+
+describe("程序自报的状态（契约 §53）", () => {
+  it("turns the program's own reports into frames for its node", async () => {
+    const { manager, backend, programs } = harness();
+    const session = await spawn(manager, "node-a");
+    backend.print("node-a", 1, "\u001b]7501;state=working:app=make\u0007");
+    expect(programs).toEqual([
+      { sessionId: session.id, nodeId: "node-a", state: "working" },
+    ]);
+    expect(manager.programStatus(session.id)).toMatchObject({
+      state: "working",
+      app: "make",
+      source: "osc7501",
+    });
+  });
+
+  it("answers the feature query through the tap, not as a keystroke", async () => {
+    const { manager, backend } = harness();
+    await spawn(manager, "node-a");
+    backend.print("node-a", 1, "\u001b]7501;?\u001b\\\u001b[c");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(backend.calls).toContain(
+      `answer:node-a:${JSON.stringify("\u001b]7501;?\u001b\\")}`,
+    );
+    expect(backend.calls.some((call) => call.startsWith("input:"))).toBe(false);
+  });
+
+  it("ignores output from a generation the session moved past", async () => {
+    const { manager, backend, programs } = harness();
+    const session = await spawn(manager, "node-a");
+    await manager.recycle(session.id);
+    backend.print("node-a", 1, "\u001b]7501;state=blocked\u0007");
+    expect(programs).toEqual([]);
+    expect(manager.programStatus(session.id)).toBeUndefined();
+  });
+
+  it("drops the live records when the process exits", async () => {
+    const { manager, backend, programs } = harness();
+    const session = await spawn(manager, "node-a");
+    backend.print("node-a", 1, "\u001b]7501;state=blocked:kind=question\u0007");
+    backend.announce({
+      type: "exited",
+      key: "node-a" as SessionKey,
+      generation: 1,
+      exitCode: 0,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(programs.map((frame) => frame.state)).toEqual([
+      "blocked",
+      undefined,
+    ]);
+    expect(manager.programStatus(session.id)).toBeUndefined();
+  });
+
+  it("is never written to agent_status", async () => {
+    const { manager, backend, database } = harness();
+    await spawn(manager, "node-a");
+    backend.print("node-a", 1, "\u001b]7501;state=idle\u0007");
+    const rows = database
+      .prepare("SELECT COUNT(*) AS n FROM agent_status")
+      .get() as { n: number };
+    expect(rows.n).toBe(0);
   });
 });
 

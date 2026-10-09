@@ -40,6 +40,7 @@ import {
   type BackendCapabilities,
   type BackendKind,
   type BackendNotice,
+  type ProgramTap,
   type BackendRef,
   type ForegroundInfo,
   type SessionKey,
@@ -242,6 +243,11 @@ export class SshBackend implements TerminalBackend {
 
   notices(listener: (notice: BackendNotice) => void): void {
     this.options.inner.notices(listener);
+  }
+
+  /** The remote program's status arrives over ssh like any other output. */
+  get programTap(): ProgramTap | undefined {
+    return this.options.inner.programTap;
   }
 
   snapshot(key: SessionKey): string | undefined {

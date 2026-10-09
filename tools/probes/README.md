@@ -42,11 +42,11 @@ checkpoint 和质量门见[真实双 Agent 入口](../../docs/guides/local-cli-p
 
 按[补全架构](../../docs/design/completion-architecture.md) §12 分三档。A 档由 `tools/ci/e2e.mjs --tier a` 按 `tools/ci/e2e.d/` 的清单跑（一条一个文件 `<id>.json`，新增探针就新增一个文件）（[执行计划](../../docs/design/completion-plan.md) G0-4 建）；外部服务的替身来自 `tools/dev-stack/`，没有 Docker 时相关条目记 `skipped`。
 
-| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                                                                                                                                                                 | 何时跑                              | 失败时       |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- | ------------ |
-| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`overlay-safe-area`、`realtime-e2e`、`join-no-refresh`、`ws-mux-e2e`、`acp-e2e`、`push-e2e`、`workflow-e2e`、`agent-e2e-self-test`（场景 11 / 12 的 `--self-test`） | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
-| B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`server-e2e --container`、`server-e2e --proxy=caddy`、`crash-report-e2e`、`mobile-shell-e2e`、`windows-acceptance`（windows runner 作业）                                                                      | `nightly.yml`                       | 开 issue     |
-| C   | `agent-e2e`（真 CLI 与额度，`ARMADRA_E2E_REAL=1`，见「C 档运行手册」）、`canvas-stress`（真实会话）、`windows-acceptance`（Windows 真机）                                                                                                                                                              | 手动；清单在执行计划 §5             | 记进状态文档 |
+| 档  | 本目录的探针（计划中新增的见架构 §12）                                                                                                                                                                                                                                                                                                 | 何时跑                              | 失败时       |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------ |
+| A   | `server-e2e`、`ui-features-e2e`、`core-terminal-smoke`、`core-terminal-lifecycle`、`core-terminal-program-status`、`remote-e2e`、`gateway-e2e`、`design-showcase`、`overlay-safe-area`、`realtime-e2e`、`join-no-refresh`、`ws-mux-e2e`、`acp-e2e`、`push-e2e`、`workflow-e2e`、`agent-e2e-self-test`（场景 11 / 12 的 `--self-test`） | 每次 push（`ci.yml` 的 `e2e` 作业） | 阻断合并     |
+| B   | `packaged-smoke`、`deb-install`、`core-terminal-packaged`、`server-perf`、`update-e2e`、`server-e2e --container`、`server-e2e --proxy=caddy`、`crash-report-e2e`、`mobile-shell-e2e`、`windows-acceptance`（windows runner 作业）                                                                                                      | `nightly.yml`                       | 开 issue     |
+| C   | `agent-e2e`（真 CLI 与额度，`ARMADRA_E2E_REAL=1`，见「C 档运行手册」）、`canvas-stress`（真实会话）、`windows-acceptance`（Windows 真机）                                                                                                                                                                                              | 手动；清单在执行计划 §5             | 记进状态文档 |
 
 其余脚本（`browser-cdp`、`git-tool-window`、`forge-panel`、`connection-drag`、`canvas-tidy`、`browser-agent-e2e`、`timezone-picker`、`language-load`、`launch-concurrency`）是单项核验，本地按需手动跑；`relay-web-e2e` 要 armadra-cloud 的检出，也是本地手动跑（见「中继托管页面端到端」）。平台探针 `personal-roundtrip`、`multi-source`、`link-join`（A 档）与 `nat-core-offline`、`webkit-roundtrip`（B 档）同样要 armadra-cloud 的检出（CI 上记 skipped）；后两者与 `multi-source` 的中继在容器里（要 Docker），`pnpm platform:e2e` 一次跑完，共用件在 `platform-lib.mjs`。
 
@@ -201,13 +201,16 @@ pnpm --filter @armadra/desktop build                      # 产出 out/core/main
 
 node tools/probes/core-terminal-smoke.mjs                 # 建 / 附 / 打字 / 断 / 重附 / 销毁
 node tools/probes/core-terminal-lifecycle.mjs             # 会话的生命周期：退出、回收、重启后的对账
+node tools/probes/core-terminal-program-status.mjs        # 程序自报的状态：OSC 7501 / 9;4 → terminal.program
 node tools/probes/core-terminal-packaged.mjs              # 打包版，从页面开一个终端
 ```
 
 - **smoke**：起一个 core，开终端，打字看回显，关掉 WS 再开一次确认看得见刚才那屏（`sawEarlierOutput`），最后销毁会话；顺带验证不存在的会话在升级前就被 404 拒掉。
 - **packaged**：需要先 `pnpm --filter @armadra/desktop dist`（本机没有 `CSC_LINK` 时 `dist.mjs` 自动跳过签名与公证）。按访达的方式启动：`PATH` 只给 launchd 那条（`/usr/bin:/bin:/usr/sbin:/sbin`），数据目录用 `ARMADRA_DATA_DIR`、Chromium profile 用 `--user-data-dir`、`HOME` 都指到临时目录（HOME 也得临时：打包版的 core 启动时会迁走各 CLI 旧的全局安装、清掉上一版写进 `~/.codex/config.toml` 的会话级信任记录；画布内的 Codex 的信任记录在启动器的 `-c` 层里，不写进 `config.toml`），不碰操作员的 `~/Library/Application Support/Armadra`。本机装了 tmux（Homebrew 等常见位置）时，会话必须是 `tmux` 后端，资源采样（`GET …/resources`）也必须给出这个会话的 pid——两处各自找 tmux，都得用补过的 PATH。调试端口是运行时选的空闲端口，不是固定值：机器上另一个 Electron 占着固定端口时，探针会连上别人的渲染进程，失败起来和打包出错一模一样。
 
-三个脚本都用 `mktemp` 的数据目录与各自私有的 tmux socket，跑完 `kill-server` 并删掉目录；不碰操作者自己的数据目录或 tmux server。
+- **program-status**：tmux 与 direct 各一遍。终端里 `printf` OSC 7501 与 OSC 9;4，断言工作空间事件流上的 `terminal.program`；程序发 `OSC 7501 ; ?` 时读回 core 写进它输入的回应；tmux 那遍关掉终端的 socket 再用 tmux 的 `send-keys` 打字，证明没人看着时状态照样更新（契约 §53）。
+
+这些脚本都用 `mktemp` 的数据目录与各自私有的 tmux socket，跑完 `kill-server` 并删掉目录；不碰操作者自己的数据目录或 tmux server。
 
 ## 节点凭据端到端
 
