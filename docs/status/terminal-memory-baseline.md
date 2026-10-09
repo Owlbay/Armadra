@@ -1,6 +1,6 @@
 # 终端内存基线（桌面壳：10 个持续输出的终端）
 
-> 状态：**占位，待录**。探针与比对规则已就位；基线要在性能包 P1–P4（Runtime 采样异步 + 诊断接口、徽标可见性与内存压力、终端分阶段生命周期、渲染器策略）合入 `main` 之后，在 `main` 上连跑三次取中位数再写。录之前 `tools/probes/terminal-memory-baseline.json` 的 `platforms` 是空的，B 档只报告不判。
+> 状态：**占位，待录**。探针与比对规则已就位；基线要在性能包 P1–P4（Runtime 采样异步 + 诊断接口、徽标可见性与内存压力、终端分阶段生命周期、渲染器策略）合入 `main` 之后，在 macOS 与 Linux 的 GitHub 托管运行器上各跑三次夜间作业、取中位数再写（见 §4）。录之前 `tools/probes/terminal-memory-baseline.json` 的 `platforms` 是空的，B 档只报告不判。
 > 脚本：`tools/probes/terminal-memory.mjs`（用法见[探针说明](../../tools/probes/README.md)「终端内存基线」）；比对基线：`tools/probes/terminal-memory-baseline.json`；规则：`tools/probes/terminal-memory-lib.mjs` 的 `METRICS`。
 
 ## 1. 场景
@@ -43,12 +43,13 @@
 
 ## 4. 基线（三次与中位数）
 
-待录。录法：
+待录。基线在 GitHub 托管运行器上录（B 档就在那里比，开发机的负载与窗口状态不对口）：对要录的提交连跑三次夜间作业，从 `e2e-tier-b-macos` / `e2e-tier-b-linux` 产物里取 `terminal-memory/result.json`，每个平台合并一次：
 
 ```sh
-pnpm libs:build && pnpm --filter @armadra/desktop dist
-for i in 1 2 3; do node tools/probes/terminal-memory.mjs target/terminal-memory/run$i; done
-node tools/probes/terminal-memory.mjs --merge target/terminal-memory/run{1,2,3}/result.json --machine "机器与系统说明"
+gh workflow run nightly.yml --ref <分支>          # 跑三次，各记下 run id
+gh run download <run id> -n e2e-tier-b-macos -D runs/mac-1   # Linux 用 e2e-tier-b-linux
+node tools/probes/terminal-memory.mjs --merge runs/mac-{1,2,3}/terminal-memory/result.json --machine "GitHub Actions macos-14（arm64），nightly <run id…>"
+node tools/probes/terminal-memory.mjs --merge runs/linux-{1,2,3}/terminal-memory/result.json --machine "GitHub Actions ubuntu-22.04（x64），xvfb，nightly <run id…>"
 ```
 
 `--merge` 把三次的指标取中位数写进 `terminal-memory-baseline.json` 对应平台那一项；三次的原始数与中位数抄进本节。

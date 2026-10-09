@@ -3708,7 +3708,7 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 
 没做 / 偏离：
 
-- 基线没录：要等 P1–P4 合入后在 `main` 上连跑三次再 `--merge`，同步本节与基线文档。
+- 基线没录：要等 P1–P4 合入后，在 macOS 与 Linux 运行器上各跑三次夜间作业，从产物 `--merge`，同步本节与基线文档；不在开发机上录。
 - 多了一个文件 `tools/probes/terminal-memory-eld.cjs`（`--eld-preload` 的垫片），设计的文件边界里没列。
 - `--pressure` 依赖 P2 的 `window.__armadraMemoryPressure`，`--release-after` 写 P3 的 `armadra.terminal.releaseAfter`，渲染器同时写 P4 的 `armadra.terminal.renderer` 与旧的 `armadra.terminal.webgl`；这些包合入前探针只记录。
 - 打包产物这条路径（B 档用的）本机没跑，靠 nightly 验；GPU 列在 Linux 软件 GL 下只记录。
