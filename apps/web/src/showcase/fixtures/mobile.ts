@@ -1,3 +1,5 @@
+import type { ServiceRow } from "../../services/rows";
+
 /**
  * `mobile` 分区的假数据（设计展示页 §2.1，设计系统 §5.13）。纯值，无副作用。
  */
@@ -14,19 +16,30 @@ export const MOBILE_RELAY_FINGERPRINT =
 export const MOBILE_CONNECTIONS = [
   {
     sourceId: "a1b2c3d4e5f60718293a4b5c6d7e8f90",
-    label: "MacBook Pro",
-    host: MOBILE_RELAY_HOST,
-    direct: false,
-    relayed: true,
+    name: "MacBook Pro",
+    local: false,
+    routes: [
+      {
+        via: "relayed",
+        issuer: `https://${MOBILE_RELAY_HOST}`,
+        serviceName: MOBILE_RELAY_HOST,
+      },
+    ],
+    lastUsedAt: null,
   },
   {
     sourceId: "0f9e8d7c6b5a49382716f5e4d3c2b1a0",
-    label: "Studio",
-    host: "192.168.1.8:8443",
-    direct: true,
-    relayed: false,
+    name: "Studio",
+    local: false,
+    routes: [{ via: "direct", issuer: "", serviceName: "" }],
+    lastUsedAt: null,
   },
-] as const;
+] as const satisfies readonly ServiceRow[];
+/** 选择页的在线状态样本。 */
+export const MOBILE_CONNECTION_STATUSES = {
+  [MOBILE_CONNECTIONS[0].sourceId]: "online",
+  [MOBILE_CONNECTIONS[1].sourceId]: "offline",
+} as const;
 export const MOBILE_SOURCES = [
   {
     sourceId: MOBILE_CONNECTIONS[0].sourceId,

@@ -174,6 +174,15 @@ export const COMMANDS = [
     allowInTerminal: false,
     allowWhileTyping: false,
   },
+  // 切换服务（A7-1）：入口在设置的「服务」一组与命令面板，不预设键位。
+  {
+    id: "app.switchService",
+    labelKey: "cmd.app.switchService",
+    scope: "app",
+    defaultKeys: both(null),
+    allowInTerminal: false,
+    allowWhileTyping: false,
+  },
   {
     id: "app.quickOpen",
     labelKey: "cmd.app.quickOpen",

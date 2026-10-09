@@ -8,12 +8,34 @@ import {
 } from "@testing-library/react";
 
 import { usePreferencesStore } from "../app/preferences-store";
+import type { ServiceRow } from "../services/rows";
 import { ConnectScreen } from "./ConnectScreen";
 
 beforeEach(() => {
   usePreferencesStore.setState({ locale: "zh-CN" });
 });
 afterEach(cleanup);
+
+const RELAYED_ROW: ServiceRow = {
+  sourceId: "s1",
+  name: "MacBook",
+  local: false,
+  routes: [
+    {
+      via: "relayed",
+      issuer: "https://relay.example.com",
+      serviceName: "relay.example.com",
+    },
+  ],
+  lastUsedAt: null,
+};
+const DIRECT_ROW: ServiceRow = {
+  sourceId: "s2",
+  name: "192.168.1.8:8443",
+  local: false,
+  routes: [{ via: "direct", issuer: "", serviceName: "" }],
+  lastUsedAt: null,
+};
 
 describe("连接页 · 原生 App", () => {
   it("贴链接连接，失败时错误在输入框下面", async () => {
@@ -343,37 +365,86 @@ describe("连接页 · 多连接（添加连接）", () => {
       <ConnectScreen
         {...base}
         relay={outcomes()}
-        connections={[
-          {
-            sourceId: "s1",
-            label: "MacBook",
-            host: "relay.example.com",
-            direct: false,
-            relayed: true,
-          },
-          {
-            sourceId: "s2",
-            label: "",
-            host: "192.168.1.8:8443",
-            direct: true,
-            relayed: false,
-          },
-        ]}
+        connections={[RELAYED_ROW, DIRECT_ROW]}
         activeId="s1"
         onOpen={onOpen}
         onRemove={onRemove}
       />,
     );
     expect(screen.getByText("当前")).toBeTruthy();
-    fireEvent.click(screen.getByText("MacBook"));
-    expect(onOpen).toHaveBeenCalledWith("s1");
     fireEvent.click(screen.getByRole("button", { name: "移除 MacBook" }));
     expect(onRemove).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "移除连接" }));
     expect(onRemove).toHaveBeenCalledWith("s1");
+    fireEvent.click(screen.getByText("MacBook"));
+    expect(onOpen).toHaveBeenCalledWith("s1");
+    // 进入中（页面随即重载）整表不可点，免得连点两下。
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "移除 MacBook",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
     // 添加连接在列表下面。
     fireEvent.click(screen.getByRole("button", { name: "添加连接" }));
     expect(screen.getByRole("button", { name: "个人中转" })).toBeTruthy();
+  });
+
+  it("标题是「选择服务」，在线状态与到达方式在行上", () => {
+    render(
+      <ConnectScreen
+        {...base}
+        relay={outcomes()}
+        connections={[RELAYED_ROW, DIRECT_ROW]}
+        statuses={{ s1: "online", s2: "offline" }}
+        activeId="s1"
+      />,
+    );
+    expect(screen.getByRole("heading", { name: "选择服务" })).toBeTruthy();
+    expect(screen.getByText("在线")).toBeTruthy();
+    expect(screen.getByText("离线")).toBeTruthy();
+    expect(screen.getByText("经 relay.example.com")).toBeTruthy();
+    // 两组（中转、直连）各有组头。
+    expect(screen.getByText("中转 · relay.example.com")).toBeTruthy();
+    expect(screen.getByText("直连", { selector: "h3" })).toBeTruthy();
+  });
+
+  it("进不去的那一行：失败挂在它下面；经中继而需要重新登录时给「登录」", () => {
+    const relay = outcomes();
+    render(
+      <ConnectScreen
+        {...base}
+        relay={relay}
+        initialFailure="expired"
+        failedId="s1"
+        connections={[RELAYED_ROW, DIRECT_ROW]}
+        activeId="s1"
+      />,
+    );
+    const failure = document.querySelector('[data-service-failure="s1"]');
+    expect(failure?.textContent).toContain("配对链接已失效");
+    fireEvent.click(screen.getByRole("button", { name: "登录" }));
+    // 中转表单预填那个远程服务。
+    expect((screen.getByLabelText("地址") as HTMLInputElement).value).toBe(
+      "https://relay.example.com",
+    );
+  });
+
+  it("从画布回来的：「返回」回到当前那一个", () => {
+    const onOpen = vi.fn();
+    render(
+      <ConnectScreen
+        {...base}
+        relay={outcomes()}
+        connections={[RELAYED_ROW, DIRECT_ROW]}
+        activeId="s2"
+        manage
+        onOpen={onOpen}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "返回" }));
+    expect(onOpen).toHaveBeenCalledWith("s2");
   });
 
   it("选中的连接连不上：原因显示在列表上方，一动手就清掉", () => {
@@ -382,15 +453,7 @@ describe("连接页 · 多连接（添加连接）", () => {
         {...base}
         relay={outcomes()}
         initialFailure="offline"
-        connections={[
-          {
-            sourceId: "s1",
-            label: "MacBook",
-            host: "relay.example.com",
-            direct: false,
-            relayed: true,
-          },
-        ]}
+        connections={[RELAYED_ROW]}
         activeId="s1"
       />,
     );

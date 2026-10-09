@@ -27,6 +27,7 @@ import { isNativeAppPage } from "../api/runtime-url";
  * | `pushRotated()`                       | `{ rotated: boolean }`（推送令牌或 UnifiedPush 端点换过、还没重新登记） |
  * | `ackPushRotation()`                   | —（重新登记成功之后清掉上面那个标记）                |
  * | `openExternal({ url })`               | —（系统浏览器打开；只收 https / 回环 http）          |
+ * | `appInfo()`                           | `{ version, build }`（App 自己的版本名与构建号，取自安装包） |
  *
  * 事件（`addListener`）：`pushTokenRotated`——App 开着时令牌换了（Android
  * `onNewToken`、UnifiedPush 新端点、iOS 启动时 APNs 给了新令牌）。
@@ -77,6 +78,15 @@ export interface NativePushRegistration {
   readonly unifiedpush?: { readonly endpoint: string };
 }
 
+/**
+ * App 自己的版本（`CFBundleShortVersionString` / `versionName`）与构建号
+ * （`CFBundleVersion` / `versionCode`）。移动端有独立的版本线，与所连主机的版本无关。
+ */
+export interface NativeAppInfo {
+  readonly version: string;
+  readonly build: string;
+}
+
 export interface NativeBridge {
   /** 真在原生 App 里，且插件在。 */
   readonly available: boolean;
@@ -101,6 +111,8 @@ export interface NativeBridge {
   onPushRotated(listener: () => void): () => void;
   /** 用系统浏览器打开；打不开（没有插件方法、地址不对）是 `false`。 */
   openExternal(url: string): Promise<boolean>;
+  /** App 的版本与构建号；不在原生 App 里、或旧安装包没有这个方法是 `null`。 */
+  appInfo(): Promise<NativeAppInfo | null>;
 }
 
 interface PluginListenerHandle {
@@ -124,6 +136,7 @@ interface ArmadraNativePlugin {
   pushRotated?(): Promise<unknown>;
   ackPushRotation?(): Promise<unknown>;
   openExternal?(options: { url: string }): Promise<unknown>;
+  appInfo?(): Promise<unknown>;
   addListener?(
     event: string,
     listener: () => void,
@@ -275,6 +288,18 @@ function pushRegistration(value: unknown): NativePushRegistration | null {
   };
 }
 
+const APP_VERSION = /^\d+\.\d+\.\d+$/;
+const APP_BUILD = /^\d+(?:\.\d+){0,2}$/;
+
+function appInfo(value: unknown): NativeAppInfo | null {
+  if (!value || typeof value !== "object") return null;
+  const { version, build } = value as Record<string, unknown>;
+  if (typeof version !== "string" || !APP_VERSION.test(version)) return null;
+  const text = typeof build === "number" ? String(build) : build;
+  if (typeof text !== "string" || !APP_BUILD.test(text)) return null;
+  return { version, build: text };
+}
+
 /** 交给系统浏览器的地址：https，或回环上的 http（开发与 dev-stack）。 */
 export function externalUrl(value: string): boolean {
   try {
@@ -307,6 +332,7 @@ const WEB_BRIDGE: NativeBridge = {
   ackPushRotation: () => Promise.resolve(),
   onPushRotated: () => () => undefined,
   openExternal: () => Promise.resolve(false),
+  appInfo: () => Promise.resolve(null),
 };
 
 /**
@@ -429,6 +455,8 @@ export function nativeBridge(): NativeBridge {
             false,
           )
         : Promise.resolve(false),
+    appInfo: () =>
+      quiet(native.appInfo && (() => native.appInfo!()), appInfo, null),
   };
 }
 

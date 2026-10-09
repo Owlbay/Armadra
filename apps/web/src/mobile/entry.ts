@@ -22,6 +22,8 @@ import { mountSiblingSources } from "../sources/mounts";
 import { enterRoute, ticketWithRefresh } from "../sources/route-entry";
 import type { SourceDescriptor } from "../sources/types";
 import type { ConnectFailure } from "./ConnectScreen";
+import { usePreferencesStore } from "../app/preferences-store";
+import { recentIds, recordRecent, takeEnterIntent } from "../services/recent";
 import { activeConnection, loadConnections } from "./connections";
 import { setMobileRelayRoute } from "./relay-status";
 import { mobileCredentialProvider } from "./credentials";
@@ -74,6 +76,12 @@ export type Entry =
       readonly failure?: ConnectFailure;
       /** 从画布里点「连接」进来管理连接，不是启动时没得选。 */
       readonly manage?: boolean;
+      /** 启动落在「选择服务」（表非空、没开「启动直接进」，A7-1）。 */
+      readonly pick?: boolean;
+      /** 最近使用的 `sourceId`（新的在前，最多 3 个）。 */
+      readonly recent?: readonly string[];
+      /** 进不去的那一个：失败挂在它那一行下面。 */
+      readonly failedId?: string;
     }
   | {
       readonly kind: "connect";
@@ -236,6 +244,9 @@ async function enterConnection(descriptor: SourceDescriptor): Promise<Entry> {
       connections,
       activeId: descriptor.sourceId,
       failure: routeFailure(error),
+      failedId: descriptor.sourceId,
+      pick: true,
+      recent: recentIds(),
       ...(descriptor.baseUrl === "" ? {} : { origin: descriptor.baseUrl }),
     };
   }
@@ -249,6 +260,7 @@ async function enterConnection(descriptor: SourceDescriptor): Promise<Entry> {
       provider,
       cloudAuth: provider.cloudAuth,
     });
+    recordRecent(descriptor.sourceId);
     return { kind: "app" };
   }
   return {
@@ -257,8 +269,35 @@ async function enterConnection(descriptor: SourceDescriptor): Promise<Entry> {
     connections,
     activeId: descriptor.sourceId,
     failure: "expired",
+    failedId: descriptor.sourceId,
+    pick: true,
+    recent: recentIds(),
     ...(descriptor.baseUrl === "" ? {} : { origin: descriptor.baseUrl }),
   };
+}
+
+/**
+ * 表非空时启动直接进哪一个（多端入口设计 §1.2）；`null` 是落在选择页。
+ *
+ * - 选择页点了一行（进入意图，重载前记下）→ 那一个；
+ * - 通知要切到别的连接（`push-open.ts` 的 `switch`，地址带着 `#push=`）→ 当前；
+ * - 偏好「启动时直接进入上次的服务」开着 → 当前；
+ * - 其余 → 选择页。
+ */
+export function startupTarget(
+  connections: readonly SourceDescriptor[],
+  active: SourceDescriptor | null,
+  autoEnter: boolean = usePreferencesStore.getState().servicesAutoEnter,
+  hash: string = globalThis.location?.hash ?? "",
+): SourceDescriptor | null {
+  const intent = takeEnterIntent();
+  if (intent !== null) {
+    const chosen = connections.find((row) => row.sourceId === intent);
+    if (chosen !== undefined) return chosen;
+  }
+  if (active === null) return null;
+  if (hash.startsWith("#push=")) return active;
+  return autoEnter ? active : null;
 }
 
 /**
@@ -267,8 +306,9 @@ async function enterConnection(descriptor: SourceDescriptor): Promise<Entry> {
  *
  *  - **分享链接落地页**：远程服务托管的页面打开在 `/j/<linkId>` → 落地页。
  *
- *  - **原生 App**：带着配对深链（`#link=`）→ 连接页，链接预填；否则先装 Bearer
- *    传输，没有记下的 Gateway、或钥匙串里没有它的会话 → 连接页。
+ *  - **原生 App**：带着配对深链（`#link=`）→ 连接页，链接预填；连接表非空 →
+ *    「选择服务」（{@link startupTarget} 决定的几种情况直接进）；表是空的而记着
+ *    早先单连接的 Gateway → 装 Bearer 传输，钥匙串里没有它的会话 → 连接页。
  *  - **手机浏览器**：经 Gateway 打开、窄屏、地址栏带着 `#pair=` → 连接页。票
  *    留在地址栏里直到点「连接」：CA 引导的最后一步是「回到这一页刷新」，刷新
  *    之后还得配得上。没带票又没有会话 → 连接页的配对码（契约 §24）。宽屏照旧
@@ -297,12 +337,27 @@ export async function prepareEntry(): Promise<Entry> {
         link,
         ...(link.startsWith("armadra://join?") ? { join: true } : {}),
       };
-    // 从画布里点「连接」进来：回连接页管理（切换、添加、移除）。
+    // 从画布里点「切换服务」进来：回选择页（切换、添加、移除）。
     if (globalThis.location?.hash === "#connections") {
       history.replaceState(null, "", location.pathname + location.search);
-      return { kind: "connect", mode: "native", manage: true, ...known };
+      return {
+        kind: "connect",
+        mode: "native",
+        manage: true,
+        recent: recentIds(),
+        ...known,
+      };
     }
-    if (active !== null) return enterConnection(active);
+    const target = startupTarget(connections, active);
+    if (target !== null) return enterConnection(target);
+    if (active !== null)
+      return {
+        kind: "connect",
+        mode: "native",
+        pick: true,
+        recent: recentIds(),
+        ...known,
+      };
     if (origin === null) return { kind: "connect", mode: "native" };
     installTransport(origin);
     return (await restoreNativeCredentials())
