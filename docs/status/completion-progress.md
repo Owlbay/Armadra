@@ -3494,7 +3494,8 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - 新增用例：`main.test.ts` 三条（启动失败先停域再关库、正常关停逆序且失败不拦、深数据目录照常起来并公布挪过去的地址；后者在修复前复现 `EINVAL`），`controller/channel.test.ts` 两条（路径选择、私有目录与权限）。
 - `pnpm libs:build && pnpm -r --if-present test`：web 4131、desktop 5395 / 67 跳、shared 380、server 98 / 4 跳、mobile 10、push-relay 9 全过；live 配置的 `passkey-cdp.live.integration.test.ts` 在本机失败，基线 8049c762 同样失败，与本改动无关。desktop / server typecheck、`pnpm check` 通过。
 - 本机 iOS 模拟器（Xcode 27、iPhone 18 Pro）跑 `mobile-shell-e2e --platform ios`：修复前两条都失败（点按被开屏吞掉；OAuth 后找不到「安全」），修复后两条通过；Android（API 36）通过。
-- 分支 nightly：见 PR。
+- 分支 nightly 37882764862（ed31e6d2）：七个作业全绿，其中 macOS packaged-smoke 的 serve 五条、iOS 两条 XCUITest、Android 插桩都通过；常规 CI 37882759344 三平台与 e2e tier a 全绿。
+- 中途一次常规 CI 暴露关停后迟到的退出通知：终端域现在会在关停时 `shutdown`，直连会话被结束后才报退出，此时库已关，`markExited` 抛错成了未处理的拒绝（server `roles.integration`）。现在关停期间库还开着就照常记 `exited`（保留 `survival.test` 的约定），库已关就作罢；`manager.test.ts` 补一条。
 
 没做 / 偏离：
 
