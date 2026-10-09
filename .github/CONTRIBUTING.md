@@ -12,6 +12,15 @@ For the development setup, conventions and check commands, see [AGENTS.md](../AG
 - **不要贴凭据与终端原始输出**，日志只摘相关行并打码。 / **Never paste credentials or raw terminal output**; quote only relevant log lines, redacted.
 - 安全问题按 [SECURITY.md](SECURITY.md) 私下报告。 / Report security problems privately as described in [SECURITY.md](SECURITY.md).
 
+## 需求流程 / From request to merge
+
+所有需求与缺陷都走同一条线：issue → 设计 → PR → 合并。 / Every request and bug follows one path: issue → design → PR → merge.
+
+1. **建 issue / Open an issue**：把需求简单梳理成一个 issue（用对应表单，中英双语），一个 issue 只写一件事；大需求拆成多个 issue，用一个跟踪 issue 列出子项。标签 `needs-triage`。 / Distill the request into one issue per item using the matching form (bilingual); split large requests into child issues under a tracking issue. Label `needs-triage`.
+2. **补全与设计 / Refine and design**：在 issue 里补充现状（代码位置）、目标、范围、验收标准与设计方案；涉及接口、数据库、跨模块或界面结构的，写明契约节号、迁移编号、文件边界和拆包。设计定稿后改标签为 `ready`。 / In the issue, add the current state (code locations), goal, scope, acceptance criteria and the design; for interface, database, cross-module or UI-structure changes, state contract sections, migration numbers, file boundaries and work packages. Relabel `ready` once the design is settled.
+3. **PR 实现 / Implement in a PR**：每个包一个分支、一个 PR，正文按模板填写并写 `Closes #N`；按模块细分提交，带测试。 / One branch and one PR per package, filled in from the template with `Closes #N`; commit per module with its tests.
+4. **合并 / Merge**：CI 三平台与 e2e 全绿、检查清单满足后用 merge commit 合并，issue 随之关闭；有后续项就新开 issue 并在原 issue 留链接。 / Merge with a merge commit once CI (all platforms and e2e) is green and the checklist holds; the issue closes with it. Open new issues for follow-ups and link them from the original.
+
 ## 提交信息 / Commit messages
 
 格式为 `类型(范围): 描述`，描述用中文，说清行为变化而不只是改了哪个文件：
