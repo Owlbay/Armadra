@@ -62,10 +62,16 @@ const VALUES = [
 /** 注入的词：照 Codex 的形状，写在 `.launch` 里，不经任何 shell。 */
 const TOML =
   'hooks.SessionStart=[{hooks=[{type="command",command="C:\\\\Program Files\\\\armadra-hook.exe codex & 100% 画布"}]}]';
+/** 信任记录：键里是 Windows 的会话层路径，反斜杠与尖括号照原样。 */
+const STATE =
+  'hooks.state={"C:\\\\<session-flags>\\\\config.toml:session_start:0:0"={trusted_hash="sha256:00"}}';
 const INJECTED = [
-  "--dangerously-bypass-hook-trust",
+  "-c",
+  "features.daemon_auto_start=false",
   "-c",
   TOML,
+  "-c",
+  STATE,
   "-c",
   'developer_instructions="r16\\n%PATH% ^ | <x>"',
   "C:\\trailing\\",

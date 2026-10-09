@@ -139,7 +139,10 @@ describe("the canvas integration", () => {
     const codex = install("codex", options("codex"));
     expect(codex.hook.installed).toBe(true);
     expect(codex.hook.path).toBe(launcherPath(dataDir, "codex"));
-    expect(codex.launchArgs[0]).toBe("--dangerously-bypass-hook-trust");
+    expect(codex.launchArgs).not.toContain("--dangerously-bypass-hook-trust");
+    expect(codex.launchArgs.some((arg) => arg.startsWith("hooks.state="))).toBe(
+      true,
+    );
   });
 
   it.runIf(process.platform === "win32")(
@@ -161,7 +164,9 @@ describe("the canvas integration", () => {
     });
     const codex = install("codex", options("codex"));
     expect(codex.launcherWarning).toMatch(/0\.120\.0/);
-    expect(codex.launchArgs).not.toContain("--dangerously-bypass-hook-trust");
+    expect(codex.launchArgs.some((arg) => arg.startsWith("hooks."))).toBe(
+      false,
+    );
     expect(install("claude", options("claude")).launcherWarning).toBe(
       undefined,
     );

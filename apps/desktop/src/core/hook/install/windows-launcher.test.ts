@@ -33,15 +33,21 @@ const TOML =
   'hooks.SessionStart=[{hooks=[{type="command",command="C:\\\\Program Files\\\\armadra-hook.exe codex & 100% 画布"}]}]';
 const INSTRUCTIONS =
   'developer_instructions="[Armadra canvas rules r16]\\n规则"';
+/** The trust records: a Windows key with backslashes and angle brackets. */
+const STATE =
+  'hooks.state={"C:\\\\<session-flags>\\\\config.toml:session_start:0:0"={trusted_hash="sha256:00"}}';
 
 const CODEX = {
   agentId: "codex",
   args: [
-    "--dangerously-bypass-hook-trust",
     "-c",
     "check_for_update_on_startup=false",
     "-c",
+    "features.daemon_auto_start=false",
+    "-c",
     TOML,
+    "-c",
+    STATE,
     "-c",
     INSTRUCTIONS,
   ],
