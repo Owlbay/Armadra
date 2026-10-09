@@ -31,6 +31,8 @@ import { KeepAwake } from "./keep-awake";
 import { HostAwareResourceService } from "./hosts";
 import { ThresholdMonitor, ThresholdWatch } from "./thresholds";
 import { DEFAULT_MEMORY_WARN_BYTES } from "../settings/schema";
+import { RuntimeMetrics, type RuntimeReport } from "./metrics";
+import { SampleTimeout } from "./sample";
 import type { ResourceService, SubscribeRequest } from "./service";
 import {
   OrphanError,
@@ -62,8 +64,12 @@ export type { AdoptedSession, OrphanSession } from "./sessions";
 export interface ResourceDomain {
   readonly service: ResourceService;
   readonly power: PowerService;
+  /** Runtime 的健康数字（契约 §54）：事件循环延迟与采样计数。 */
+  runtime(): RuntimeReport;
   stop(): void;
 }
+
+export type { RuntimeReport } from "./metrics";
 
 let assembled: ResourceDomain | undefined;
 
@@ -112,8 +118,14 @@ export function install(context: CoreContext): ResourceDomain {
       ? value
       : DEFAULT_MEMORY_WARN_BYTES;
   };
+  // 事件循环延迟与采样计数（契约 §54）。只有数字；p99 连续偏高记一条 warn。
+  const metrics = new RuntimeMetrics((message, fields) =>
+    context.log.warn(message, fields),
+  );
+  metrics.eventLoop.enable();
   // 远端主机的总览与 SSH 会话的远端进程树叠在本机那一份上（`hosts.ts`）。
   const service = new HostAwareResourceService({
+    metrics,
     database: context.db.database,
     settings: settingsDomain()?.settings,
     bus: context.bus,
@@ -130,7 +142,8 @@ export function install(context: CoreContext): ResourceDomain {
   const watch = new ThresholdWatch({
     monitor: thresholds,
     workspaces: () => runningWorkspaces(context),
-    sample: (workspaceId) => service.snapshot(workspaceId).sessions,
+    sample: async (workspaceId) =>
+      (await service.snapshot(workspaceId)).sessions,
     threshold: memoryWarnBytes,
     wanted: () => pushRecipients(context),
     watched: (workspaceId) => service.watching(workspaceId),
@@ -144,12 +157,29 @@ export function install(context: CoreContext): ResourceDomain {
       ? undefined
       : coreError(404, "not_found", "This workspace does not exist");
 
-  router.handle("GET", "/api/workspaces/{workspaceId}/resources", (match) => {
-    const workspaceId = match.params.workspaceId ?? "";
-    const refusal = guard(workspaceId);
-    if (refusal !== undefined) return refusal;
-    return { status: 200, body: service.snapshot(workspaceId) };
-  });
+  router.handle(
+    "GET",
+    "/api/workspaces/{workspaceId}/resources",
+    async (match) => {
+      const workspaceId = match.params.workspaceId ?? "";
+      const refusal = guard(workspaceId);
+      if (refusal !== undefined) return refusal;
+      try {
+        // 搭正在进行（或刚完成）的那一轮，不另起 `ps`。
+        return { status: 200, body: await service.snapshot(workspaceId) };
+      } catch (error) {
+        if (error instanceof SampleTimeout) {
+          // 这一轮测不出来：答「暂时不可用」，而不是一张空表（契约 §54）。
+          return coreError(
+            503,
+            "resources_unavailable",
+            "Resource sampling did not finish in time",
+          );
+        }
+        throw error;
+      }
+    },
+  );
 
   router.handle(
     "POST",
@@ -301,8 +331,10 @@ export function install(context: CoreContext): ResourceDomain {
   assembled = {
     service,
     power,
+    runtime: () => metrics.report(service.effectiveInterval()),
     stop: () => {
       unsubscribe();
+      metrics.eventLoop.disable();
       watch.stop();
       keepAwake.stop();
       service.stop();

@@ -78,29 +78,52 @@ describe("越线判定", () => {
 });
 
 describe("没人看着时的那一轮", () => {
-  it("没有推送设备不采；页面开着的工作空间跳过；采不出来的不挡别的", () => {
+  it("没有推送设备不采；页面开着的工作空间跳过；采不出来的不挡别的", async () => {
     const { events, monitor } = collect();
     const sampled: string[] = [];
     let wanted = false;
     const watch = new ThresholdWatch({
       monitor,
       workspaces: () => ["w1", "w2", "w3"],
-      sample: (workspaceId) => {
+      sample: async (workspaceId) => {
         sampled.push(workspaceId);
-        if (workspaceId === "w2") throw new Error("ps failed");
+        if (workspaceId === "w2") throw new Error("ps timed out");
         return [session(3 * GIB)];
       },
       threshold: () => 2 * GIB,
       wanted: () => wanted,
       watched: (workspaceId) => workspaceId === "w3",
     });
-    expect(watch.check()).toBe(0);
+    expect(await watch.check()).toBe(0);
     expect(sampled).toEqual([]);
     wanted = true;
-    expect(watch.check()).toBe(1);
+    expect(await watch.check()).toBe(1);
     expect(sampled).toEqual(["w1", "w2"]);
     expect(events.map((item) => item.workspaceId)).toEqual(["w1"]);
     // 第二轮不重发。
-    expect(watch.check()).toBe(0);
+    expect(await watch.check()).toBe(0);
+  });
+
+  it("上一轮还没判完就不起下一轮", async () => {
+    const { monitor } = collect();
+    let release: (() => void) | undefined;
+    let calls = 0;
+    const watch = new ThresholdWatch({
+      monitor,
+      workspaces: () => ["w1"],
+      sample: () => {
+        calls += 1;
+        return new Promise((done) => {
+          release = () => done([session(1)]);
+        });
+      },
+      threshold: () => 2 * GIB,
+      wanted: () => true,
+    });
+    const first = watch.check();
+    expect(await watch.check()).toBe(0);
+    expect(calls).toBe(1);
+    release?.();
+    expect(await first).toBe(0);
   });
 });

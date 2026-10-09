@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,8 +12,10 @@ import {
   MAX_SUBSCRIPTIONS,
   MIN_SUBSCRIPTION_TTL_MS,
   ResourceService,
+  type ResourceServiceOptions,
 } from "./service";
-import { Sampler, type ProcessRow } from "./sample";
+import { Sampler, SampleTimeout, type ProcessRow } from "./sample";
+import { ProbeCache } from "./platform-probe";
 import {
   listOrphans,
   adoptOrphan,
@@ -92,6 +94,16 @@ function fixture(): Fixture {
       () => state.clock,
       () => new Map([[process.pid, row(process.pid)]]),
     ),
+    panes: async () => new Map(),
+    probes: {
+      pressure: async () => null,
+      power: async () => ({
+        source: null,
+        batteryPercent: null,
+        charging: null,
+      }),
+      swap: async () => ({ totalBytes: null, usedBytes: null }),
+    },
   });
   return state;
 }
@@ -208,8 +220,8 @@ describe("资源采样的订阅", () => {
     expect(state.service.watching(state.workspaceId)).toBe(false);
   });
 
-  it("快照带着这个工作空间的 id、主机那一段和电源策略", () => {
-    const snapshot = state.service.snapshot(state.workspaceId);
+  it("快照带着这个工作空间的 id、主机那一段和电源策略", async () => {
+    const snapshot = await state.service.snapshot(state.workspaceId);
     expect(snapshot.workspaceId).toBe(state.workspaceId);
     expect(snapshot.host.hostId).toBe("local");
     expect(snapshot.host.location).toBe("local");
@@ -221,6 +233,233 @@ describe("资源采样的订阅", () => {
     expect(snapshot.components.some((one) => one.kind === "runtime")).toBe(
       true,
     );
+  });
+});
+
+describe("一轮一张表：异步、超时、不叠加", () => {
+  interface Rig {
+    service: ResourceService;
+    readonly events: { workspaceId: string; event: WorkspaceEvent }[];
+    readonly workspaces: string[];
+    reads: number;
+    clock: number;
+    close(): void;
+  }
+
+  function rig(
+    read: () => Promise<Map<number, ProcessRow>>,
+    extra: Partial<ResourceServiceOptions> = {},
+  ): Rig {
+    const dataDir = mkdtempSync(join(tmpdir(), "armadra-rounds-"));
+    const db = openDatabase({
+      file: join(dataDir, "canvas.db"),
+      migrationsDir: resolve(here, "../db/migrations"),
+    });
+    const workspaces = ["一", "二"].map((name) => {
+      const rootPath = join(dataDir, name);
+      mkdirSync(rootPath);
+      return createWorkspace(db.database, { name, rootPath }).id;
+    });
+    const bus = new EventBus();
+    const events: { workspaceId: string; event: WorkspaceEvent }[] = [];
+    bus.on("workspace.event", (frame) => events.push(frame));
+    const state: Rig = {
+      service: undefined as unknown as ResourceService,
+      events,
+      workspaces,
+      reads: 0,
+      clock: 1_000_000,
+      close() {
+        state.service.stop();
+        db.close();
+        rmSync(dataDir, { recursive: true, force: true });
+      },
+    };
+    state.service = new ResourceService({
+      database: db.database,
+      settings: undefined,
+      bus,
+      dataDir,
+      now: () => state.clock,
+      audience: () => 1,
+      sampler: new Sampler(
+        () => state.clock,
+        () => {
+          state.reads += 1;
+          return read();
+        },
+      ),
+      panes: async () => new Map(),
+      probes: {
+        pressure: async () => null,
+        power: async () => ({
+          source: null,
+          batteryPercent: null,
+          charging: null,
+        }),
+        swap: async () => ({ totalBytes: null, usedBytes: null }),
+      },
+      ...extra,
+    });
+    return state;
+  }
+
+  const table = (cpuMs = 0) =>
+    new Map([[process.pid, { ...row(process.pid), cpuMs }]]);
+
+  let current: Rig | undefined;
+  afterEach(() => {
+    current?.close();
+    current = undefined;
+    vi.useRealTimers();
+  });
+
+  it("ps 挂住时循环不阻塞：超时计数、这一轮不发，下一拍照常再试", async () => {
+    vi.useFakeTimers();
+    current = rig(() => new Promise(() => {}));
+    const { service, workspaces } = current;
+    service.subscribe(workspaces[0]!, {});
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(current.reads).toBe(1);
+    expect(service.metrics.sampling.inFlight).toBe(true);
+    // 事件循环没被挂住：定时器照走，期限一到这一轮作废。
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(service.metrics.sampling.timeouts.ps).toBe(1);
+    expect(service.metrics.sampling.inFlight).toBe(false);
+    expect(current.events).toEqual([]);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(current.reads).toBe(2);
+    // GET 搭上这一轮挂住的读，同样在期限上答「超时」。
+    const answer = service.snapshot(workspaces[0]!);
+    const settled = expect(answer).rejects.toBeInstanceOf(SampleTimeout);
+    await vi.advanceTimersByTimeAsync(1_500);
+    await settled;
+    expect(service.metrics.sampling.timeouts.ps).toBe(2);
+  });
+
+  it("两个工作空间一拍只读一次表", async () => {
+    vi.useFakeTimers();
+    current = rig(async () => table());
+    const { service, workspaces } = current;
+    service.subscribe(workspaces[0]!, {});
+    service.subscribe(workspaces[1]!, {});
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(current.reads).toBe(1);
+    expect(current.events.map((one) => one.workspaceId).sort()).toEqual(
+      [...workspaces].sort(),
+    );
+    expect(service.metrics.sampling.rounds).toBe(1);
+  });
+
+  it("GET 搭正在进行的那一轮，不另起 ps；刚完成的也复用", async () => {
+    vi.useFakeTimers();
+    let release: ((value: Map<number, ProcessRow>) => void) | undefined;
+    current = rig(
+      () =>
+        new Promise((done) => {
+          release = done;
+        }),
+    );
+    const { service, workspaces } = current;
+    service.subscribe(workspaces[0]!, {});
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(current.reads).toBe(1);
+    const answer = service.snapshot(workspaces[1]!);
+    expect(current.reads).toBe(1);
+    release?.(table());
+    expect((await answer).workspaceId).toBe(workspaces[1]);
+    await service.snapshot(workspaces[0]!);
+    expect(current.reads).toBe(1);
+    // 过了复用期才另起一轮。
+    current.clock += 1_000;
+    const later = service.snapshot(workspaces[0]!);
+    expect(current.reads).toBe(2);
+    release?.(table());
+    await later;
+  });
+
+  it("上一拍还没走完（停掉又重起的循环）时跳过并计数", async () => {
+    vi.useFakeTimers();
+    current = rig(() => new Promise(() => {}), {
+      settings: {
+        get: (key: string) =>
+          key === "resources.intervalMs" ? 500 : undefined,
+      } as never,
+    });
+    const { service, workspaces } = current;
+    const first = service.subscribe(workspaces[0]!, { intervalMs: 500 });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(service.metrics.sampling.inFlight).toBe(true);
+    service.unsubscribe(first.subscriptionId);
+    service.stop();
+    service.subscribe(workspaces[0]!, { intervalMs: 500 });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(service.metrics.sampling.overlapsSkipped).toBe(1);
+    expect(current.reads).toBe(1);
+  });
+
+  it("多工作空间的 CPU% 用同一个 elapsedMs", async () => {
+    let cpu = 0;
+    current = rig(async () => table(cpu));
+    const { service, workspaces } = current;
+    await service.round(0);
+    current.clock += 2_000;
+    cpu = 400;
+    const sampled = await service.round(0);
+    const one = service.snapshotFrom(sampled, workspaces[0]!);
+    const two = service.snapshotFrom(sampled, workspaces[1]!);
+    expect(sampled.refresh.elapsedMs).toBe(2_000);
+    expect(one.host.cpuPercent).not.toBeNull();
+    expect(two.host.cpuPercent).toBe(one.host.cpuPercent);
+  });
+});
+
+describe("低频探针的缓存", () => {
+  it("TTL 内交出旧值不问；过期先交旧值、后台刷新", async () => {
+    let clock = 0;
+    let calls = 0;
+    const cache = new ProbeCache(() => clock);
+    const probe = async () => {
+      calls += 1;
+      return calls;
+    };
+    // 还没有值：交出 fallback，后台去问。
+    expect(cache.cached("p", 10_000, probe, 0)).toBe(0);
+    await cache.settled();
+    expect(cache.cached("p", 10_000, probe, 0)).toBe(1);
+    clock += 5_000;
+    expect(cache.cached("p", 10_000, probe, 0)).toBe(1);
+    expect(calls).toBe(1);
+    clock += 5_000;
+    expect(cache.cached("p", 10_000, probe, 0)).toBe(1);
+    expect(calls).toBe(2);
+    await cache.settled();
+    expect(cache.cached("p", 10_000, probe, 0)).toBe(2);
+  });
+
+  it("探针超时计数并留着旧值；同一时刻只有一个在问", async () => {
+    let clock = 0;
+    let timeouts = 0;
+    const cache = new ProbeCache(
+      () => clock,
+      () => {
+        timeouts += 1;
+      },
+    );
+    cache.cached("p", 1_000, async () => "ok", "none");
+    await cache.settled();
+    clock += 1_000;
+    let calls = 0;
+    const failing = async (): Promise<string> => {
+      calls += 1;
+      throw new SampleTimeout("probe");
+    };
+    expect(cache.cached("p", 1_000, failing, "none")).toBe("ok");
+    expect(cache.cached("p", 1_000, failing, "none")).toBe("ok");
+    expect(calls).toBe(1);
+    await cache.settled();
+    expect(timeouts).toBe(1);
+    expect(cache.cached("p", 1_000, failing, "none")).toBe("ok");
   });
 });
 
