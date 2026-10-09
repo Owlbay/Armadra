@@ -10,7 +10,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-import type { PowerSource } from "./sample";
+import { SampleTimeout, execFileText, type PowerSource } from "./sample";
 
 function run(tool: string, args: readonly string[]): string | undefined {
   try {
@@ -216,4 +216,127 @@ function linuxPowerSource(): PowerSource {
     batteryPercent,
     charging,
   };
+}
+
+/* ------------------------------- 异步与缓存 ------------------------------- */
+
+/** 采样循环里一个探针命令最多等多久。 */
+export const PROBE_TIMEOUT_MS = 2_000;
+
+async function runAsync(
+  tool: string,
+  args: readonly string[],
+): Promise<string | undefined> {
+  try {
+    return await execFileText(tool, args, {
+      timeoutMs: PROBE_TIMEOUT_MS,
+      source: "probe",
+    });
+  } catch (error) {
+    // 超时要让缓存知道（计数），别的失败就是「没有信号」。
+    if (error instanceof SampleTimeout) throw error;
+    return undefined;
+  }
+}
+
+/** {@link memoryPressure} 的异步版，给 core 的采样循环。 */
+export async function memoryPressureAsync(): Promise<string | null> {
+  if (process.platform !== "darwin") return null;
+  const output = await runAsync("sysctl", [
+    "-n",
+    "kern.memorystatus_vm_pressure_level",
+  ]);
+  if (output === undefined) return null;
+  return pressureLevelName(Number.parseInt(output.trim(), 10));
+}
+
+/** {@link swapUsage} 的异步版。 */
+export async function swapUsageAsync(): Promise<{
+  totalBytes: number | null;
+  usedBytes: number | null;
+}> {
+  if (process.platform === "darwin") {
+    const output = await runAsync("sysctl", ["-n", "vm.swapusage"]);
+    if (output === undefined) return { totalBytes: null, usedBytes: null };
+    return parseSwapUsage(output);
+  }
+  return swapUsage();
+}
+
+/** {@link powerSource} 的异步版。 */
+export async function powerSourceAsync(): Promise<PowerSource> {
+  if (process.platform === "darwin") {
+    const output = await runAsync("/usr/bin/pmset", ["-g", "batt"]);
+    return output === undefined ? UNKNOWN_POWER : parsePmset(output);
+  }
+  return powerSource();
+}
+
+/** 三个探针各自多久才值得再问一次。 */
+export const PROBE_TTL_MS = {
+  pressure: 10_000,
+  swap: 30_000,
+  power: 60_000,
+} as const;
+
+interface CachedProbe<T> {
+  value: T | undefined;
+  atMs: number;
+  refreshing: boolean;
+}
+
+/**
+ * 低频探针的缓存：过期时**先交出旧值并在后台刷新**，一轮采样永远不等探针。
+ * 还从来没有值时交出 `fallback`（测不到是 `null`），同样在后台去问。
+ */
+export class ProbeCache {
+  private readonly entries = new Map<string, CachedProbe<unknown>>();
+
+  constructor(
+    private readonly now: () => number = () => Date.now(),
+    /** 一次探针超时；采样指标据此计数。 */
+    private readonly onTimeout: () => void = () => {},
+  ) {}
+
+  cached<T>(
+    name: string,
+    ttlMs: number,
+    probe: () => Promise<T>,
+    fallback: T,
+  ): T {
+    let entry = this.entries.get(name) as CachedProbe<T> | undefined;
+    if (entry === undefined) {
+      entry = { value: undefined, atMs: 0, refreshing: false };
+      this.entries.set(name, entry as CachedProbe<unknown>);
+    }
+    const stale = entry.value === undefined || this.now() - entry.atMs >= ttlMs;
+    if (stale && !entry.refreshing) {
+      const target = entry;
+      target.refreshing = true;
+      void probe()
+        .then(
+          (value) => {
+            target.value = value;
+            target.atMs = this.now();
+          },
+          (error: unknown) => {
+            // 留着旧值；下一轮过期了再问。
+            if (error instanceof SampleTimeout) this.onTimeout();
+            target.atMs = this.now();
+          },
+        )
+        .finally(() => {
+          target.refreshing = false;
+        });
+    }
+    return entry.value ?? fallback;
+  }
+
+  /** 正在后台跑的探针都落地。只给测试与关闭用。 */
+  async settled(): Promise<void> {
+    for (let tries = 0; tries < 100; tries += 1) {
+      if (![...this.entries.values()].some((entry) => entry.refreshing)) return;
+      await new Promise((done) => setImmediate(done));
+    }
+  }
 }

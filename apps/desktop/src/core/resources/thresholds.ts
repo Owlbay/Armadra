@@ -99,8 +99,13 @@ export interface ThresholdWatchOptions {
   readonly monitor: ThresholdMonitor;
   /** 现在有活会话的工作空间。 */
   readonly workspaces: () => readonly string[];
-  /** 一个工作空间此刻的会话样本。 */
-  readonly sample: (workspaceId: string) => readonly SessionSample[];
+  /**
+   * 一个工作空间此刻的会话样本。异步：采样服务按一轮整机表算，这一轮的几个
+   * 工作空间搭同一轮（`ROUND_REUSE_MS`），不各跑一遍 `ps`。
+   */
+  readonly sample: (
+    workspaceId: string,
+  ) => Promise<readonly SessionSample[]> | readonly SessionSample[];
   readonly threshold: () => number;
   /**
    * 值不值得自己采：有设备登记了推送才采。没人收的提醒不值得每半分钟走一遍
@@ -115,13 +120,15 @@ export interface ThresholdWatchOptions {
 /** 没人看着时的那一轮。 */
 export class ThresholdWatch {
   private timer: NodeJS.Timeout | undefined;
+  /** 上一轮还没判完（一次很慢的采样）就不起下一轮。 */
+  private checking = false;
 
   constructor(private readonly options: ThresholdWatchOptions) {}
 
   start(): void {
     if (this.timer !== undefined) return;
     this.timer = setInterval(
-      () => this.check(),
+      () => void this.check(),
       this.options.intervalMs ?? WATCH_INTERVAL_MS,
     );
     this.timer.unref?.();
@@ -133,7 +140,9 @@ export class ThresholdWatch {
   }
 
   /** 采一轮、判一轮。返回这次新发了几条。 */
-  check(): number {
+  async check(): Promise<number> {
+    if (this.checking) return 0;
+    this.checking = true;
     let emitted = 0;
     try {
       if (!this.options.wanted()) return 0;
@@ -143,15 +152,17 @@ export class ThresholdWatch {
         try {
           emitted += this.options.monitor.observe(
             workspaceId,
-            this.options.sample(workspaceId),
+            await this.options.sample(workspaceId),
             threshold,
           );
         } catch {
-          // 一个工作空间采不出来不挡别的。
+          // 一个工作空间采不出来（含采样超时）不挡别的。
         }
       }
     } catch {
       // 判不了就等下一轮。
+    } finally {
+      this.checking = false;
     }
     return emitted;
   }

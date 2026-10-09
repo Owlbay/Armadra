@@ -275,6 +275,8 @@ describe("补全计划新面的 scope", () => {
     expect(selfGuarded("/api/mail/status")).toBe(true);
     expect(selfGuarded("/api/mail/password-reset")).toBe(true);
     expect(selfGuarded("/api/diagnostics/client-error")).toBe(true);
+    expect(selfGuarded("/api/diagnostics/runtime")).toBe(true);
+    expect(routeScope("GET", "/api/diagnostics/runtime")).toBeDefined();
     expect(selfGuarded("/api/diagnostics/client-error/x")).toBe(false);
     expect(permission("POST", "/api/mail/invitation")).toBe("identity:manage");
   });

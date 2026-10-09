@@ -33,7 +33,7 @@
  * 器在两种 core 下给出不同的数字，而这一轮要的是逐平台对照得上。
  */
 
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { statfsSync } from "node:fs";
 import {
   loadavg,
@@ -317,25 +317,137 @@ export function executableName(path: string): string {
   return base.replace(/\.exe$/i, "");
 }
 
-/** 一次全表读。Windows 上没有 `ps`，返回空表——每一项据此报 `null`。 */
-export function readProcessTable(): Map<number, ProcessRow> {
-  const table = new Map<number, ProcessRow>();
-  if (process.platform === "win32") return table;
-  let output: string;
-  try {
-    output = execFileSync(
-      "ps",
-      ["-Ao", "pid=,ppid=,rss=,time=,lstart=,state=,comm="],
-      { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 },
-    );
-  } catch {
-    return table;
+/** `ps` 的列：`lstart` 自己带空格，所以排在 `comm` 之前、按固定五个词切。 */
+const PS_ARGS = ["-Ao", "pid=,ppid=,rss=,time=,lstart=,state=,comm="];
+const PS_MAX_BUFFER = 32 * 1024 * 1024;
+
+/** 采样循环里一次 `ps` 最多等多久。本机约 750 个进程时 70–83 ms，这是它的 20 倍。 */
+export const PS_TIMEOUT_MS = 1_500;
+
+/**
+ * 一次采样里的某个外部命令没在期限内答完。调用方计数并**跳过这一轮**，而不是
+ * 拿一张空表去画一台什么都没有的机器。
+ */
+export class SampleTimeout extends Error {
+  constructor(readonly source: "ps" | "tmux" | "probe") {
+    super(`${source} did not answer in time`);
+    this.name = "SampleTimeout";
   }
+}
+
+/**
+ * 异步跑一个外部命令拿 stdout。超时用 `SIGKILL` 结束子进程并抛
+ * {@link SampleTimeout}；别的失败原样抛，由调用方决定那算不算「空」。
+ */
+export function execFileText(
+  tool: string,
+  args: readonly string[],
+  options: {
+    readonly timeoutMs: number;
+    readonly source: SampleTimeout["source"];
+    readonly maxBuffer?: number;
+    readonly env?: NodeJS.ProcessEnv;
+  },
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      tool,
+      [...args],
+      {
+        encoding: "utf8",
+        timeout: options.timeoutMs,
+        killSignal: "SIGKILL",
+        maxBuffer: options.maxBuffer ?? 1 << 20,
+        ...(options.env === undefined ? {} : { env: options.env }),
+      },
+      (error, stdout) => {
+        if (error === null) {
+          resolve(stdout);
+          return;
+        }
+        const killed = (error as { killed?: boolean }).killed === true;
+        reject(killed ? new SampleTimeout(options.source) : error);
+      },
+    );
+  });
+}
+
+/**
+ * 给一个不归自己管的异步读数加期限：注入的读取（测试、别的实现）不一定认超时，
+ * 循环不能因为它挂住而停。期限到了抛 {@link SampleTimeout}；原来那个 promise
+ * 之后再落地也没人看。
+ */
+export function deadline<T>(
+  work: Promise<T>,
+  ms: number,
+  source: SampleTimeout["source"],
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new SampleTimeout(source)), ms);
+    timer.unref?.();
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+/** `ps` 的输出 → 表。认不出来的行跳过。 */
+export function parseProcessTable(output: string): Map<number, ProcessRow> {
+  const table = new Map<number, ProcessRow>();
   for (const line of output.split("\n")) {
     const row = parseProcessRow(line);
     if (row !== undefined) table.set(row.pid, row);
   }
   return table;
+}
+
+/**
+ * 一次全表读，同步。Windows 上没有 `ps`，返回空表——每一项据此报 `null`。
+ *
+ * 只给不在 Runtime 主线程上的调用方（远端 worker 是另一个进程）；core 的采样
+ * 循环用 {@link readProcessTableAsync}。
+ */
+export function readProcessTable(): Map<number, ProcessRow> {
+  if (process.platform === "win32") return new Map();
+  let output: string;
+  try {
+    output = execFileSync("ps", PS_ARGS, {
+      encoding: "utf8",
+      maxBuffer: PS_MAX_BUFFER,
+    });
+  } catch {
+    return new Map();
+  }
+  return parseProcessTable(output);
+}
+
+/**
+ * 一次全表读，异步、有期限。超时抛 {@link SampleTimeout}（子进程被 `SIGKILL`）；
+ * 别的失败（没有 `ps`、Windows）是空表，和同步版一样。
+ */
+export async function readProcessTableAsync(
+  options: { readonly timeoutMs?: number } = {},
+): Promise<Map<number, ProcessRow>> {
+  if (process.platform === "win32") return new Map();
+  let output: string;
+  try {
+    output = await execFileText("ps", PS_ARGS, {
+      timeoutMs: options.timeoutMs ?? PS_TIMEOUT_MS,
+      source: "ps",
+      maxBuffer: PS_MAX_BUFFER,
+    });
+  } catch (error) {
+    if (error instanceof SampleTimeout) throw error;
+    return new Map();
+  }
+  return parseProcessTable(output);
 }
 
 /** 一次完整刷新：进程表、读它的时刻，以及上一次刷新留下的 CPU 基线。 */
@@ -348,6 +460,11 @@ export interface Refresh {
   readonly elapsedMs: number;
 }
 
+/** 读一张进程表：同步（远端 worker）或异步（core 的采样循环）。 */
+export type TableReader = () =>
+  | Map<number, ProcessRow>
+  | Promise<Map<number, ProcessRow>>;
+
 /**
  * 跨样本持有进程表与 CPU 基线。必须复用：每次都新建一个会让每一个 CPU 读数都是
  * `null`。
@@ -358,19 +475,48 @@ export class Sampler {
 
   constructor(
     private readonly now: () => number = () => Date.now(),
-    private readonly read: () => Map<number, ProcessRow> = readProcessTable,
+    private readonly read: TableReader = readProcessTable,
   ) {}
 
-  /** 刷新一次，并把上一次的表（如果还算数）一起交出去。 */
+  /**
+   * 同步刷新一次，并把上一次的表（如果还算数）一起交出去。读取必须是同步的
+   * （远端 worker 用的那条）；注入了异步读取的用 {@link refreshAsync}。
+   */
   refresh(): Refresh {
     const atMs = this.now();
+    const table = this.read();
+    if (table instanceof Promise) {
+      throw new TypeError(
+        "this sampler reads asynchronously; use refreshAsync",
+      );
+    }
+    return this.accept(table, atMs);
+  }
+
+  /**
+   * 异步刷新。基线时刻取**表读回来**的那一刻，不是发起的那一刻：`ps` 自己要跑
+   * 几十毫秒，按发起时刻算会把那段时间算进下一轮的分母。期限到了抛
+   * {@link SampleTimeout}，基线不动——下一轮仍按上一张成功的表算，过期由
+   * {@link MAX_CPU_BASELINE_AGE_MS} 处理。
+   */
+  async refreshAsync(timeoutMs = PS_TIMEOUT_MS): Promise<Refresh> {
+    let reading: Promise<Map<number, ProcessRow>>;
+    try {
+      reading = Promise.resolve(this.read());
+    } catch (error) {
+      reading = Promise.reject(error);
+    }
+    const table = await deadline(reading, timeoutMs, "ps");
+    return this.accept(table, this.now());
+  }
+
+  private accept(table: Map<number, ProcessRow>, atMs: number): Refresh {
     const elapsedMs = atMs - this.previousAtMs;
     const fresh =
       this.previous !== undefined &&
       elapsedMs > 0 &&
       elapsedMs <= MAX_CPU_BASELINE_AGE_MS;
     const previous = fresh ? this.previous : undefined;
-    const table = this.read();
     this.previous = table;
     this.previousAtMs = atMs;
     return {

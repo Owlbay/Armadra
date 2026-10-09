@@ -7,8 +7,9 @@
  * 远端主机，总览来自那台主机上一轮的读取（`remote.ts`）。读不到的主机照样列出，
  * 各项为 `null`——面板上是破折号，不是一台空闲的机器。
  *
- * 做成子类而不是改 `ResourceService.snapshot`：订阅、推送节奏与壳进程计量都不必
- * 知道远端的存在，采样循环调的 `snapshot` 就是这里覆盖的这个。
+ * 做成子类而不是改 `ResourceService.snapshotFrom`：订阅、推送节奏与壳进程计量都
+ * 不必知道远端的存在，采样循环调的 `snapshotFrom` 就是这里覆盖的这个（纯计算，
+ * 远端的数字来自那台主机上一轮的读取，不在这一轮的关键路径上）。
  */
 
 import type { DatabaseSync } from "node:sqlite";
@@ -19,6 +20,7 @@ import {
   ResourceService,
   type ResourceServiceOptions,
   type ResourceSnapshot,
+  type SampleRound,
 } from "./service";
 import { executionHostOf } from "./sessions";
 
@@ -59,8 +61,15 @@ export class HostAwareResourceService extends ResourceService {
     this.database = options.database;
   }
 
-  override snapshot(workspaceId: string): HostAwareSnapshot {
-    const base = super.snapshot(workspaceId);
+  override async snapshot(workspaceId: string): Promise<HostAwareSnapshot> {
+    return this.snapshotFrom(await this.round(), workspaceId);
+  }
+
+  override snapshotFrom(
+    sampled: SampleRound,
+    workspaceId: string,
+  ): HostAwareSnapshot {
+    const base = super.snapshotFrom(sampled, workspaceId);
     const hostIds = new Set<string>();
     const bound = executionHostOf(this.database, workspaceId);
     if (bound !== "") hostIds.add(bound);

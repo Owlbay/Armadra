@@ -6,6 +6,8 @@
  * 按后端各跑一遍：在终端里 `printf` OSC 7501 / OSC 9;4，断言工作空间事件流上
  * 出现对应的 `terminal.program` 帧。
  *
+ * 终端以 Agent 终端开（tmux 只给 Agent 会话开 tap，契约 §54）。
+ *
  * - tmux：序列被 tmux 吞掉，靠 `pipe-pane` 读到；关掉终端的 socket 之后再用
  *   tmux 自己的 `send-keys` 打字，证明没有人看着的时候状态照样更新。程序发
  *   `OSC 7501 ; ?`，core 把回应写进它的输入。
@@ -14,6 +16,7 @@
  * 用法：`node tools/probes/core-terminal-program-status.mjs [--backend tmux|direct]`
  */
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -74,6 +77,18 @@ function eventsSocket(ws) {
   };
 }
 
+/**
+ * 一个 Agent 终端：tmux 后端只给 Agent 会话开程序状态的 tap（契约 §54）。节点
+ * 不必在画布上；`/bin/sh` 照样是 shell，只是带上了 Agent 的环境变量。
+ */
+const agentTerminal = (dataDir) => ({
+  workspaceId: WORKSPACE,
+  cwd: dataDir,
+  shell: "/bin/sh",
+  nodeId: randomUUID(),
+  agent: { id: "claude" },
+});
+
 const programFrame = (sessionId, check) => (frame) =>
   frame.type === "terminal.program" &&
   frame.sessionId === sessionId &&
@@ -98,11 +113,7 @@ async function runBackend(backend) {
     const created = await fetch(`${core.base}/api/terminals`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        workspaceId: WORKSPACE,
-        cwd: dataDir,
-        shell: "/bin/sh",
-      }),
+      body: JSON.stringify(agentTerminal(dataDir)),
     });
     const session = await created.json();
     assert(created.ok, `create failed: ${JSON.stringify(session)}`);
@@ -210,11 +221,7 @@ async function runBackend(backend) {
     const second = await fetch(`${core.base}/api/terminals`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        workspaceId: WORKSPACE,
-        cwd: dataDir,
-        shell: "/bin/sh",
-      }),
+      body: JSON.stringify(agentTerminal(dataDir)),
     }).then((answer) => answer.json());
     const progressSocket = openSocket(core.ws, second.id);
     const progressFrames = collect(progressSocket);

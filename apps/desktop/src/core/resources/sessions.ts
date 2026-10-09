@@ -23,7 +23,12 @@ import { agentPath } from "../terminal/environment";
 import type { DatabaseSync } from "node:sqlite";
 
 import { remoteResources } from "./remote";
-import { isRemoteExecutable, type SessionTarget } from "./sample";
+import {
+  SampleTimeout,
+  execFileText,
+  isRemoteExecutable,
+  type SessionTarget,
+} from "./sample";
 
 /** `terminal_sessions` 里一行的样子，只取采样要用的列。 */
 interface SessionRow {
@@ -107,35 +112,14 @@ export function tmuxEnvironment(
   return { ...ambient, PATH: agentPath(ambient) };
 }
 
-/** tmux 会话名 → pane pid。tmux 不在就是空表。 */
-export function panePids(
-  dataDir?: string,
-  ambient: NodeJS.ProcessEnv = process.env,
-): Map<string, number> {
+const PANE_FORMAT = "#{session_name} #{pane_pid}";
+
+/** 采样循环里一次 `tmux list-panes` 最多等多久。 */
+export const TMUX_TIMEOUT_MS = 1_500;
+
+/** `list-panes -a` 的输出 → 会话名 → 领头 pane 的 pid。 */
+export function parsePanePids(output: string): Map<string, number> {
   const pids = new Map<string, number>();
-  if (process.platform === "win32") return pids;
-  let output: string;
-  try {
-    output = execFileSync(
-      "tmux",
-      [
-        ...tmuxServerArgs(dataDir),
-        "list-panes",
-        "-a",
-        "-F",
-        "#{session_name} #{pane_pid}",
-      ],
-      {
-        encoding: "utf8",
-        maxBuffer: 4 * 1024 * 1024,
-        stdio: ["ignore", "pipe", "ignore"],
-        env: tmuxEnvironment(ambient),
-      },
-    );
-  } catch {
-    // 「没有服务器在跑」是空的情况，不是失败。
-    return pids;
-  }
   for (const line of output.split("\n")) {
     const [name, raw] = line.trim().split(/\s+/);
     if (name === undefined || raw === undefined) continue;
@@ -146,6 +130,66 @@ export function panePids(
     }
   }
   return pids;
+}
+
+/**
+ * tmux 会话名 → pane pid，同步。tmux 不在就是空表。
+ *
+ * 只给一次性的动作（终止孤立会话）；采样循环用 {@link panePidsAsync}。
+ */
+export function panePids(
+  dataDir?: string,
+  ambient: NodeJS.ProcessEnv = process.env,
+): Map<string, number> {
+  if (process.platform === "win32") return new Map();
+  let output: string;
+  try {
+    output = execFileSync(
+      "tmux",
+      [...tmuxServerArgs(dataDir), "list-panes", "-a", "-F", PANE_FORMAT],
+      {
+        encoding: "utf8",
+        maxBuffer: 4 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "ignore"],
+        env: tmuxEnvironment(ambient),
+        timeout: TMUX_TIMEOUT_MS,
+        killSignal: "SIGKILL",
+      },
+    );
+  } catch {
+    // 「没有服务器在跑」是空的情况，不是失败。
+    return new Map();
+  }
+  return parsePanePids(output);
+}
+
+/**
+ * 同 {@link panePids}，异步、有期限：超时抛 {@link SampleTimeout}（`tmux`），
+ * 「没有服务器在跑」仍是空表。
+ */
+export async function panePidsAsync(
+  dataDir?: string,
+  ambient: NodeJS.ProcessEnv = process.env,
+  timeoutMs = TMUX_TIMEOUT_MS,
+): Promise<Map<string, number>> {
+  if (process.platform === "win32") return new Map();
+  let output: string;
+  try {
+    output = await execFileText(
+      "tmux",
+      [...tmuxServerArgs(dataDir), "list-panes", "-a", "-F", PANE_FORMAT],
+      {
+        timeoutMs,
+        source: "tmux",
+        maxBuffer: 4 * 1024 * 1024,
+        env: tmuxEnvironment(ambient),
+      },
+    );
+  } catch (error) {
+    if (error instanceof SampleTimeout) throw error;
+    return new Map();
+  }
+  return parsePanePids(output);
 }
 
 /**
