@@ -211,7 +211,8 @@ export class TerminalManager {
       this.log("非持久后端的终端行已标记为 failed", { rows: failed });
     }
     const report = await this.reconcile();
-    this.spawnLoops();
+    // 对账期间 core 已经开始关停：周期任务不再武装，它们会在关库之后醒来。
+    if (!this.stopping) this.spawnLoops();
     return report;
   }
 

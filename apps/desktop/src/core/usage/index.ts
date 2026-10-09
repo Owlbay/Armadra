@@ -210,5 +210,6 @@ export function install(context: CoreContext): UsageDomain {
   });
 
   assembled = { service, stop: () => service.stop() };
+  context.onStop?.(() => service.stop());
   return assembled;
 }

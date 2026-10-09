@@ -835,16 +835,23 @@ export function install(context: CoreContext): void {
   // 关掉。
   const owner = runtime;
   setAcpWarmer(owner?.warmer);
+  let warmTimer: ReturnType<typeof setTimeout> | undefined;
+  // core 关停时撤掉还没到点的预热，收掉预启动池里的适配器：它们起来之后要读
+  // 设置与库，而库马上就关了。
+  context.onStop?.(() => {
+    if (warmTimer !== undefined) clearTimeout(warmTimer);
+    owner?.pool.killAllSync();
+  });
   if (
     owner !== undefined &&
     process.env.VITEST === undefined &&
     process.env.ARMADRA_NO_GLOBAL_WRITES !== "1" &&
     process.env.ARMADRA_ACP_WARMUP !== "0"
   ) {
-    const timer = setTimeout(() => {
+    warmTimer = setTimeout(() => {
       void owner.warmer.warm("idle");
     }, IDLE_WARM_DELAY_MS);
-    timer.unref?.();
+    warmTimer.unref?.();
   }
 
   installRoutes(context, {

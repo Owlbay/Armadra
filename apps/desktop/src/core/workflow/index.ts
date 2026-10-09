@@ -64,6 +64,7 @@ export function install(context: CoreContext): WorkflowDomain | undefined {
     },
   };
   setWorkflowDomain(domain);
+  context.onStop?.(() => domain.stop());
   context.log.info("工作流域已装配");
   return domain;
 }

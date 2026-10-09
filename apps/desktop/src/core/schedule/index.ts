@@ -137,6 +137,8 @@ export function install(context: CoreContext): ScheduleDomain | undefined {
     },
   };
   context.log.info("定时与自动化域已装配", { hostId });
+  const domain = assembled;
+  context.onStop?.(() => domain.stop());
   return assembled;
 }
 

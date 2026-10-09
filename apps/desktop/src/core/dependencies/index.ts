@@ -44,6 +44,7 @@ export function install(context: CoreContext): DependencyService {
   installRoutes(context.server.router, database);
   registerDependencyProcedures(context.server, database);
   service.start();
+  context.onStop?.(() => service.stop());
   return service;
 }
 
