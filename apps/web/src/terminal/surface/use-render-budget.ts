@@ -1,27 +1,43 @@
 import * as React from "react";
 
-import { useOnScreen, usePageVisible } from "@/panels/resources/use-visibility";
+import type {
+  TerminalRenderer,
+  TerminalRepaintThrottle,
+} from "@/app/preferences/terminal";
+import { flushScheduler, repaintScheduler } from "../flush-scheduler";
 import {
-  OFFSCREEN_FLUSH_MS,
   drainOffscreenBuffer,
   rendersActively,
   resolveRenderState,
   type TerminalRenderState,
 } from "../render-state";
 import { registerRenderClient, type RenderClient } from "../render-budget";
+import {
+  rendererGatesRender,
+  repaintThrottled,
+  wantsWebgl,
+} from "../renderer-policy";
 import type { SurfaceRefs } from "./refs";
 import type { TerminalConnection } from "./types";
 
 export interface RenderBudget {
   render: TerminalRenderState;
   active: boolean;
+  /**
+   * 输出直写进 xterm。`active` 时为真，除非缩小限帧（E2）把这个可见 DOM 终端
+   * 的写入合并到 100 ms 一拍——那时 fit 照常，只是不每块都写。
+   */
+  writeThrough: boolean;
+  /** 正在限帧（`data-throttled` 诊断属性用）。 */
+  throttled: boolean;
   /** 持有一个渲染名额：WebGL addon 的挂载条件（`render-budget.ts`）。 */
   budgeted: boolean;
   focused: boolean;
   setFocused: (value: boolean) => void;
-  onScreen: boolean;
-  pageVisible: boolean;
+  /** 把攒下的输出灌进 xterm（有背压：上一批没消化完就排到下一拍）。 */
   flushOutput: () => void;
+  /** 离屏时登记到共享调度器，下一拍再灌。 */
+  scheduleFlush: () => void;
   /** 上报 `webglcontextlost`，由协调器决定要不要延迟重授。 */
   reportContextLoss: () => void;
 }
@@ -29,25 +45,29 @@ export interface RenderBudget {
 /**
  * 「有没有人在看」的那一半（终端宿主设计 §7.1）：视口 / 窗口前后台 / 焦点 /
  * 渲染名额算出渲染档位，并按档位决定输出是直写还是先攒到离屏缓冲里。
+ * 视口与前后台由生命周期 hook 观测后传进来（两边要看同一份值）。
  */
 export function useRenderBudget(
   refs: SurfaceRefs,
   options: {
     nodeId: string;
     collapsed: boolean;
+    onScreen: boolean;
+    pageVisible: boolean;
     detached: boolean;
     connection: TerminalConnection;
+    /**
+     * 渲染器档位。只有纯 `webgl` 档由名额决定档位（性能设计 §2.4 B3 最后一条）；
+     * `auto` 下没名额的可见终端用 DOM 直写。
+     */
+    renderer: TerminalRenderer;
+    repaintThrottle: TerminalRepaintThrottle;
+    /** 画布缩放低于限帧阈值（`useLowZoom`）。 */
+    lowZoom: boolean;
   },
 ): RenderBudget {
-  const { nodeId, collapsed, detached, connection } = options;
-
-  /*
-   * 三个「有没有人在看」的输入（设计 §7.1）。前两个复用资源徽标那套观测器：
-   * 画布不裁剪节点（`canCull() => false`），离屏节点仍然挂在 DOM 上，只有
-   * `IntersectionObserver` 说得出它其实在屏幕外。
-   */
-  const onScreen = useOnScreen(refs.bodyRef);
-  const pageVisible = usePageVisible();
+  const { nodeId, collapsed, onScreen, pageVisible, detached, connection } =
+    options;
   const [focused, setFocused] = React.useState(false);
   const [budgeted, setBudgeted] = React.useState(false);
 
@@ -59,8 +79,19 @@ export function useRenderBudget(
     focused,
     detached,
     budgeted,
+    webgl: rendererGatesRender(options.renderer),
   });
   const active = rendersActively(render);
+  const throttled = repaintThrottled({
+    throttle: options.repaintThrottle,
+    lowZoom: options.lowZoom,
+    visible: render === "visible",
+    focused: render === "focused",
+    webglActive: wantsWebgl(options.renderer, budgeted),
+  });
+  const writeThrough = active && !throttled;
+  const throttledRef = React.useRef(throttled);
+  throttledRef.current = throttled;
 
   /*
    * 渲染名额（设计 §7.1「WebGL context 设设备预算」）。
@@ -109,36 +140,70 @@ export function useRenderBudget(
     clientRef.current?.contextLost();
   }, []);
 
-  /** 把攒下的输出灌进 xterm。顺序即到达顺序，一个字节都不重排。 */
+  /**
+   * 把攒下的输出灌进 xterm。顺序即到达顺序，一个字节都不重排。
+   *
+   * 背压（性能设计 §2.4 B3）：`terminal.write(text, callback)` 的回调表示
+   * xterm 消化完了这一批；之前到的数据继续留在缓冲里，不叠着往解析器里塞。
+   * 回调里还有数据就接着灌——全速时立刻，离屏时排到共享调度器的下一拍。
+   * 显示层已释放（没有实例）时什么都不做，数据留着等重建。
+   */
+  const flushRef = React.useRef<() => void>(() => undefined);
   const flushOutput = React.useCallback(() => {
     const terminal = refs.terminalRef.current;
     if (!terminal) return;
+    if (refs.flushingRef.current === terminal) return;
     const text = drainOffscreenBuffer(refs.bufferRef.current);
-    if (text) terminal.write(text);
-  }, []);
+    if (!text) return;
+    refs.flushingRef.current = terminal;
+    terminal.write(text, () => {
+      if (refs.flushingRef.current !== terminal) return;
+      refs.flushingRef.current = null;
+      if (refs.bufferRef.current.chunks.length === 0) return;
+      if (refs.writeThroughRef.current) flushRef.current();
+      else schedulerFor(throttledRef.current).request(flushRef.current);
+    });
+  }, [refs]);
+  flushRef.current = flushOutput;
+
+  const scheduleFlush = React.useCallback(() => {
+    schedulerFor(throttledRef.current).request(flushOutput);
+  }, [flushOutput]);
 
   /*
-   * 离屏时按 `OFFSCREEN_FLUSH_MS` 灌一次，重新可见时立刻灌。
+   * 回到直写时立刻灌；离屏时不挂定时器，有数据进来时 `scheduleFlush` 才排。
    * 攒着的目的只是不每帧重绘，不是丢数据——所以节奏慢，但一定会灌。
    */
   React.useEffect(() => {
-    if (active) {
+    if (writeThrough) {
+      flushScheduler.cancel(flushOutput);
+      repaintScheduler.cancel(flushOutput);
       flushOutput();
-      return;
     }
-    const timer = setInterval(flushOutput, OFFSCREEN_FLUSH_MS);
-    return () => clearInterval(timer);
-  }, [active, flushOutput]);
+  }, [writeThrough, flushOutput]);
+  React.useEffect(
+    () => () => {
+      flushScheduler.cancel(flushOutput);
+      repaintScheduler.cancel(flushOutput);
+    },
+    [flushOutput],
+  );
 
   return {
     render,
     active,
+    writeThrough,
+    throttled,
     budgeted,
     focused,
     setFocused,
-    onScreen,
-    pageVisible,
     flushOutput,
+    scheduleFlush,
     reportContextLoss,
   };
+}
+
+/** 限帧中的可见终端排 100 ms 一拍，其余（离屏）排 500 ms 一拍。 */
+function schedulerFor(throttled: boolean) {
+  return throttled ? repaintScheduler : flushScheduler;
 }

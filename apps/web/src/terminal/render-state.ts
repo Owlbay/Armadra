@@ -43,6 +43,12 @@ export interface RenderInputs {
   detached: boolean;
   /** 持有一个渲染名额（见 `render-budget.ts`）。 */
   budgeted: boolean;
+  /**
+   * 渲染器是纯 `webgl` 档（`rendererGatesRender`）。名额只约束 WebGL 上下文；
+   * DOM 与 `auto` 档下没抢到名额的可见终端也直写，不该因为名额被降成批写
+   * （性能设计 §2.4 B3、§2.5）。
+   */
+  webgl: boolean;
 }
 
 /**
@@ -58,8 +64,9 @@ export interface RenderInputs {
  *    注意 `exited` 不在这里：进程正常结束是结束，不是掉线。
  * 3. `focused`——真的有键盘焦点，**并且**看得见。焦点在一个折叠的节点上
  *    （比如刚被折叠的那一帧）不算，那时候没人在看。
- * 4. `visible`——看得见（未折叠 + 在视口 + 窗口在前台）且持有渲染名额。
- *    没抢到名额的可见终端按 `offscreen` 走：批量写入、不开 WebGL。
+ * 4. `visible`——看得见（未折叠 + 在视口 + 窗口在前台）。开着 WebGL 时还要
+ *    持有渲染名额：没抢到的可见终端按 `offscreen` 走（批量写入、不开 WebGL）；
+ *    DOM 渲染器下名额与档位无关。
  * 5. 其余都是 `offscreen`。
  */
 export function resolveRenderState(inputs: RenderInputs): TerminalRenderState {
@@ -72,6 +79,7 @@ export function resolveRenderState(inputs: RenderInputs): TerminalRenderState {
   const visible = !inputs.collapsed && inputs.onScreen && inputs.pageVisible;
   if (!visible) return "offscreen";
   if (inputs.focused) return "focused";
+  if (!inputs.webgl) return "visible";
   return inputs.budgeted ? "visible" : "offscreen";
 }
 
@@ -100,7 +108,8 @@ export const OFFSCREEN_FLUSH_MS = 500;
 export const HIDDEN_DETACH_MS = 60_000;
 
 /**
- * 离屏缓冲的上限（UTF-16 码元数，约等于 2 MiB）。
+ * 离屏缓冲的上限，单位是 UTF-16 码元：2 Mi 码元，按 JS 字符串的内存算约
+ * 4 MiB（纯 Latin1 内容引擎可按单字节存，约 2 MiB）。
  *
  * 越界时**从头部丢**：xterm 的 scrollback 本来也只留 5000 行，最早的那些
  * 行无论如何都会被丢掉，丢尾部反而会把最新的画面弄坏。

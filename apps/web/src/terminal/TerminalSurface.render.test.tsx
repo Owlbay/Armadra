@@ -30,6 +30,17 @@ const fixture = vi.hoisted(() => ({
   writes: [] as string[],
   urls: [] as string[],
   close: vi.fn(),
+  /** 每条传输收到的输入与 resize，按创建顺序。 */
+  inputs: [] as string[][],
+  resizes: [] as [number, number][],
+  /** 每个 `new Terminal` 的构造参数；`disposed` 记销毁次数。 */
+  terminals: [] as { cols?: number; rows?: number }[],
+  disposed: 0,
+  proposed: { cols: 80, rows: 24 } as
+    | { cols: number; rows: number }
+    | undefined,
+  /** 画布缩放（缩小限帧用）。 */
+  zoom: 1,
   getTerminal: vi.fn(),
   createTerminal: vi.fn(),
   wakeTerminal: vi.fn(),
@@ -37,10 +48,11 @@ const fixture = vi.hoisted(() => ({
 
 vi.mock("@/store/canvas-store", () => ({
   useCanvasStore: {
+    subscribe: () => () => undefined,
     getState: () => ({
       workspace: { id: "workspace", rootPath: "/repo" },
       document: {
-        board: { id: "board" },
+        board: { id: "board", viewport: { x: 0, y: 0, zoom: fixture.zoom } },
         nodes: [{ id: "node", data: fixture.data }],
       },
       updateNodeData: vi.fn(),
@@ -79,11 +91,14 @@ vi.mock("./transport", () => ({
   ) => {
     fixture.urls.push(url);
     fixture.handlers = handlers;
+    const inputs: string[] = [];
+    fixture.inputs.push(inputs);
     return {
       state: "live",
       generation: 3,
-      input: vi.fn(),
-      resize: vi.fn(),
+      input: (data: string) => inputs.push(data),
+      resize: (cols: number, rows: number) =>
+        fixture.resizes.push([cols, rows]),
       close: fixture.close,
       terminate: vi.fn(),
     };
@@ -95,16 +110,26 @@ vi.mock("@xterm/xterm", () => ({
     cols = 80;
     rows = 24;
     options = {};
+    constructor(options: { cols?: number; rows?: number } = {}) {
+      fixture.terminals.push({ cols: options.cols, rows: options.rows });
+      if (options.cols) this.cols = options.cols;
+      if (options.rows) this.rows = options.rows;
+    }
     unicode = { activeVersion: "" };
     parser = { registerOscHandler: () => ({ dispose() {} }) };
     textarea = undefined;
-    loadAddon() {}
+    loadAddon(addon: { activate?: (terminal: unknown) => void }) {
+      addon.activate?.(this);
+    }
     open() {}
     reset() {}
-    write(chunk: string) {
+    write(chunk: string, done?: () => void) {
       fixture.writes.push(chunk);
+      done?.();
     }
-    dispose() {}
+    dispose() {
+      fixture.disposed += 1;
+    }
     focus() {}
     attachCustomKeyEventHandler() {}
     onData() {
@@ -127,19 +152,41 @@ vi.mock("@xterm/xterm", () => ({
 }));
 vi.mock("@xterm/addon-fit", () => ({
   FitAddon: class {
-    proposeDimensions() {
-      return { cols: 80, rows: 24 };
+    terminal: { cols: number; rows: number } | null = null;
+    activate(terminal: { cols: number; rows: number }) {
+      this.terminal = terminal;
     }
-    fit() {}
+    proposeDimensions() {
+      return fixture.proposed;
+    }
+    fit() {
+      if (this.terminal && fixture.proposed) {
+        this.terminal.cols = fixture.proposed.cols;
+        this.terminal.rows = fixture.proposed.rows;
+      }
+    }
   },
 }));
 vi.mock("@xterm/addon-unicode11", () => ({ Unicode11Addon: class {} }));
 vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));
 vi.mock("@xterm/addon-clipboard", () => ({ ClipboardAddon: class {} }));
 
-import { HIDDEN_DETACH_MS } from "./render-state";
+import * as React from "react";
+import { HIDDEN_DETACH_MS, OFFSCREEN_FLUSH_MS } from "./render-state";
 import { resetRenderBudget } from "./render-budget";
-import { TerminalSurface, type TerminalSurfaceStatus } from "./TerminalSurface";
+import { THROTTLED_REPAINT_MS } from "./renderer-policy";
+import { usePreferencesStore } from "@/app/preferences-store";
+import {
+  LIFECYCLE_RECHECK_MS,
+  OFFSCREEN_DETACH_MS,
+  releaseAfterMs,
+} from "./lifecycle";
+import { emitMemoryPressure, resetMemoryPressure } from "./pressure-bus";
+import {
+  TerminalSurface,
+  type TerminalSurfaceHandle,
+  type TerminalSurfaceStatus,
+} from "./TerminalSurface";
 
 installDomPolyfills();
 
@@ -168,6 +215,12 @@ beforeEach(() => {
   fixture.handlers = null;
   fixture.writes = [];
   fixture.urls = [];
+  fixture.inputs = [];
+  fixture.resizes = [];
+  fixture.terminals = [];
+  fixture.disposed = 0;
+  fixture.proposed = { cols: 80, rows: 24 };
+  fixture.zoom = 1;
   fixture.getTerminal.mockImplementation(async () => ({
     id: "session",
     workspaceId: "workspace",
@@ -423,5 +476,235 @@ describe("节能休眠", () => {
     expect(changed.mock.calls.at(-1)?.[0].render).toBe("hibernated");
     expect(screen.getByRole("button", { name: "唤醒" })).toBeTruthy();
     expect(fixture.createTerminal).not.toHaveBeenCalled();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* 分阶段生命周期（性能设计 §2.4）                                              */
+/* -------------------------------------------------------------------------- */
+
+/** 视口观测：jsdom 没有 `IntersectionObserver`，换一个能手动派发的。 */
+const viewport = {
+  callbacks: [] as ((entries: { isIntersecting: boolean }[]) => void)[],
+};
+class FakeIntersectionObserver {
+  readonly #callback: (entries: { isIntersecting: boolean }[]) => void;
+  constructor(callback: (entries: { isIntersecting: boolean }[]) => void) {
+    this.#callback = callback;
+  }
+  observe() {
+    viewport.callbacks.push(this.#callback);
+  }
+  disconnect() {
+    viewport.callbacks = viewport.callbacks.filter(
+      (item) => item !== this.#callback,
+    );
+  }
+}
+function setOnScreen(onScreen: boolean): void {
+  for (const callback of viewport.callbacks)
+    callback([{ isIntersecting: onScreen }]);
+}
+
+const RELEASE_MS = releaseAfterMs("10m")!;
+
+describe("分阶段生命周期", () => {
+  const original = (globalThis as { IntersectionObserver?: unknown })
+    .IntersectionObserver;
+  beforeEach(() => {
+    viewport.callbacks = [];
+    resetMemoryPressure();
+    (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver =
+      FakeIntersectionObserver;
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    resetMemoryPressure();
+    (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver =
+      original;
+  });
+
+  async function mount(handle?: React.RefObject<TerminalSurfaceHandle | null>) {
+    const view = render(
+      <TerminalSurface
+        nodeId="node"
+        data={fixture.data}
+        collapsed={false}
+        ref={handle}
+      />,
+    );
+    await act(async () => {});
+    await act(async () => {});
+    expect(fixture.handlers).not.toBeNull();
+    const body = view.container.querySelector<HTMLElement>(
+      '[data-slot="terminal-body"]',
+    )!;
+    return { view, body };
+  }
+
+  async function releaseOffscreen(body: HTMLElement) {
+    act(() => setOnScreen(false));
+    expect(body.dataset.lifecycle).toBe("parked");
+    act(() => vi.advanceTimersByTime(OFFSCREEN_DETACH_MS!));
+    expect(body.dataset.lifecycle).toBe("detached");
+    act(() => vi.advanceTimersByTime(RELEASE_MS));
+    expect(body.dataset.lifecycle).toBe("released");
+  }
+
+  it("平移离屏：60 s 收 socket、10 min 销毁实例，回来按原行列重建并重连", async () => {
+    fixture.proposed = { cols: 120, rows: 40 };
+    const { body } = await mount();
+    act(() => fixture.handlers!.onHello!({ ...hello, cols: 120, rows: 40 }));
+    expect(body.dataset.lifecycle).toBe("live");
+    expect(fixture.terminals).toHaveLength(1);
+
+    act(() => setOnScreen(false));
+    act(() => vi.advanceTimersByTime(OFFSCREEN_DETACH_MS! - 1_000));
+    // 一分钟内什么都不做：平移一下又回来不该掉连接。
+    expect(fixture.close).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(1_000));
+    expect(fixture.close).toHaveBeenCalledTimes(1);
+    expect(body.dataset.lifecycle).toBe("detached");
+    // 断开时屏幕还在（保留最后一屏），实例没动。
+    expect(fixture.disposed).toBe(0);
+    // 节点头仍是「已断开（省电）」那一档。
+    expect(body.dataset.render).toBe("detached");
+
+    act(() => vi.advanceTimersByTime(RELEASE_MS));
+    expect(body.dataset.lifecycle).toBe("released");
+    expect(body.dataset.render).toBe("detached");
+    expect(fixture.disposed).toBe(1);
+
+    fixture.handlers = null;
+    const resizes = fixture.resizes.length;
+    act(() => setOnScreen(true));
+    await act(async () => {});
+    // 重建：新实例沿用释放前的行列数，同一个会话重新 attach。
+    expect(fixture.terminals).toHaveLength(2);
+    expect(fixture.terminals[1]).toEqual({ cols: 120, rows: 40 });
+    expect(fixture.handlers).not.toBeNull();
+    expect(fixture.urls).toEqual([
+      "ws://runtime/session",
+      "ws://runtime/session",
+    ]);
+    expect(fixture.createTerminal).not.toHaveBeenCalled();
+    act(() => fixture.handlers!.onHello!({ ...hello, cols: 120, rows: 40 }));
+    act(() => vi.advanceTimersByTime(100));
+    expect(body.dataset.lifecycle).toBe("live");
+    // 行列与 core 一致：一次 resize 都不多发。
+    expect(fixture.resizes).toHaveLength(resizes);
+  });
+
+  it("容器量不出尺寸时不 fit、不发 resize", async () => {
+    fixture.proposed = { cols: 1, rows: 1 };
+    await mount();
+    act(() => fixture.handlers!.onHello!(hello));
+    fixture.proposed = undefined;
+    act(() => fixture.handlers!.onHello!(hello));
+    expect(fixture.resizes).toEqual([]);
+  });
+
+  it("已释放的终端收到输入：先复活重连，再把输入按序交给新传输", async () => {
+    const handle = React.createRef<TerminalSurfaceHandle>();
+    const { body } = await mount(handle);
+    act(() => fixture.handlers!.onHello!(hello));
+    await releaseOffscreen(body);
+    expect(fixture.inputs).toHaveLength(1);
+
+    act(() => {
+      handle.current!.writeLine("echo a");
+      handle.current!.sendKeys("x");
+    });
+    await act(async () => {});
+    expect(fixture.terminals).toHaveLength(2);
+    expect(fixture.inputs).toHaveLength(2);
+    expect(fixture.inputs[1]).toEqual(["echo a\r", "x"]);
+    // 仍然看不见：复活后停在 parked。还在连接时不收 socket，attach 之后
+    // 断开计时从头算。
+    expect(body.dataset.lifecycle).toBe("parked");
+    act(() => vi.advanceTimersByTime(OFFSCREEN_DETACH_MS!));
+    expect(body.dataset.lifecycle).toBe("parked");
+    act(() => fixture.handlers!.onHello!(hello));
+    act(() => vi.advanceTimersByTime(LIFECYCLE_RECHECK_MS));
+    expect(body.dataset.lifecycle).toBe("detached");
+  });
+
+  it("离屏输出共用一个调度器按拍灌写，回到可见立刻灌完", async () => {
+    const { body } = await mount();
+    act(() => fixture.handlers!.onHello!(hello));
+    act(() => setOnScreen(false));
+    expect(body.dataset.render).toBe("offscreen");
+    act(() => fixture.handlers!.onOutput!("a"));
+    act(() => fixture.handlers!.onOutput!("b"));
+    expect(fixture.writes).toEqual([]);
+    act(() => vi.advanceTimersByTime(OFFSCREEN_FLUSH_MS));
+    expect(fixture.writes).toEqual(["ab"]);
+    act(() => fixture.handlers!.onOutput!("c"));
+    act(() => setOnScreen(true));
+    expect(fixture.writes).toEqual(["ab", "c"]);
+  });
+
+  it("内存压力：可见的不动；告警档只释放离屏够久的，紧急档全部", async () => {
+    const { body } = await mount();
+    act(() => fixture.handlers!.onHello!(hello));
+    act(() => emitMemoryPressure("critical"));
+    expect(body.dataset.lifecycle).toBe("live");
+    act(() => emitMemoryPressure("normal"));
+
+    act(() => setOnScreen(false));
+    act(() => emitMemoryPressure("warning"));
+    expect(body.dataset.lifecycle).toBe("parked");
+    act(() => vi.advanceTimersByTime(31_000));
+    act(() => emitMemoryPressure("warning"));
+    expect(body.dataset.lifecycle).toBe("released");
+    expect(fixture.disposed).toBe(1);
+    expect(fixture.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("紧急档：刚离屏的也释放；降回 normal 不重建", async () => {
+    const { body } = await mount();
+    act(() => fixture.handlers!.onHello!(hello));
+    act(() => setOnScreen(false));
+    act(() => emitMemoryPressure("critical"));
+    expect(body.dataset.lifecycle).toBe("released");
+    act(() => emitMemoryPressure("normal"));
+    expect(body.dataset.lifecycle).toBe("released");
+    expect(fixture.terminals).toHaveLength(1);
+  });
+
+  it("缩小时限帧：可见的 DOM 终端按 100 ms 一拍灌写，关掉开关立刻直写", async () => {
+    const terminal = usePreferencesStore.getState().terminal;
+    usePreferencesStore.setState({
+      terminal: { ...terminal, repaintThrottle: "lowZoom" },
+    });
+    try {
+      fixture.zoom = 0.3;
+      const { body } = await mount();
+      act(() => fixture.handlers!.onHello!(hello));
+      expect(body.dataset.render).toBe("visible");
+      expect(body.dataset.renderer).toBe("dom");
+      expect(body.dataset.throttled).toBe("");
+      fixture.writes = [];
+      act(() => fixture.handlers!.onOutput!("a"));
+      act(() => fixture.handlers!.onOutput!("b"));
+      expect(fixture.writes).toEqual([]);
+      act(() => vi.advanceTimersByTime(THROTTLED_REPAINT_MS));
+      expect(fixture.writes).toEqual(["ab"]);
+
+      // 关掉开关：直写，攒着的立刻灌。
+      act(() => fixture.handlers!.onOutput!("c"));
+      act(() =>
+        usePreferencesStore.setState({
+          terminal: { ...terminal, repaintThrottle: "off" },
+        }),
+      );
+      expect(body.dataset.throttled).toBeUndefined();
+      expect(fixture.writes).toEqual(["ab", "c"]);
+      act(() => fixture.handlers!.onOutput!("d"));
+      expect(fixture.writes).toEqual(["ab", "c", "d"]);
+    } finally {
+      usePreferencesStore.setState({ terminal });
+    }
   });
 });

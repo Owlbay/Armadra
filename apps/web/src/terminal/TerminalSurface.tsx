@@ -34,20 +34,19 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/ui/context-menu";
-import { loseWebglContexts } from "./render-budget";
-import { HIDDEN_DETACH_MS } from "./render-state";
 import { terminalAppearance } from "./surface/appearance";
 import { pasteIntoTerminal, writeClipboard } from "./surface/clipboard";
-import { DETACH_GRACE_MS } from "./surface/constants";
 import { useSurfaceRefs } from "./surface/refs";
 import { useFileDropPaste } from "./surface/use-file-drop";
 import { useSurfaceHandle } from "./surface/use-handle";
 import { useLaunchSequence } from "./surface/use-launch";
+import { useSurfaceLifecycle } from "./surface/use-lifecycle";
 import { useRefit } from "./surface/use-refit";
 import { useRenderBudget } from "./surface/use-render-budget";
 import { useHibernation } from "./surface/use-hibernation";
 import { useAdoptedSession, useTerminalSession } from "./surface/use-session";
 import { useTerminalTransport } from "./surface/use-transport";
+import { useLowZoom, useWebglRenderer } from "./surface/use-webgl";
 import { useXtermInstance } from "./surface/use-xterm";
 import type { ConnectionStatus, TerminalSurfaceProps } from "./surface/types";
 
@@ -91,7 +90,6 @@ function TerminalSurfaceImpl({
     data.sessionId,
   );
   const [attempt, setAttempt] = React.useState(0);
-  const [detached, setDetached] = React.useState(false);
   const [status, setStatus] = React.useState<ConnectionStatus>({
     connection: "idle",
     exitCode: data.lastExitCode ?? null,
@@ -115,24 +113,46 @@ function TerminalSurfaceImpl({
     [refs],
   );
 
+  /* ------------------------------- 生命周期 ------------------------------- */
+
+  /*
+   * 性能设计 §2.4：`live → parked → detached → released`。看不见够久就收
+   * socket（折叠 5 s、窗口后台与平移离屏各 60 s），再够久销毁显示层；会话
+   * 与这一层的 React 状态都不动。回到可见或有输入要发时复活。
+   */
+  const lifecycle = useSurfaceLifecycle(refs, {
+    nodeId,
+    collapsed,
+    releaseAfter: preferences.releaseAfter,
+  });
+  const { detached, mounted, generation } = lifecycle;
+
   /* ------------------------------ 视图状态 -------------------------------- */
 
+  const lowZoom = useLowZoom(preferences.repaintThrottle === "lowZoom");
   const {
     render,
     active,
+    writeThrough,
+    throttled,
     budgeted,
     setFocused,
-    pageVisible,
     flushOutput,
+    scheduleFlush,
     reportContextLoss,
   } = useRenderBudget(refs, {
     nodeId,
     collapsed,
+    onScreen: lifecycle.onScreen,
+    pageVisible: lifecycle.pageVisible,
     detached,
     connection: status.connection,
+    renderer: preferences.renderer,
+    repaintThrottle: preferences.repaintThrottle,
+    lowZoom,
   });
   refs.visibleRef.current = active;
-  refs.writeThroughRef.current = active;
+  refs.writeThroughRef.current = writeThrough;
 
   React.useEffect(() => {
     onStatusChange?.({ ...status, render });
@@ -146,7 +166,7 @@ function TerminalSurfaceImpl({
 
   /* ------------------------------ xterm 实例 ----------------------------- */
 
-  useXtermInstance(refs, { nodeId, refit });
+  useXtermInstance(refs, { nodeId, refit, mounted, generation });
 
   /* ------------------------------ 外观偏好 ------------------------------- */
 
@@ -164,53 +184,13 @@ function TerminalSurfaceImpl({
 
   /* ------------------------------ WebGL（可选） --------------------------- */
 
-  /**
-   * §18.2 规则 5：默认 DOM 渲染器（画布 CSS 缩放下文字始终清晰）。
-   * WebGL 是设置项，按需异步装；丢上下文就卸掉退回 DOM，不重建终端。
-   *
-   * addon 的挂载条件是**渲染名额**（设计 §7.1），不是 `active`：WebGL 上下文是
-   * 设备级的稀缺资源，浏览器给的数量有限，超了之后它会强制驱逐一个——表现是
-   * 某个终端毫无征兆地黑屏或画成 "lost context" 占位。名额由模块级协调器统一
-   * 发（`render-budget.ts`），离屏的持有者**继续暖着**，这样平移回来不用重建
-   * 渲染器；`active` 只管写穿与 fit，两件事分开。**`Terminal` 实例始终不动**，
-   * 「回收只释放渲染资源」，屏幕内容和 PTY 都不受影响。
-   *
-   * 丢上下文（休眠唤醒、GPU 进程重启）时除了卸 addon，还要**上报**：可见性一点
-   * 没变，没有这一声协调器不会知道，终端就无限期停在 DOM 渲染器上。
-   */
-  React.useEffect(() => {
-    const terminal = refs.terminalRef.current;
-    if (!terminal || !preferences.webgl || !budgeted) return;
-    let addon: { dispose: () => void } | null = null;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const { WebglAddon } = await import("@xterm/addon-webgl");
-        if (cancelled) return;
-        const instance = new WebglAddon();
-        instance.onContextLoss(() => {
-          instance.dispose();
-          reportContextLoss();
-        });
-        terminal.loadAddon(instance);
-        addon = instance;
-      } catch {
-        // WebGL 不可用（软件渲染、驱动黑名单）：留在 DOM 渲染器上。
-      }
-    })();
-    return () => {
-      cancelled = true;
-      if (!addon) return;
-      // canvas 必须在 dispose **之前**抓：dispose 会把它们从 DOM 上摘掉。
-      const canvases = refs.containerRef.current?.querySelectorAll("canvas");
-      const held = canvases ? Array.from(canvases) : [];
-      // 这一句就是「字距散开」的源头：它跑在 cleanup 里，元素已被 React 摘掉，
-      // 新的 DOM 渲染器按 0 宽推字距。治它的门在 `useRefit`（`dom-spacing.ts`）。
-      addon.dispose();
-      // dispose 既不 GC 也不弄丢上下文，不补这一刀就会留下占着名额的僵尸。
-      loseWebglContexts(held);
-    };
-  }, [refs, preferences.webgl, budgeted, reportContextLoss]);
+  const webglActive = useWebglRenderer(refs, {
+    mounted,
+    generation,
+    renderer: preferences.renderer,
+    budgeted,
+    reportContextLoss,
+  });
 
   /* ------------------------- 重新可见后补一次 fit ------------------------- */
 
@@ -263,10 +243,12 @@ function TerminalSurfaceImpl({
     detached,
     hibernated,
     attempt,
+    generation,
     setAttempt,
     patch,
     refit,
     flushOutput,
+    scheduleFlush,
     armLaunch,
     noteOutput,
     clearLaunchTimers,
@@ -277,32 +259,6 @@ function TerminalSurfaceImpl({
   // 依赖状态一变就重算一次门（§5.8）。节点卸载时停掉重试计时器。
   usePendingLaunchWatcher(nodeId, Boolean(data.agent?.pendingLaunch));
   React.useEffect(() => () => disarmPendingLaunch(nodeId), [nodeId]);
-
-  /* ---------------------------- 延迟 detach ------------------------------ */
-
-  /*
-   * 两条路都通向「主动关掉 socket」（设计 §7.1 的 detached 行）：
-   *
-   *  - 折叠 `DETACH_GRACE_MS`（§15.7），宽限是为了不让「折叠一下又展开」来回重连；
-   *  - 窗口在后台连续 `HIDDEN_DETACH_MS`。切出去回条消息就掉 socket 只会让人
-   *    觉得应用在抖，所以这一条比折叠宽松得多。
-   *
-   * 进程不受影响：执行端保留 VT/tmux 状态，条件一解除就重新 attach，
-   * 走的是原来那条「reset → attach → 快照/重绘」的路，**不会重建会话**。
-   */
-  React.useEffect(() => {
-    const delay = collapsed
-      ? DETACH_GRACE_MS
-      : pageVisible
-        ? null
-        : HIDDEN_DETACH_MS;
-    if (delay === null) {
-      setDetached(false);
-      return;
-    }
-    const timer = setTimeout(() => setDetached(true), delay);
-    return () => clearTimeout(timer);
-  }, [collapsed, pageVisible]);
 
   /* ------------------------------ 对外句柄 ------------------------------- */
 
@@ -337,6 +293,10 @@ function TerminalSurfaceImpl({
           // 「它当时以为自己是哪个状态」，而这个答案不该只有 React DevTools
           // 知道。压力脚本与线上排查读的都是这一个属性。
           data-render={render}
+          data-lifecycle={lifecycle.phase}
+          // 渲染器与限帧（性能设计 §2.5）：`auto` 下哪几个真的上了 WebGL，对照实验靠它数。
+          data-renderer={webglActive ? "webgl" : "dom"}
+          data-throttled={throttled ? "" : undefined}
           className="nodrag nowheel relative h-full w-full overflow-hidden bg-[var(--term-bg)]"
           onDragOver={(event) => {
             if (

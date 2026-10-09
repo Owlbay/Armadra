@@ -5,11 +5,17 @@ import {
   TERMINAL_FONT_SIZE_RANGE,
   TERMINAL_LETTER_SPACING_RANGE,
   TERMINAL_LINE_HEIGHT_RANGE,
+  TERMINAL_RENDERERS,
   usePreferencesStore,
   useT,
   type TerminalCursorStyle,
   type TerminalPreferences,
+  type TerminalRenderer,
 } from "../../../app/preferences-store";
+import {
+  RELEASE_AFTER_OPTIONS,
+  type ReleaseAfter,
+} from "../../../terminal/lifecycle";
 import { RENDER_BUDGET_CHOICES } from "../../../terminal/render-budget";
 import { useMonospaceFonts } from "../../../terminal/surface/fonts";
 import { SettingsGroup } from "../SettingsGroup";
@@ -108,33 +114,89 @@ export function TerminalLookPage() {
       </SettingsGroup>
 
       <SettingsGroup title={t("terminal.settings.group.render")}>
-        <SettingsRow label={t("terminal.settings.webgl")}>
-          <Switch
-            checked={terminal.webgl}
-            aria-label={t("terminal.settings.webgl")}
-            onCheckedChange={(next) => set("webgl", next)}
-          />
-        </SettingsRow>
-
-        <SettingsRow
-          label={t("terminal.settings.renderBudget")}
-          footnote={t("terminal.settings.renderBudgetHint")}
-        >
+        <SettingsRow label={t("terminal.settings.renderer")}>
           <Select
-            value={String(renderBudget)}
-            onValueChange={(value) => setRenderBudget(Number(value))}
+            value={terminal.renderer}
+            onValueChange={(value) =>
+              set("renderer", value as TerminalRenderer)
+            }
           >
             <SelectTrigger
-              aria-label={t("terminal.settings.renderBudget")}
+              aria-label={t("terminal.settings.renderer")}
               size="sm"
               className={CONTROL_WIDTH}
             >
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="z-[var(--z-dialog)]">
-              {RENDER_BUDGET_CHOICES.map((slots) => (
-                <SelectItem key={slots} value={String(slots)}>
-                  {slots}
+              {TERMINAL_RENDERERS.map((renderer) => (
+                <SelectItem key={renderer} value={renderer}>
+                  {t(`terminal.settings.renderer.${renderer}`)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </SettingsRow>
+
+        {/* 名额只约束纯 WebGL 档；`auto` 自带上限，DOM 下没有意义。 */}
+        {terminal.renderer === "webgl" && (
+          <SettingsRow
+            label={t("terminal.settings.renderBudget")}
+            footnote={t("terminal.settings.renderBudgetHint")}
+          >
+            <Select
+              value={String(renderBudget)}
+              onValueChange={(value) => setRenderBudget(Number(value))}
+            >
+              <SelectTrigger
+                aria-label={t("terminal.settings.renderBudget")}
+                size="sm"
+                className={CONTROL_WIDTH}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="z-[var(--z-dialog)]">
+                {RENDER_BUDGET_CHOICES.map((slots) => (
+                  <SelectItem key={slots} value={String(slots)}>
+                    {slots}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </SettingsRow>
+        )}
+
+        <SettingsRow label={t("terminal.settings.repaintThrottle")}>
+          <Switch
+            checked={terminal.repaintThrottle === "lowZoom"}
+            aria-label={t("terminal.settings.repaintThrottle")}
+            onCheckedChange={(next) =>
+              set("repaintThrottle", next ? "lowZoom" : "off")
+            }
+          />
+        </SettingsRow>
+
+        <SettingsRow
+          label={t("terminal.settings.releaseAfter")}
+          footnote={t("terminal.settings.releaseAfterHint")}
+        >
+          <Select
+            value={terminal.releaseAfter}
+            onValueChange={(value) =>
+              set("releaseAfter", value as ReleaseAfter)
+            }
+          >
+            <SelectTrigger
+              aria-label={t("terminal.settings.releaseAfter")}
+              size="sm"
+              className={CONTROL_WIDTH}
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="z-[var(--z-dialog)]">
+              {RELEASE_AFTER_OPTIONS.map((option) => (
+                <SelectItem key={option} value={option}>
+                  {t(`terminal.settings.releaseAfter.${option}`)}
                 </SelectItem>
               ))}
             </SelectContent>

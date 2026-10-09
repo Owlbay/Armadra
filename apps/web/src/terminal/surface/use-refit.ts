@@ -33,6 +33,9 @@ export function useRefit(refs: SurfaceRefs): () => void {
     } catch {
       return;
     }
+    // 容器量不出尺寸（折叠的 `display:none`、字体还没就绪、显示层刚在离屏
+    // 重建）：不 fit、不发 resize。下一次回到全速时 `TerminalSurface` 会补一次。
+    if (!measurable(proposed)) return;
     if (!shouldRefit(proposed, { cols: terminal.cols, rows: terminal.rows })) {
       return;
     }
@@ -41,6 +44,17 @@ export function useRefit(refs: SurfaceRefs): () => void {
     } catch {
       return;
     }
+    refs.gridRef.current = { cols: terminal.cols, rows: terminal.rows };
     refs.transportRef.current?.resize(terminal.cols, terminal.rows);
   }, [refs]);
+}
+
+/** `proposeDimensions()` 的结果能不能当真：0×0 容器会给出 `undefined` 或 1 列。 */
+export function measurable(
+  proposed: { cols: number; rows: number } | undefined,
+): proposed is { cols: number; rows: number } {
+  if (!proposed) return false;
+  if (!Number.isFinite(proposed.cols) || !Number.isFinite(proposed.rows))
+    return false;
+  return proposed.cols >= 2 && proposed.rows >= 1;
 }

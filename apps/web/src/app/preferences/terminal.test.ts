@@ -50,4 +50,23 @@ describe("storedTerminalPreferences", () => {
     expect(options.fontSize).toBe(12);
     expect(options.lineHeight).toBe(1.15);
   });
+
+  it("渲染器与限帧：缺省 dom / off，存过的枚举读回，坏值回落缺省", () => {
+    expect(storedTerminalPreferences().renderer).toBe("dom");
+    expect(storedTerminalPreferences().repaintThrottle).toBe("off");
+    localStorage.setItem(TERMINAL_KEYS.renderer, "auto");
+    localStorage.setItem(TERMINAL_KEYS.repaintThrottle, "lowZoom");
+    expect(storedTerminalPreferences().renderer).toBe("auto");
+    expect(storedTerminalPreferences().repaintThrottle).toBe("lowZoom");
+    localStorage.setItem(TERMINAL_KEYS.renderer, "canvas");
+    expect(storedTerminalPreferences().renderer).toBe("dom");
+  });
+
+  it("旧的布尔 armadra.terminal.webgl 不读（按设计不做兼容）", () => {
+    localStorage.setItem("armadra.terminal.webgl", "true");
+    const preferences = storedTerminalPreferences();
+    expect(preferences.renderer).toBe("dom");
+    expect("webgl" in preferences).toBe(false);
+    expect(TERMINAL_KEYS.renderer).toBe("armadra.terminal.renderer");
+  });
 });

@@ -10,6 +10,7 @@
 
 ## 按需阅读与验证
 
+- 提交信息、分支、PR 与 issue 规范见 [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md)。
 - 启动、检查及环境变量见 [开发指南](docs/guides/development.md)；架构变化同步更新 [架构](docs/guides/architecture.md)。
 - 任务涉及的专项文档从 [文档索引](docs/README.md) 查找：`guides/` 是现状，`design/` 是目标设计，`status/` 是已验证进度，`history/` 与 `research/` 只用于追溯。
 - `docs/contracts/` 的 §N 被代码引用，保留章节编号；新增文档登记进 `docs/README.md`。
