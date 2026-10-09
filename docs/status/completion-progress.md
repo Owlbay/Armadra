@@ -3650,6 +3650,7 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - 隔离数据目录起 core，订阅资源后读 `GET /api/diagnostics/runtime`：每轮 `lastRoundMs` 约 110 ms（异步，不占主线程），`timeouts` 全 0，procedure 与旧路径同一份答案。
 - 新单测：采样服务 5（`ps` 挂住不阻塞并超时计数、两个工作空间一拍一次 `ps`、GET 搭进行中的一轮、跳拍计数、多工作空间同一 `elapsedMs`）、探针缓存 2、阈值慢轮 1、metrics 3、诊断路由 2、对偶 2、tmux 2（只给 Agent 会话开 tap，含接管）。
 - `node tools/probes/core-terminal-program-status.mjs`：tmux 与 direct 都过。
+- `pnpm libs:build && pnpm -r --if-present test`：web 4172、desktop 5452 / 67 跳、shared 382、server 98 / 4 跳、mobile 10、push-relay 9 全过；live 配置的 `passkey-cdp.live.integration.test.ts` 本机失败（同前几节，与本改动无关），`node --test scripts/*.test.mjs` 单独跑 73 / 2 跳通过。`pnpm check` 通过。
 
 没做 / 偏离：
 
