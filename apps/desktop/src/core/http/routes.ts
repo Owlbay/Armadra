@@ -52,6 +52,28 @@ const WORKFLOW_ROUTES: readonly RouteEntry[] = (
   implemented: true,
 }));
 
+/** `/api/forge/repos/{host}/{owner}/{name}/*` 的路由（契约 §41）：路径与它收的方法。 */
+const FORGE_REPO_ROUTES: readonly RouteEntry[] = (
+  [
+    ["", ["GET"]],
+    ["/issues", ["GET"]],
+    ["/issues/{number}", ["GET", "PATCH"]],
+    ["/pulls", ["GET", "POST"]],
+    ["/pulls/{number}", ["GET"]],
+    ["/pulls/{number}/files", ["GET"]],
+    ["/pulls/{number}/checks", ["GET"]],
+    ["/pulls/{number}/merge", ["POST"]],
+    ["/merge-options", ["GET"]],
+    ["/pulls/{number}/auto-merge", ["POST", "DELETE"]],
+    ["/pulls/{number}/branch", ["DELETE"]],
+  ] as const
+).map(([path, methods]) => ({
+  path: `/api/forge/repos/{host}/{owner}/{name}${path}`,
+  methods,
+  surface: "runtime",
+  implemented: true,
+}));
+
 export const ROUTES: readonly RouteEntry[] = [
   // 「被读取 N 次」：谁读过这个节点的上下文（设计 agent-delivery.md §13）。
   // 不挂在工作空间下，因为它问的是一个节点的历史，而节点 id 全局唯一。
@@ -1436,70 +1458,5 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
-  {
-    path: "/api/forge/repos/{host}/{owner}/{name}",
-    methods: ["GET"],
-    surface: "runtime",
-    implemented: true,
-  },
-  {
-    path: "/api/forge/repos/{host}/{owner}/{name}/issues",
-    methods: ["GET"],
-    surface: "runtime",
-    implemented: true,
-  },
-  {
-    path: "/api/forge/repos/{host}/{owner}/{name}/issues/{number}",
-    methods: ["GET", "PATCH"],
-    surface: "runtime",
-    implemented: true,
-  },
-  {
-    path: "/api/forge/repos/{host}/{owner}/{name}/pulls",
-    methods: ["GET", "POST"],
-    surface: "runtime",
-    implemented: true,
-  },
-  {
-    path: "/api/forge/repos/{host}/{owner}/{name}/pulls/{number}",
-    methods: ["GET"],
-    surface: "runtime",
-    implemented: true,
-  },
-  {
-    path: "/api/forge/repos/{host}/{owner}/{name}/pulls/{number}/files",
-    methods: ["GET"],
-    surface: "runtime",
-    implemented: true,
-  },
-  {
-    path: "/api/forge/repos/{host}/{owner}/{name}/pulls/{number}/checks",
-    methods: ["GET"],
-    surface: "runtime",
-    implemented: true,
-  },
-  {
-    path: "/api/forge/repos/{host}/{owner}/{name}/pulls/{number}/merge",
-    methods: ["POST"],
-    surface: "runtime",
-    implemented: true,
-  },
-  {
-    path: "/api/forge/repos/{host}/{owner}/{name}/merge-options",
-    methods: ["GET"],
-    surface: "runtime",
-    implemented: true,
-  },
-  {
-    path: "/api/forge/repos/{host}/{owner}/{name}/pulls/{number}/auto-merge",
-    methods: ["POST", "DELETE"],
-    surface: "runtime",
-    implemented: true,
-  },
-  {
-    path: "/api/forge/repos/{host}/{owner}/{name}/pulls/{number}/branch",
-    methods: ["DELETE"],
-    surface: "runtime",
-    implemented: true,
-  },
+  ...FORGE_REPO_ROUTES,
 ];
