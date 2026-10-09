@@ -104,4 +104,30 @@ describe("工作空间的会话列表", () => {
     // 最新的在前：面板按 `created_at DESC` 显示。
     expect(listed.map((row) => row.nodeId)).toEqual(["node-b", "node-a"]);
   });
+
+  it("带上程序自报的状态，重连的页面靠它补节点头（契约 §53）", async () => {
+    const { core, workspaceId, boardId } = await board();
+    node(core, boardId, "node-a", "A");
+    node(core, boardId, "node-b", "B");
+    session(core, workspaceId, "node-a", "s-a", "2026-09-01T00:00:00Z");
+    session(core, workspaceId, "node-b", "s-b", "2026-09-02T00:00:00Z");
+    const status = {
+      state: "working" as const,
+      progress: 40,
+      source: "osc7501" as const,
+      updatedAt: "2026-09-02T00:00:01Z",
+    };
+    const listed = listSessions(
+      core.database,
+      workspaceId,
+      () => true,
+      (id) => (id === "s-a" ? status : undefined),
+    );
+    expect(
+      listed.find((row) => row.nodeId === "node-a")?.programStatus,
+    ).toEqual(status);
+    expect(listed.find((row) => row.nodeId === "node-b")).not.toHaveProperty(
+      "programStatus",
+    );
+  });
 });

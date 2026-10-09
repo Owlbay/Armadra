@@ -6,6 +6,11 @@ import {
   assertSubmitInput,
 } from "./manager-status";
 import { sequenceSessionEnvironment } from "./sequences";
+import {
+  connectProgramStatus,
+  type ProgramStatusBook,
+  type ProgramStatusWire,
+} from "./program-status-book";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -160,6 +165,8 @@ export class TerminalManager {
   private readonly onExit: TerminalManagerOptions["onExit"];
   private stopping = false;
   private readonly sequenceDirectory: string | undefined;
+  /** 程序自报的状态（契约 §53），只在内存里。 */
+  private readonly programs: ProgramStatusBook;
 
   constructor(options: TerminalManagerOptions) {
     this.sequenceDirectory = options.sequenceDirectory;
@@ -192,6 +199,19 @@ export class TerminalManager {
         void this.noticed(kind, notice);
       });
     }
+    this.programs = connectProgramStatus({
+      backends: this.backends,
+      record: (sessionId) => this.records.get(sessionId),
+      sessionOf: (key) => this.byKey.get(key),
+      clock: this.clock,
+      now: this.now,
+      onProgramStatus: options.onProgramStatus,
+    });
+  }
+
+  /** 程序此刻自报的状态（契约 §53）；没有记录、或会话不在这个进程里时缺席。 */
+  programStatus(sessionId: string): ProgramStatusWire | undefined {
+    return this.programs.status(sessionId);
   }
 
   /* -------------------------------- start-up ------------------------------- */
@@ -668,6 +688,7 @@ export class TerminalManager {
   }
 
   private forget(sessionId: string): void {
+    this.programs.forget(sessionId);
     const record = this.records.get(sessionId);
     if (record !== undefined) this.byKey.delete(record.key);
     this.records.delete(sessionId);
@@ -1216,6 +1237,8 @@ export class TerminalManager {
 
   markExited(sessionId: string, exitCode: number | null): void {
     const record = this.records.get(sessionId);
+    // Before `exited` is set: the last frame still has a live record to name.
+    this.programs.exited(sessionId);
     if (record !== undefined) record.exited = true;
     const result = this.database
       .prepare(
@@ -1391,6 +1414,7 @@ export class TerminalManager {
    */
   async shutdown(): Promise<void> {
     this.stopping = true;
+    this.programs.dispose();
     for (const timer of this.timers) clearInterval(timer);
     this.timers.length = 0;
     for (const [kind, backend] of this.backends) {
