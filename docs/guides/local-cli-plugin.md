@@ -117,8 +117,10 @@ Agents。host 仅为本次 exec 定义 `:read-only` 基线的权限 profile：�
 宿主客户端调用次数与 stdout 字节在 host-client-trace.jsonl 中计量；usage 是宿主
 实际报告，不包括假 Agents 的模型用量。没有同条件 MCP 基线，不报告 token 节省比例。
 
-真实内层 Codex 的 Hook 信任只读取配置文件；本机 0.159 实测 `-c hooks.state` 仍为
-untrusted。真实验证需要已经独立登录的隔离 CODEX_HOME 和该临时 core 的可信 Hook，
+真实内层 Codex 的 Hook 信任来自用户层或会话层（`-c`）的 `hooks.state`。早先 0.159
+的探针得到 untrusted；0.160 复测时键取会话层的 `/<session-flags>/config.toml:<event>:0:0`、
+哈希按[画布启动器](../design/canvas-launcher.md) §7.1 计算，`-c` 层自己的 Hook 就是 trusted
+（画布启动器即靠此）。真实验证需要已经独立登录的隔离 CODEX_HOME 和该临时 core 的可信 Hook，
 不能复制真实凭据、修改真实全局 Hook/trust 或通过绕过信任参数完成测试。真实
 Claude 审查需要已有 CLI 和有效登录。Linux CI 已配置 Unix 探针，但未执行前不计通过。
 
