@@ -1,29 +1,12 @@
 import * as React from "react";
-import { Trash2 } from "lucide-react";
 
 import { useT } from "../app/preferences-store";
-import {
-  ResponsiveAlertDialog,
-  ResponsiveAlertDialogAction,
-  ResponsiveAlertDialogCancel,
-  ResponsiveAlertDialogContent,
-  ResponsiveAlertDialogFooter,
-  ResponsiveAlertDialogHeader,
-  ResponsiveAlertDialogTitle,
-} from "@/panels/ResponsiveDialog";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import { Checkbox } from "@/ui/checkbox";
 import { Field, FieldError, FieldLabel } from "@/ui/field";
 import { Input } from "@/ui/input";
-import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemDescription,
-  ItemGroup,
-  ItemTitle,
-} from "@/ui/item";
+import { Item, ItemGroup, ItemTitle } from "@/ui/item";
 import { Spinner } from "@/ui/spinner";
 
 import type { RelaySourceChoice } from "./connect";
@@ -31,114 +14,6 @@ import type { RelaySourceChoice } from "./connect";
 /** 手机输入 16px，防 iOS 聚焦时放大整页（设计系统 §2.3）。 */
 const TOUCH_INPUT =
   "h-11 text-[length:var(--text-input-touch)] md:text-[length:var(--text-input-touch)]";
-
-/** 连接列表里的一行：名字、地址、走哪条路。 */
-export interface ConnectionRow {
-  readonly sourceId: string;
-  readonly label: string;
-  readonly host: string;
-  readonly relayed: boolean;
-  readonly direct: boolean;
-}
-
-export interface ConnectionListProps {
-  readonly rows: readonly ConnectionRow[];
-  readonly activeId?: string | undefined;
-  readonly disabled?: boolean | undefined;
-  readonly onOpen: (sourceId: string) => void;
-  readonly onRemove: (sourceId: string) => void;
-}
-
-/** 已有的连接：点一行进入，行尾移除（要确认）。 */
-export function ConnectionList({
-  rows,
-  activeId,
-  disabled,
-  onOpen,
-  onRemove,
-}: ConnectionListProps) {
-  const t = useT();
-  const [removing, setRemoving] = React.useState<ConnectionRow | null>(null);
-  return (
-    <>
-      <ItemGroup className="gap-2">
-        {rows.map((row) => (
-          <Item
-            key={row.sourceId}
-            variant="outline"
-            className="flex-nowrap p-0"
-            aria-current={row.sourceId === activeId || undefined}
-          >
-            <Button
-              type="button"
-              variant="ghost"
-              disabled={disabled}
-              className="h-auto min-h-12 min-w-0 flex-1 justify-start gap-2.5 rounded-lg px-3 py-2 text-left font-normal whitespace-normal"
-              onClick={() => onOpen(row.sourceId)}
-            >
-              <ItemContent className="min-w-0">
-                <ItemTitle className="max-w-full truncate">
-                  {row.label || row.host}
-                </ItemTitle>
-                <ItemDescription className="truncate font-mono text-[13px] tabular-nums">
-                  {row.host}
-                </ItemDescription>
-              </ItemContent>
-              {row.sourceId === activeId && (
-                <Badge variant="secondary">{t("mobileConnect.current")}</Badge>
-              )}
-            </Button>
-            <ItemActions className="pr-1">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="size-11"
-                disabled={disabled}
-                aria-label={t("mobileConnect.remove", {
-                  name: row.label || row.host,
-                })}
-                onClick={() => setRemoving(row)}
-              >
-                <Trash2 />
-              </Button>
-            </ItemActions>
-          </Item>
-        ))}
-      </ItemGroup>
-      <ResponsiveAlertDialog
-        open={removing !== null}
-        onOpenChange={(open) => {
-          if (!open) setRemoving(null);
-        }}
-      >
-        <ResponsiveAlertDialogContent>
-          <ResponsiveAlertDialogHeader>
-            <ResponsiveAlertDialogTitle>
-              {t("mobileConnect.removeTitle", {
-                name: removing ? removing.label || removing.host : "",
-              })}
-            </ResponsiveAlertDialogTitle>
-          </ResponsiveAlertDialogHeader>
-          <ResponsiveAlertDialogFooter>
-            <ResponsiveAlertDialogCancel>
-              {t("mobileConnect.cancel")}
-            </ResponsiveAlertDialogCancel>
-            <ResponsiveAlertDialogAction
-              variant="destructive"
-              onClick={() => {
-                if (removing) onRemove(removing.sourceId);
-                setRemoving(null);
-              }}
-            >
-              {t("mobileConnect.removeConfirm")}
-            </ResponsiveAlertDialogAction>
-          </ResponsiveAlertDialogFooter>
-        </ResponsiveAlertDialogContent>
-      </ResponsiveAlertDialog>
-    </>
-  );
-}
 
 export interface RelayFormProps {
   readonly busy: boolean;

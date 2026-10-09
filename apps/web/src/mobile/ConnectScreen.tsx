@@ -27,13 +27,10 @@ import type {
   RelayOutcome,
   RelaySourceChoice,
 } from "./connect";
-import {
-  type ConnectionRow,
-  ConnectionList,
-  FingerprintStep,
-  RelayForm,
-  SourcesStep,
-} from "./ConnectRelay";
+import { FingerprintStep, RelayForm, SourcesStep } from "./ConnectRelay";
+import type { ServiceStatus } from "../services/probe";
+import type { ServiceRow } from "../services/rows";
+import { ServicePicker } from "../services/ServicePicker";
 import { isJoinLink, issuerOrigin, parseJoinLink } from "./join-link";
 
 /** 连接失败的原因；文案键是 `mobileConnect.error.<原因>`。 */
@@ -106,8 +103,19 @@ export interface ConnectScreenProps {
    * 已有的连接列表 + 「添加连接」（扫码 / 配对链接 / 个人中转）。
    */
   readonly relay?: RelayEnrollment;
-  readonly connections?: readonly ConnectionRow[];
+  /** 连接表的行（「选择服务」，A7-1）。 */
+  readonly connections?: readonly ServiceRow[];
   readonly activeId?: string | undefined;
+  /** 最近使用的 `sourceId`（新的在前）。 */
+  readonly recent?: readonly string[];
+  /** 在线状态（`services/probe.ts`）；没探到的是未知。 */
+  readonly statuses?: Readonly<Record<string, ServiceStatus>>;
+  /** 登录失效的远程服务（签发方）。 */
+  readonly signedOut?: readonly string[];
+  /** 进来时带着的失败属于哪一行：挂在那一行下面，而不是列表上方。 */
+  readonly failedId?: string | undefined;
+  /** 从画布回来的：给一个「返回」回到当前那一个。 */
+  readonly manage?: boolean;
   readonly onOpen?: (sourceId: string) => void;
   readonly onRemove?: (sourceId: string) => void;
   /** 收到的是分享深链：一打开就直接挂载（`initialLink`）。 */
@@ -182,6 +190,11 @@ export function ConnectScreen({
   relay,
   connections = [],
   activeId,
+  recent = [],
+  statuses = {},
+  signedOut = [],
+  failedId,
+  manage = false,
   onOpen,
   onRemove,
   autoJoin = false,
@@ -208,6 +221,9 @@ export function ConnectScreen({
     () => hostOf(initialRelay?.issuer ?? "") ?? "",
   );
   const [code, setCode] = React.useState(codeOf(initialCode));
+  // 选择页上「登录」那个远程服务：中转表单预填它的地址。
+  const [relayIssuer, setRelayIssuer] = React.useState<string | null>(null);
+  const [opening, setOpening] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [failure, setFailure] = React.useState<ConnectFailure | null>(
     initialFailure ?? null,
@@ -327,15 +343,17 @@ export function ConnectScreen({
         );
   const host = origin ? new URL(origin).host : null;
   const titleKey =
-    view === "relay"
-      ? "mobileConnect.method.relay"
-      : view === "fingerprint"
-        ? "mobileConnect.fingerprint.title"
-        : view === "sources"
-          ? "mobileConnect.sources.title"
-          : multi && view === "add" && connections.length > 0
-            ? "mobileConnect.add"
-            : "mobileConnect.title";
+    multi && view === "list"
+      ? "services.title"
+      : view === "relay"
+        ? "mobileConnect.method.relay"
+        : view === "fingerprint"
+          ? "mobileConnect.fingerprint.title"
+          : view === "sources"
+            ? "mobileConnect.sources.title"
+            : multi && view === "add" && connections.length > 0
+              ? "mobileConnect.add"
+              : "mobileConnect.title";
   const panel = multi && view !== "link" && view !== "code";
 
   const header = (
@@ -355,6 +373,36 @@ export function ConnectScreen({
   const rootClass =
     "flex min-h-[100dvh] w-full flex-col items-center overflow-y-auto bg-background pt-[max(var(--safe-top),15vh)] pr-[calc(1.5rem+var(--safe-right))] pb-[max(var(--safe-bottom),24px)] pl-[calc(1.5rem+var(--safe-left))]";
 
+  /** 选择页上的「登录」：中转表单预填那个远程服务。 */
+  const signInTo = (issuer: string) => {
+    relay?.reset();
+    setFailure(null);
+    setRelayIssuer(issuer);
+    setView("relay");
+  };
+  const failedRow =
+    failedId === undefined || shownFailure === null
+      ? undefined
+      : connections.find((row) => row.sourceId === failedId);
+  const failedRelay = failedRow?.routes.find(
+    (route) => route.via === "relayed",
+  );
+  const rowFailure =
+    failedRow === undefined || message === null
+      ? null
+      : {
+          sourceId: failedRow.sourceId,
+          message,
+          ...(shownFailure === "expired" && failedRelay
+            ? {
+                action: {
+                  label: t("remote.signIn"),
+                  run: () => signInTo(failedRelay.issuer),
+                },
+              }
+            : {}),
+        };
+
   if (panel && relay) {
     const rows = connections;
     return (
@@ -363,32 +411,61 @@ export function ConnectScreen({
           {header}
           {view === "list" && (
             <>
-              {message && (
+              {message && rowFailure === null && (
                 <Alert variant="destructive">
                   <AlertTitle>{message}</AlertTitle>
                 </Alert>
               )}
-              <ConnectionList
+              <ServicePicker
+                variant="page"
                 rows={rows}
-                activeId={activeId}
+                recent={recent}
+                currentId={activeId}
+                statuses={statuses}
+                signedOut={signedOut}
+                failure={rowFailure}
+                busyId={opening}
                 disabled={shownBusy}
-                onOpen={(sourceId) => onOpen?.(sourceId)}
-                onRemove={(sourceId) => onRemove?.(sourceId)}
-              />
-              <Button
-                type="button"
-                size="lg"
-                variant="outline"
-                className="h-11 w-full"
-                disabled={shownBusy}
-                onClick={() => {
+                onEnter={(sourceId) => {
                   setFailure(null);
-                  setView("add");
+                  setOpening(sourceId);
+                  onOpen?.(sourceId);
                 }}
-              >
-                <Plus data-icon="inline-start" />
-                {t("mobileConnect.add")}
-              </Button>
+                onRemove={(sourceId) => onRemove?.(sourceId)}
+                onSignIn={signInTo}
+              />
+              <div className="flex flex-col gap-2">
+                <Button
+                  type="button"
+                  size="lg"
+                  variant="outline"
+                  className="h-11 w-full"
+                  disabled={shownBusy}
+                  onClick={() => {
+                    setFailure(null);
+                    setView("add");
+                  }}
+                >
+                  <Plus data-icon="inline-start" />
+                  {t("mobileConnect.add")}
+                </Button>
+                {manage && activeId !== undefined && (
+                  <Button
+                    type="button"
+                    size="lg"
+                    variant="ghost"
+                    className="h-11 w-full"
+                    disabled={shownBusy || opening !== null}
+                    onClick={() => {
+                      setOpening(activeId);
+                      onOpen?.(activeId);
+                    }}
+                  >
+                    <ChevronLeft data-icon="inline-start" />
+                    {t("mobileConnect.back")}
+                  </Button>
+                )}
+              </div>
             </>
           )}
           {view === "add" && (
@@ -471,10 +548,15 @@ export function ConnectScreen({
           {view === "relay" && (
             <>
               <RelayForm
+                key={relayIssuer ?? ""}
                 busy={shownBusy}
                 message={message}
                 errorId={errorId}
-                {...(initialRelay ? { initial: initialRelay } : {})}
+                {...(relayIssuer !== null
+                  ? { initial: { issuer: relayIssuer } }
+                  : initialRelay
+                    ? { initial: initialRelay }
+                    : {})}
                 onEdit={() => setFailure(null)}
                 onSubmit={(input) => {
                   setRelayHost(hostOf(input.issuer) ?? "");

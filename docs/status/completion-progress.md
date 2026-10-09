@@ -3853,3 +3853,42 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 接口：
 
 - web：`guardPointerRelease(body: HTMLElement): () => void`（`terminal/surface/pointer-release.ts`）。无契约、迁移变化。
+
+## 多端入口：选择服务页与「切换服务」（A7-1，多端入口设计 §1，2026-10-10）
+
+做了什么：
+
+- 新目录 `apps/web/src/services/`：`rows.ts`（源描述 → 行，一个 `sourceId` 一行，到达方式按直连优先排，「全部」按首选路分组：本机 / 中转 · 服务名 / 直连；行数超过 3 才单列「最近使用」）、`recent.ts`（`armadra.sources.recent`，带时刻、前插去重；一次性的进入意图 `armadra.services.enter` 在 `sessionStorage`）、`probe.ts`（直连 `GET /api/identity/hello` 1.5 秒；经中继的每个远程服务一次 `GET /v1/me/sources`，`online` 覆盖组内全部源，换不到访问令牌 4xx 记「已登出」、网络断了记未知；并发 3、缓存 30 秒；进页面与回前台各探一次）、`ServicePicker.tsx`（`page` / `dialog` 两种：行 = `Item` + `StatusPill` + 「当前」`Badge`，失败 `Alert` 挂在那一行下面，可带动作；登录失效的组头「已登出」+「登录」；空表 `Empty`）、`SwitchServiceDialog.tsx`、`ServicesSettingsGroup.tsx`、`switcher.ts`。
+- 原生 App 入口（`mobile/entry.ts`）：连接表非空不再自动 `enterConnection`，缺省落在选择页（`pick: true`）；`startupTarget` 决定的三种直接进：选择页点过一行（进入意图）、推送要切连接（地址带 `#push=`）、偏好 `services.autoEnter`（`armadra.services.autoEnter`，缺省关）。进成功记进最近使用；进不去回选择页，失败带 `failedId` 挂在那一行。表为空、记着早先单连接 Gateway 的旧路径不变。配对、个人中转挂载、分享链接加入之后照旧直接进（`connect.ts::enterNext` 同时记进入意图）。
+- `ConnectScreen` 的列表态换成 `ServicePicker`（标题「选择服务」，在线状态来自 `useServiceProbe`；行上「需要重新登录」且经中继时动作「登录」，打开中转表单并预填那个远程服务；从画布回来多一个「返回」）。旧 `ConnectionList` 删掉。
+- 中继托管页面（`shell/RelaySignIn.tsx`）登录后挑主机改用同一个列表（`disableOffline`：目录答的离线行点不了；进不去的失败挂在那一行）；`remote.hosted.open` / `remote.hosted.offline` 两个键随之删掉。
+- 桌面与服务器壳：「切换服务」对话框（`ResponsiveDialog`，手机宽度是底部 Sheet）：本机 / 中转 / 直连分组，状态取各源的连接状态，行尾「切换」= `registry.setCurrent`（不带源前缀的查询经 `useSourceSwitchCacheReset` 重取）并把侧栏滚到那一组；桌面壳再多「在新窗口打开」。底部「添加连接」去设置 → 远程访问。入口：设置 → 远程访问顶部「服务」一组、命令面板 `app.switchService`（不预设键位）。
+- 手机设置首页（「常用」）顶部「服务」一组：当前服务（名字 · 到达方式）+「切换服务」（`#connections` 重载回选择页）、「启动时直接进入上次的服务」开关。
+- 推送 `unknown`（签发通知的主机不在连接表）的提示加动作「选择服务」。
+- 桌面壳 IPC `window:open { sourceId }` → `{ opened }`（`shared/ipc.ts`、`main/index.ts`、preload `windows.openSource`）：`main/window.ts::openSourceWindow` 用同一张页面另开窗口，地址带 `?source=`；它不是主窗口（`sendToWindow` 只对主窗口，关它真关），`onWindowCreated` 加 `scope`，抢占快捷键的拦截只装主窗口（它的回答经 `sendToWindow`）。页面 `use-sources-bootstrap.ts::followInitialSource` 在那个源挂上后设为当前，只设一次。
+- i18n 新模块 `i18n/services.ts`（中英同步）；设计展示页加「切换服务」对话框样本，手机列表样本换成新行模型。
+- 测试：`services/probe.test.ts` 7（直连认不认、超时、中继一服务一问、登出与网络断开、两条路、并发 3、缓存 30 秒）、`services/ServicePicker.test.tsx` 14（合并与分组、最近使用门槛、意图只取一次、整页与对话框两种、行内失败、登出组头、空态、新窗口交给壳、`?source=`）、`entry.test.ts` +6（缺省落选择页、单连接也先选、意图直进并记最近、`autoEnter`、`#push=` 不受影响、失败挂行）、`ConnectScreen.test.tsx` +3、`RelaySignIn.test.tsx` 改为按行断言、`main/window.test.ts` +4、`shared/ipc.test.ts` 登记 `window:open`。
+- 真机用例：iOS `ConnectFlowUITests` 重开后先落选择页、点那一行进画布；Android `ConnectFlowTest` 另记一个连不上的连接，走「两个连接 → 选择页 → 选配对的那一行 → 画布 → `#connections` 回选择页 → 再进」，`c_` 用例先选再进。`mobile-shell-e2e.mjs` 的步骤名同步。A 档 `multi-source` 加 2b：设置 → 远程访问 →「切换服务」切到服务器，侧栏分组与「当前服务」一致，再切回本机。
+
+实测（macOS arm64）：
+
+- `pnpm check` 通过；web 全量 vitest 单独跑通过（与 desktop 并行跑时 `SettingsDialog.test.tsx` 等十几条超时，单独重跑通过）；desktop 全量里 `parity-terminals.test.ts` 的 `afterAll` 钩子超时、`stream-queue.integration.test.ts` 一条时序断言失败，都在 core、本包没改，机器负载下复现、单独重跑 `stream-queue` 通过。
+- A 档 `multi-source`（`ARMADRA_PROBE_RELAY_IMAGE=armadra-probe-relay:r5-media-ticket`）全部通过，含 2b；用 `armadra-probe-relay:local` 那一版镜像时第 4 步探针自己取中继媒体票答 403 `forbidden`（镜像版本问题，与 2b 无关）。
+- 设计展示页 390 / 1440、明暗两套截图自查：行高 ≥ 48、行尾移除 44×44、状态胶囊文字用 `-text` token、未知只呼吸文字给读屏、无说明性文字。
+- iOS XCUITest / Android 插桩没在本机跑（夜间 `mobile-shell-e2e` 跑）。
+
+没做 / 偏离：
+
+- 空表仍直接是「添加连接」的三种方式（不另加一屏 `Empty` 再点一次）；`services.empty` 用在没有主机可列时（对话框、托管页）。
+- 移除连接沿用行尾垃圾桶 +「移除连接」确认（`mobileConnect.remove*`），没有做长按 / 右滑；`services.remove*` 两个键不新增。
+- 桌面对话框的在线状态取各源现有连接状态（桌面所有源本来就同时挂着），不另跑 `probe.ts`。
+- 侧栏组头点击切当前源没做（组头是拖动排序的把手，点和拖会抢）。
+- 新窗口里抢占的快捷键（⌘W 等）不拦截，走系统菜单（关的是那扇窗）；通知点击、内存压力推送仍只到主窗口。
+- 到达方式读 `SourceDescriptor` 的 `baseUrl` / `relayOrigin`；A7-2（一源多路，0044）合并后变基时改读 `routes`。
+- 推送 `?s=` 在 A7-2 之后按多路由选路，这里未改。
+
+接口：
+
+- web：`services/rows.ts`（`ServiceRow`、`ServiceRoute`、`serviceRowOf`、`layoutServices`、`hostOf`）、`services/recent.ts`（`loadRecent`、`recentIds`、`recordRecent`、`forgetRecent`、`setEnterIntent`、`takeEnterIntent`、`RECENT_LIMIT`）、`services/probe.ts`（`createServiceProbe`、`useServiceProbe`、`ServiceStatus`）、`services/switcher.ts`（`useServiceSwitcher`、`switchService`、`returnToPicker`、`openSourceWindow`、`initialSourceParam`）、`ServicePicker` / `SwitchServiceDialog` / `ServicesSettingsGroup`；`mobile/entry.ts::startupTarget`，`Entry` 的 `connect(native)` 加 `pick` / `recent` / `failedId`；偏好 `servicesAutoEnter`；命令 `app.switchService`；`followInitialSource`；DOM 标记 `data-slot="service-picker"`、`data-service-row`、`data-service-group`、`data-service-status`、`data-service-failure`、`data-action="switch-service"`、`data-testid="switch-service-dialog"`。
+- 桌面壳：IPC `window:open`（`window`），preload `window.armadra.windows.openSource({ sourceId })`；`main/window.ts` 的 `openSourceWindow`、`sourceWindowUrl`、`onWindowCreated(listener, scope)`。
+- 存储键：`armadra.sources.recent`、`armadra.services.autoEnter`（localStorage），`armadra.services.enter`（sessionStorage）。

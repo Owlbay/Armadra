@@ -26,6 +26,7 @@ import {
   MOBILE_CA_HREF,
   MOBILE_CODE,
   MOBILE_CONNECTIONS,
+  MOBILE_CONNECTION_STATUSES,
   MOBILE_LINK,
   MOBILE_ORIGIN,
   MOBILE_RELAY_FINGERPRINT,
@@ -130,6 +131,7 @@ function Screen({
             canScan
             relay={relayStub}
             connections={MOBILE_CONNECTIONS}
+            statuses={MOBILE_CONNECTION_STATUSES}
             activeId={MOBILE_CONNECTIONS[0].sourceId}
             initialView="list"
             onConnect={never}

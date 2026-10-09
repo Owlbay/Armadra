@@ -37,6 +37,8 @@ import {
   takeJoinLink,
 } from "../../../sources/join-intent";
 import { SettingsGroup } from "../SettingsGroup";
+import { isNativeApp } from "../../../mobile/native-bridge";
+import { ServicesSettingsGroup } from "../../../services/ServicesSettingsGroup";
 import { SettingsRow } from "../SettingsRow";
 import {
   RELAY_PENDING_KEY,
@@ -237,6 +239,8 @@ export function RemoteAccessPage() {
 
   return (
     <>
+      {/* 桌面与服务器壳：远程访问页顶部是「服务」（A7-1）；手机在设置首页。 */}
+      {!isNativeApp() && hostedRelay() === null && <ServicesSettingsGroup />}
       <section className="flex min-w-0 flex-col gap-2">
         <h3 className="px-0.5 text-[13px] font-medium text-foreground">
           {t("remote.access.inbound")}

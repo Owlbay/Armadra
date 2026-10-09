@@ -104,12 +104,24 @@ export function applyContentSecurityPolicy(
  * stops working after that cycle. It also keeps the dependency one-way:
  * `menu.ts` reaches into this module, and this module must not reach back.
  */
-const created: ((window: BrowserWindow) => void)[] = [];
+const created: {
+  readonly listener: (window: BrowserWindow) => void;
+  readonly scope: WindowScope;
+}[] = [];
+
+/**
+ * `all`: every window, the per-source ones included. `main`: only the window
+ * `sendToWindow` talks to — wiring whose round trip answers through
+ * `sendToWindow` (the claimed-chord intercept, `menu.ts`) must not be
+ * installed on a window the answer would never reach.
+ */
+export type WindowScope = "all" | "main";
 
 export function onWindowCreated(
   listener: (window: BrowserWindow) => void,
+  scope: WindowScope = "all",
 ): void {
-  created.push(listener);
+  created.push({ listener, scope });
 }
 
 export function markQuitting(): void {
@@ -129,11 +141,16 @@ export function sendToWindow(channel: string, ...args: unknown[]): void {
   getMainWindow()?.webContents.send(channel, ...args);
 }
 
-export function createMainWindow(
-  platform: NodeJS.Platform = process.platform,
-): BrowserWindow {
+/**
+ * What every window this module makes is built from: the main window and the
+ * per-source windows (`openSourceWindow`) share one preload, one set of
+ * preferences and one title-bar layout.
+ */
+function windowOptions(
+  platform: NodeJS.Platform,
+): Electron.BrowserWindowConstructorOptions {
   const darwin = platform === "darwin";
-  const window = new BrowserWindow({
+  return {
     width: 1440,
     height: 920,
     title: APP_NAME,
@@ -166,7 +183,13 @@ export function createMainWindow(
       // `plugins` 之下；不开就是一块空白框。
       plugins: true,
     },
-  });
+  };
+}
+
+export function createMainWindow(
+  platform: NodeJS.Platform = process.platform,
+): BrowserWindow {
+  const window = new BrowserWindow(windowOptions(platform));
 
   window.once("ready-to-show", () => {
     window.show();
@@ -201,7 +224,7 @@ export function createMainWindow(
     void loadRenderer(window);
   });
 
-  for (const listener of created) listener(window);
+  for (const entry of created) entry.listener(window);
 
   current = window;
   return window;
@@ -238,4 +261,51 @@ export function revealWindow(): BrowserWindow | null {
 export async function loadRenderer(window: BrowserWindow): Promise<void> {
   if (pageUrl === "") throw new Error("the page source was never resolved");
   await window.loadURL(pageUrl);
+}
+
+/** A source id as the page names it: `sources/` ids are hex or `local`. */
+const SOURCE_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+
+/** The page URL a per-source window loads: the same page, `?source=<id>`. */
+export function sourceWindowUrl(page: string, sourceId: string): string {
+  const url = new URL(page);
+  url.searchParams.set("source", sourceId);
+  return url.toString();
+}
+
+/**
+ * Another window on the same page, opened on one source (`window:open`, the
+ * "switch service" dialog's "open in new window"). The page reads `?source=`
+ * and makes that source current once it is mounted (`apps/web/src/app/
+ * use-sources-bootstrap.ts`).
+ *
+ * It is NOT the main window: `sendToWindow` keeps talking to the one window
+ * the shell owns, closing this one really closes it (no hide-to-keep-alive —
+ * the main window already keeps the Runtime's clients), and the per-window
+ * wiring (`onWindowCreated`) runs for it like for any other. Answers `null`
+ * for an id that does not look like one, before the page source is known, or
+ * while quitting.
+ */
+export function openSourceWindow(
+  sourceId: unknown,
+  platform: NodeJS.Platform = process.platform,
+): BrowserWindow | null {
+  if (quitting || pageUrl === "") return null;
+  if (typeof sourceId !== "string" || !SOURCE_ID.test(sourceId)) return null;
+  const url = sourceWindowUrl(pageUrl, sourceId);
+  const window = new BrowserWindow(windowOptions(platform));
+  window.once("ready-to-show", () => {
+    window.show();
+  });
+  const crashes = createCrashReloadPolicy();
+  window.webContents.on("render-process-gone", (_event, details) => {
+    traceLifecycle(`source window renderer gone: ${details.reason}`);
+    if (!crashes.shouldReload(details.reason, Date.now())) return;
+    if (window.isDestroyed()) return;
+    void window.loadURL(url);
+  });
+  for (const entry of created)
+    if (entry.scope === "all") entry.listener(window);
+  void window.loadURL(url);
+  return window;
 }
