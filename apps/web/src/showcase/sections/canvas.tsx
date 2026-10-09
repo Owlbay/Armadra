@@ -22,6 +22,7 @@ import { edgeTypes } from "@/canvas/flow/edges/edge-types";
 import { useFamilies } from "@/canvas/family";
 import {
   MinimapNode,
+  MinimapToggle,
   minimapFill,
   minimapItemOf,
   minimapStroke,
@@ -426,8 +427,17 @@ const noGlow = () => undefined;
 /**
  * 两簇 + 独立 Agent + 便签，配一张同色的小地图（设计 ui-wave2 §5.4）。上下文线
  * （便签 ↔ reviewer、reviewer ↔ worker）是专用的品红，派发线是各自的簇色，小地图里
- * 两类线同样分色。
+ * 两类线同样分色，锚点与曲线也同画布（#216）。右上角的「−」定格在悬停时那一刻。
  */
+const noop = () => {};
+
+/** 小地图的尺寸与位置变量：真画布的位置规则（`styles/canvas.css`）读它们。 */
+const MINIMAP_VARS = {
+  "--minimap-w": "150px",
+  "--minimap-h": "90px",
+  "--navigation-bottom": "10px",
+} as React.CSSProperties;
+
 function ClusterSpecimen({ scale }: { scale: number }) {
   const families = useFamilies();
   return (
@@ -436,6 +446,7 @@ function ClusterSpecimen({ scale }: { scale: number }) {
         data-showcase-clusters
         className="canvas-stage relative origin-top-left overflow-hidden rounded-[var(--r-panel)] border border-border"
         style={{
+          ...MINIMAP_VARS,
           width: CLUSTER_WIDTH + 2,
           height: CLUSTER_HEIGHT + 2,
           transform: scale < 1 ? `scale(${scale})` : undefined,
@@ -464,17 +475,8 @@ function ClusterSpecimen({ scale }: { scale: number }) {
               gap={20}
             />
             <MiniMap<CanvasFlowNode>
-              // 真画布的位置规则（`styles/canvas.css`）读这三个变量，SVG 的
-              // 尺寸读 width / height；展示页没有 Dock，贴着右下角放一张小的。
-              style={
-                {
-                  width: 150,
-                  height: 90,
-                  "--minimap-w": "150px",
-                  "--minimap-h": "90px",
-                  "--navigation-bottom": "10px",
-                } as React.CSSProperties
-              }
+              // SVG 的尺寸读 width / height；展示页没有 Dock，贴着右下角放一张小的。
+              style={{ width: 150, height: 90 }}
               nodeColor={(node) =>
                 minimapFill(minimapItemOf(node, noGlow, families))
               }
@@ -484,6 +486,7 @@ function ClusterSpecimen({ scale }: { scale: number }) {
               nodeComponent={MinimapNode}
               nodeBorderRadius={3}
             />
+            <MinimapToggle collapsed={false} onToggle={noop} reveal />
           </ReactFlow>
         </ReactFlowProvider>
       </div>
@@ -493,7 +496,8 @@ function ClusterSpecimen({ scale }: { scale: number }) {
 
 /**
  * 连线随动（#211）：主在中间，四条线从它的四条边各出一条。拖动节点时每条线按
- * 两端此刻的相对位置重新选边；这里把「拖过之后」的那一刻定格下来。
+ * 两端此刻的相对位置重新选边；这里把「拖过之后」的那一刻定格下来。右下角是
+ * 小地图收起后的展开钮（#216）。
  */
 function FollowSpecimen({ scale }: { scale: number }) {
   return (
@@ -502,6 +506,7 @@ function FollowSpecimen({ scale }: { scale: number }) {
         data-showcase-follow
         className="canvas-stage relative origin-top-left overflow-hidden rounded-[var(--r-panel)] border border-border"
         style={{
+          ...MINIMAP_VARS,
           width: CLUSTER_WIDTH + 2,
           height: CLUSTER_HEIGHT + 2,
           transform: scale < 1 ? `scale(${scale})` : undefined,
@@ -529,6 +534,7 @@ function FollowSpecimen({ scale }: { scale: number }) {
               color="var(--canvas-dot)"
               gap={20}
             />
+            <MinimapToggle collapsed onToggle={noop} />
           </ReactFlow>
         </ReactFlowProvider>
       </div>
