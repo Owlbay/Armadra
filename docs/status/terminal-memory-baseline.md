@@ -1,6 +1,6 @@
 # 终端内存基线（桌面壳：10 个持续输出的终端）
 
-> 状态：**占位，待录**。探针与比对规则已就位；基线要在性能包 P1–P4（Runtime 采样异步 + 诊断接口、徽标可见性与内存压力、终端分阶段生命周期、渲染器策略）合入 `main` 之后，在 macOS 与 Linux 的 GitHub 托管运行器上各跑三次夜间作业、取中位数再写（见 §4）。录之前 `tools/probes/terminal-memory-baseline.json` 的 `platforms` 是空的，B 档只报告不判。
+> 状态：已验证记录。基线在 P1–P4 合入后的 `main`（`9cd38293`）加本包上，由 macOS 与 Linux 的 GitHub 托管运行器各跑三次夜间作业取中位数（§4）。
 > 脚本：`tools/probes/terminal-memory.mjs`（用法见[探针说明](../../tools/probes/README.md)「终端内存基线」）；比对基线：`tools/probes/terminal-memory-baseline.json`；规则：`tools/probes/terminal-memory-lib.mjs` 的 `METRICS`。
 
 ## 1. 场景
@@ -39,11 +39,46 @@
 
 ## 3. 环境
 
-待录（机器、系统、Node、tmux、`main` 提交、负载）。
+- `darwin-arm64`：GitHub Actions `macos-14` 托管运行器（arm64），Node 22，tmux（Homebrew），夜间 B 档 macOS 作业里的打包产物 `apps/desktop/release/mac-arm64/Armadra.app`。
+- `linux-x64`：GitHub Actions `ubuntu-22.04` 托管运行器（x64），Node 22，`xvfb-run` 下的 `linux-unpacked`，软件渲染；内存是 Pss。
+- 提交：`perf/terminal-memory-probe` `4a795d06`（`main` `9cd38293`，P1–P4 已合入，加本包）；nightly 37961973088、37964685518、37967150898（第三次 macOS 作业的 `packaged-smoke` 超时失败，`terminal-memory` 通过）。
 
 ## 4. 基线（三次与中位数）
 
-待录。基线在 GitHub 托管运行器上录（B 档就在那里比，开发机的负载与窗口状态不对口）：对要录的提交连跑三次夜间作业，从 `e2e-tier-b-macos` / `e2e-tier-b-linux` 产物里取 `terminal-memory/result.json`，每个平台合并一次：
+### `darwin-arm64`（macos-14）
+
+| 指标                       | 第 1 次 | 第 2 次 | 第 3 次 | 中位数（进基线） |
+| -------------------------- | ------: | ------: | ------: | ---------------: |
+| `rendererActiveMiB`        |     468 |     465 |     510 |              468 |
+| `rendererOffscreenLongMiB` |     181 |     183 |     193 |              183 |
+| `rendererAfterGcDeltaMiB`  |     -16 |      17 |      21 |               17 |
+| `runtimeEldMaxMs`          |   82.47 |   63.07 |    88.7 |             82.5 |
+| `runtimeEldP99MedianMs`    |    6.88 |    6.86 |    7.99 |              6.9 |
+| `cadencePsPer65s`          |       2 |       2 |       2 |                2 |
+| `tmuxTreeRssMiB`           |    88.8 |   120.4 |    97.7 |             97.7 |
+| `tmuxProcs`                |      31 |      31 |      31 |               31 |
+
+### `linux-x64`（ubuntu-22.04，xvfb）
+
+| 指标                       | 第 1 次 | 第 2 次 | 第 3 次 | 中位数（进基线） |
+| -------------------------- | ------: | ------: | ------: | ---------------: |
+| `rendererActiveMiB`        |  2060.5 |  1057.1 |  1072.5 |           1072.5 |
+| `rendererOffscreenLongMiB` |   221.4 |   213.9 |   212.6 |            213.9 |
+| `rendererAfterGcDeltaMiB`  |  -449.5 |    31.4 |  -128.8 |           -128.8 |
+| `runtimeEldMaxMs`          |   42.23 |   16.87 |   56.68 |             42.2 |
+| `runtimeEldP99MedianMs`    |    1.96 |     1.8 |    1.69 |              1.8 |
+| `cadencePsPer65s`          |       2 |       2 |       2 |                2 |
+| `tmuxTreeRssMiB`           |   154.3 |   156.5 |   154.3 |            154.3 |
+| `tmuxProcs`                |      31 |      31 |      31 |               31 |
+
+读法：
+
+- 两个平台全部离屏时每 65 s 都只采样 2 次（改动前 31 次），Runtime 事件循环最大延迟 40–90 ms（改动前最高 1484 ms），全部读数来自 §54 诊断接口（打包版没有 `--eld-preload`，同步阻塞一列为空）。
+- 长离屏时十个终端都进了 `detached`，Renderer 回到约 180 MiB（macOS）/ 214 MiB（Linux）。
+- tmux 进程数 31 = 1 个服务器 + 10 × (shell + 发射器) + 10 个 core 的控制客户端；tap 的 `cat` 只给 Agent 会话，普通终端不再有。
+- Linux 软件渲染下 Renderer 的活跃读数与强制 GC 差值噪声远超容差（活跃 1057 / 1073 / 2061 MiB，GC 差 −450 / +31 / −129 MiB），这两项在 Linux 只记录；三次运行各自对这份基线比都不报退化。
+
+重录：基线在 GitHub 托管运行器上录（B 档就在那里比，开发机的负载与窗口状态不对口）：对要录的提交连跑三次夜间作业，从 `e2e-tier-b-macos` / `e2e-tier-b-linux` 产物里取 `terminal-memory/result.json`，每个平台合并一次：
 
 ```sh
 gh workflow run nightly.yml --ref <分支>          # 跑三次，各记下 run id

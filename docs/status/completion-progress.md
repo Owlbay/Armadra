@@ -3786,11 +3786,13 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - `--restore-check`（3 个终端）：行列、文字、光标与 `capture-pane` 全部对上（P3 未合入，离屏时 `data-lifecycle` 还没有值，这次验的是探针本身）。
 - P1 / P2 合入后的 `main`（`454a7861`，P3 / P4 未合入）同一开发构建、5 个终端、`--pressure`：Runtime 读数改由 §54 诊断接口给出——事件循环最大 81 ms、p99 中位数 4.3 ms，一轮采样最长 115 ms、无超时；垫片记的同步子进程阻塞 0 ms/s；全部离屏时每 65 s 采样 2 次（之前 31）；tmux 进程数 16 = 1 个服务器 + 5 × (shell + 发射器) + 5 个控制客户端（tap 的 `cat` 只给 Agent 会话后少了 5 个）；注入假压力后 `data-render` 不变。
 - 夜间作业在本分支手动跑一次（run 37930415539）：macOS 打包产物上 `terminal-memory` 通过（约 7.6 分钟，10 个终端，Renderer 活跃 381 / 长离屏 172 MiB），Linux `linux-unpacked` 在 xvfb 下通过（Renderer Pss 活跃 1087 / 长离屏 244 MiB，软件渲染）。
+- 基线（P1–P4 合入后的 `main` `9cd38293` 加本包，GitHub 运行器各三次夜间作业的中位数，nightly 37961973088、37964685518、37967150898）：macOS Renderer 活跃 468 / 长离屏 183 MiB，Linux 1073 / 214 MiB；两平台全部离屏每 65 s 采样 2 次，事件循环最大 82.5 / 42.2 ms，tmux 31 个进程；长离屏时十个终端都是 `detached`。六次运行各自对基线比都不报退化。原始数见[终端内存基线](terminal-memory-baseline.md) §4。
+- 探针临时目录改短前缀 `atm-`，数据目录里的 Unix socket 路径不再逼近上限（P4 报的问题）。
 - `node --test tools/probes/terminal-memory.test.mjs`：14 个全过（`compare()` 各规则、恢复断言、合并、解析、清单经 `e2e.mjs --list`）。
 
 没做 / 偏离：
 
-- 基线没录：要等 P1–P4 合入后，在 macOS 与 Linux 运行器上各跑三次夜间作业，从产物 `--merge`，同步本节与基线文档；不在开发机上录。
+- Renderer 活跃读数与强制 GC 差值在 Linux 只记录（设计里只有 GPU 列如此）：软件渲染下同一提交三次是 1057 / 1073 / 2061 MiB 与 −450 / +31 / −129 MiB，按容差比会误报。
 - 多了一个文件 `tools/probes/terminal-memory-eld.cjs`（`--eld-preload` 的垫片），设计的文件边界里没列。
 - `--pressure` 依赖 P2 的 `window.__armadraMemoryPressure`，`--release-after` 写 P3 的 `armadra.terminal.releaseAfter`，渲染器同时写 P4 的 `armadra.terminal.renderer` 与旧的 `armadra.terminal.webgl`；这些包合入前探针只记录。
 - 打包产物这条路径（B 档用的）本机没跑，靠 nightly 验；GPU 列在 Linux 软件 GL 下只记录。
