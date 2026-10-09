@@ -1363,6 +1363,9 @@ export class TerminalManager {
     kind: BackendKind,
     notice: BackendNotice,
   ): Promise<void> {
+    // 关停时 `detachAll` 结束的直连会话会陆续报退出，那时库可能已经关了：不再
+    // 落库，下次启动的 `failNonPersistentRows` 会把这些行收掉。
+    if (this.stopping) return;
     const sessionId = this.byKey.get(notice.key);
     if (sessionId === undefined) return;
     const record = this.records.get(sessionId);

@@ -667,6 +667,26 @@ describe("shutdown", () => {
     expect(row).toEqual({ status: "running", attach_state: "detached" });
     expect(backend.calls).toContain("detachAll");
   });
+
+  // 分支 nightly 的 server 用例：关停杀掉的会话在关库之后才报退出，落库抛
+  // `database is not open` 成了未处理的拒绝。
+  it("ignores exit notices that arrive after shutdown, when the database may be closed", async () => {
+    const { manager, backend, database } = harness();
+    const session = await spawn(manager, "node-a");
+    await manager.shutdown();
+    backend.announce({
+      type: "exited",
+      key: "node-a" as SessionKey,
+      generation: 1,
+      exitCode: 0,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // 一行没写：关停之后这条通知不碰库（库那时可能已经关了）。
+    const row = database
+      .prepare("SELECT status FROM terminal_sessions WHERE id = ?")
+      .get(session.id) as { status: string };
+    expect(row.status).toBe("running");
+  });
 });
 
 /**
