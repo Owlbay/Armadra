@@ -1,0 +1,57 @@
+{
+  "$comment": "terminal-memory.mjs 的比对基线：按 <平台>-<架构>（WebGL 加 -webgl，直连后端加 -direct）一份，10 个终端、rate 100、off1 60 / off2 180 / cycles 10，同一台机器上连跑三次的中位数（--merge 三份 result.json 写进来）。比对规则见 terminal-memory-lib.mjs 的 METRICS；没有这台平台、同一场景的基线时只报告。",
+  "platforms": {
+    "darwin-arm64": {
+      "recordedAt": "2026-10-09",
+      "machine": "GitHub Actions macos-14 托管运行器（arm64），Node 22，夜间 B 档 macOS 作业的打包产物；perf/terminal-memory-probe 4a795d06（main 9cd38293 + P5）上 nightly 37961973088、37964685518、37967150898 三次的中位数",
+      "runs": 3,
+      "options": {
+        "terminals": 10,
+        "rate": 100,
+        "renderer": "dom",
+        "backend": "tmux",
+        "off1": 60,
+        "off2": 180,
+        "cycles": 10
+      },
+      "metrics": {
+        "rendererActiveMiB": 468,
+        "rendererOffscreenLongMiB": 183,
+        "rendererAfterGcDeltaMiB": 17,
+        "gpuOffscreenLongMiB": null,
+        "runtimeEldMaxMs": 82.5,
+        "runtimeEldP99MedianMs": 6.9,
+        "runtimeSyncBlockedMsPerSec": null,
+        "cadencePsPer65s": 2,
+        "tmuxTreeRssMiB": 97.7,
+        "tmuxProcs": 31
+      }
+    },
+    "linux-x64": {
+      "recordedAt": "2026-10-09",
+      "machine": "GitHub Actions ubuntu-22.04 托管运行器（x64），Node 22，xvfb 下 linux-unpacked，软件渲染；perf/terminal-memory-probe 4a795d06（main 9cd38293 + P5）上 nightly 37961973088、37964685518、37967150898 三次的中位数",
+      "runs": 3,
+      "options": {
+        "terminals": 10,
+        "rate": 100,
+        "renderer": "dom",
+        "backend": "tmux",
+        "off1": 60,
+        "off2": 180,
+        "cycles": 10
+      },
+      "metrics": {
+        "rendererActiveMiB": 1072.5,
+        "rendererOffscreenLongMiB": 213.9,
+        "rendererAfterGcDeltaMiB": -128.8,
+        "gpuOffscreenLongMiB": null,
+        "runtimeEldMaxMs": 42.2,
+        "runtimeEldP99MedianMs": 1.8,
+        "runtimeSyncBlockedMsPerSec": null,
+        "cadencePsPer65s": 2,
+        "tmuxTreeRssMiB": 154.3,
+        "tmuxProcs": 31
+      }
+    }
+  }
+}
