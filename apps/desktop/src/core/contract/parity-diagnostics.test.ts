@@ -6,7 +6,12 @@ import { EventBus } from "../bus";
 import { openFreshDatabase } from "../db/fresh.fixture";
 import { ClientReports } from "../diagnostics/client-report";
 import { scrubContext } from "../diagnostics/crash";
-import { CLIENT_ERROR_ROUTE, installRoutes } from "../diagnostics/routes";
+import {
+  CLIENT_ERROR_ROUTE,
+  RUNTIME_ROUTE,
+  installRoutes,
+} from "../diagnostics/routes";
+import { RuntimeMetrics } from "../resources/metrics";
 import { routeScope } from "../http/route-scopes";
 import { installContract } from "../http/rpc";
 import { CoreServer } from "../http/server";
@@ -48,6 +53,11 @@ let server: CoreServer;
 let on = true;
 let clock = 1_800_000_000_000;
 const sent: Error[] = [];
+/** §54：固定的一份数字，三种答法读同一份。 */
+const runtime = new RuntimeMetrics();
+runtime.sampling.noteRound(84, Date.parse("2026-10-09T10:00:00.000Z"));
+runtime.sampling.noteTimeout("probe");
+let runtimeInstalled = true;
 const closing: (() => void | Promise<void>)[] = [];
 
 const caller = (name: string): RequestIdentity => ({
@@ -83,6 +93,7 @@ beforeAll(async () => {
         ),
       now: () => clock,
     }),
+    () => (runtimeInstalled ? runtime.report(2_000) : undefined),
   );
   installContract(server, { validateOutput: true, platform });
   const identities: Record<string, RequestIdentity | undefined> = {
@@ -159,6 +170,48 @@ describe("clientErrorStatus", () => {
     );
     expect(answers[0].status).toBe(401);
     expectParity(answers);
+  });
+});
+
+describe("runtime（§54）", () => {
+  async function runtimeThree(as: string) {
+    return [
+      await kit.table("GET", RUNTIME_ROUTE, undefined, as),
+      await kit.legacy("GET", RUNTIME_ROUTE, undefined, as),
+      await kit.procedure("diagnostics.runtime", undefined, as),
+    ] as const;
+  }
+
+  it("登录即可、本机请求照答，三处逐字节一样，只有数字与时间戳", async () => {
+    for (const as of ["a", "owner", "local"]) {
+      const answers = await runtimeThree(as);
+      expect(answers[0].status, as).toBe(200);
+      expect(answers[0].body).toMatchObject({
+        eventLoop: { windowMs: 60_000 },
+        sampling: {
+          intervalMs: 2_000,
+          rounds: 1,
+          lastRoundMs: 84,
+          timeouts: { ps: 0, tmux: 0, probe: 1 },
+          lastRoundAt: "2026-10-09T10:00:00.000Z",
+        },
+      });
+      expectParity(answers);
+    }
+  });
+
+  it("匿名 401、资源域没装 404，三处一样", async () => {
+    const anonymous = await runtimeThree("anon");
+    expect(anonymous[0].status).toBe(401);
+    expectParity(anonymous);
+    runtimeInstalled = false;
+    try {
+      const missing = await runtimeThree("a");
+      expect(missing[0].status).toBe(404);
+      expectParity(missing);
+    } finally {
+      runtimeInstalled = true;
+    }
   });
 });
 
@@ -287,10 +340,11 @@ describe("契约与 core 的两张表（diagnostics）", () => {
     entry.name.startsWith("diagnostics."),
   );
 
-  it("2 条都在契约里，每条都有旧路径", () => {
+  it("3 条都在契约里，每条都有旧路径", () => {
     expect(entries.map((entry) => entry.name).sort()).toEqual([
       "diagnostics.clientErrorStatus",
       "diagnostics.reportClientError",
+      "diagnostics.runtime",
     ]);
     for (const entry of entries) {
       expect(entry.meta.legacy, entry.name).toBeDefined();

@@ -128,7 +128,7 @@ describe("the shell's report", () => {
 });
 
 describe("the resource snapshot", () => {
-  it("lists the headless browser as a tree and the shell's processes", () => {
+  it("lists the headless browser as a tree and the shell's processes", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "armadra-resources-ext-"));
     const db = openDatabase({
       file: join(dataDir, "canvas.db"),
@@ -157,8 +157,9 @@ describe("the resource snapshot", () => {
           () => 1_000_000,
           () => table,
         ),
+        panes: async () => new Map(),
       });
-      const snapshot = service.snapshot(workspace.id);
+      const snapshot = await service.snapshot(workspace.id);
       const kinds = snapshot.components.map((each) => each.kind);
       expect(kinds).toEqual(["runtime", "browserWorker", "shellGpu"]);
       const browser = snapshot.components[1]!;

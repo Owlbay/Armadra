@@ -34,22 +34,35 @@ import {
   type ShellProcessReport,
   type TrackedProcess,
 } from "./platform";
-import { memoryPressure, powerSource, swapUsage } from "./platform-probe";
+import { RuntimeMetrics } from "./metrics";
 import {
+  PROBE_TTL_MS,
+  ProbeCache,
+  memoryPressureAsync,
+  powerSourceAsync,
+  swapUsageAsync,
+} from "./platform-probe";
+import {
+  SampleTimeout,
   Sampler,
   childrenByParent,
   cpuPercent,
+  deadline,
   hostResources,
   isGone,
+  readProcessTableAsync,
   round,
   sessionResources,
   type HostResources,
+  type PowerSource,
+  type Refresh,
   type SessionResources,
 } from "./sample";
 import {
+  TMUX_TIMEOUT_MS,
   aliveBackendReferences,
   listOrphans,
-  panePids,
+  panePidsAsync,
   sessionTargets,
   type OrphanSession,
 } from "./sessions";
@@ -69,6 +82,28 @@ export const MAX_SUBSCRIPTIONS = 32;
 export const MAX_REQUESTED_INTERVAL_MS = 60_000;
 
 const DEFAULT_INTERVAL_MS = 2_000;
+
+/**
+ * `GET …/resources` 与阈值慢轮复用多新的一轮：正在进行的那一轮，或这么久之内
+ * 刚完成的那一轮。不另起 `ps`。
+ */
+export const ROUND_REUSE_MS = 500;
+
+/**
+ * 一轮采样读到的整机那张表：一次 `ps`、一次 `tmux list-panes`、三个低频探针的
+ * 缓存值。所有工作空间共用这一轮——CPU 的分母（`refresh.elapsedMs`）也就只算
+ * 一次，第 2 个以后的工作空间不再是一个约 100 ms 的基线。
+ */
+export interface SampleRound {
+  readonly refresh: Refresh;
+  readonly pids: ReadonlyMap<string, number>;
+  readonly pressure: string | null;
+  readonly power: PowerSource;
+  readonly swap: { totalBytes: number | null; usedBytes: number | null };
+  readonly cpuCores: number;
+  /** `ps` 答回来的时刻。 */
+  readonly atMs: number;
+}
 
 /** 一次资源采样，`GET …/resources` 与 `resource.sample` 事件用的是同一份。 */
 export interface ResourceSnapshot {
@@ -157,8 +192,21 @@ export interface ResourceServiceOptions {
   readonly now?: () => number;
   /** 哪些工作空间现在有人在看事件流；默认问 R1b 的事件流。 */
   readonly audience?: (workspaceId: string) => number;
-  /** 注入的进程表读取，测试用。 */
+  /** 注入的进程表读取，测试用。缺省异步读 `ps`。 */
   readonly sampler?: Sampler;
+  /** 注入的 tmux 会话 → pid，测试用。缺省异步问这个数据目录的 tmux。 */
+  readonly panes?: () => Promise<ReadonlyMap<string, number>>;
+  /** 注入的三个低频探针，测试用。缺省按 {@link PROBE_TTL_MS} 缓存的异步探针。 */
+  readonly probes?: {
+    readonly pressure: () => Promise<string | null>;
+    readonly power: () => Promise<PowerSource>;
+    readonly swap: () => Promise<{
+      totalBytes: number | null;
+      usedBytes: number | null;
+    }>;
+  };
+  /** 采样计数与事件循环延迟（契约 §54）。缺省自己建一份（不启用延迟监视）。 */
+  readonly metrics?: RuntimeMetrics;
   /** 语言域记下来的服务器进程。 */
   readonly languageProcesses?: () => readonly TrackedProcess[];
   /** 测试注入；缺省读 headless 后端登记的来源（`platform.browserProcesses`）。 */
@@ -183,13 +231,26 @@ export class ResourceService {
   private readonly now: () => number;
   private readonly audience: (workspaceId: string) => number;
   private timer: NodeJS.Timeout | undefined;
+  /** 正在进行的那一轮；`GET` 与阈值慢轮搭它，不另起。 */
+  private roundPromise: Promise<SampleRound> | undefined;
+  private lastRound: SampleRound | undefined;
+  private lastRoundDoneMs = 0;
+  /** 采样循环的一拍还没走完（包括它之后的发布）。 */
+  private ticking = false;
+  readonly metrics: RuntimeMetrics;
+  private readonly probeCache: ProbeCache;
 
   constructor(private readonly options: ResourceServiceOptions) {
     this.now = options.now ?? (() => Date.now());
-    this.sampler = options.sampler ?? new Sampler(this.now);
+    this.sampler =
+      options.sampler ?? new Sampler(this.now, () => readProcessTableAsync());
     this.audience =
       options.audience ??
       ((workspaceId) => eventStream()?.subscriberCount(workspaceId) ?? 0);
+    this.metrics = options.metrics ?? new RuntimeMetrics();
+    this.probeCache = new ProbeCache(this.now, () =>
+      this.metrics.sampling.noteTimeout("probe"),
+    );
   }
 
   /** 配置好的节奏：任何订阅者能要求的最快值。 */
@@ -280,10 +341,96 @@ export class ResourceService {
     return [...workspaces].sort();
   }
 
-  /** 一个工作空间的一次采样。 */
-  snapshot(workspaceId: string): ResourceSnapshot {
-    const refresh = this.sampler.refresh();
-    const pids = panePids(this.options.dataDir);
+  /**
+   * 读一轮整机的表。正在进行的那一轮直接搭上；`reuseMs` 之内刚完成的那一轮也
+   * 直接用。`ps` 或 `tmux` 超时抛 {@link SampleTimeout}，计数，这一轮作废。
+   */
+  round(reuseMs = ROUND_REUSE_MS): Promise<SampleRound> {
+    if (this.roundPromise !== undefined) return this.roundPromise;
+    if (
+      this.lastRound !== undefined &&
+      reuseMs > 0 &&
+      this.now() - this.lastRoundDoneMs <= reuseMs
+    ) {
+      return Promise.resolve(this.lastRound);
+    }
+    const started = performance.now();
+    this.metrics.sampling.inFlight = true;
+    const work = this.readRound().then(
+      (sampled) => {
+        this.lastRound = sampled;
+        this.lastRoundDoneMs = this.now();
+        this.metrics.sampling.noteRound(
+          performance.now() - started,
+          sampled.atMs,
+        );
+        return sampled;
+      },
+      (error: unknown) => {
+        if (error instanceof SampleTimeout) {
+          this.metrics.sampling.noteTimeout(error.source);
+        }
+        throw error;
+      },
+    );
+    const settled = work.finally(() => {
+      if (this.roundPromise === settled) this.roundPromise = undefined;
+      this.metrics.sampling.inFlight = false;
+    });
+    this.roundPromise = settled;
+    return settled;
+  }
+
+  private async readRound(): Promise<SampleRound> {
+    const probes = this.options.probes;
+    // 探针不进这一轮的关键路径：缓存交出旧值、后台去问（注入的探针照样经缓存）。
+    const pressure = this.probeCache.cached(
+      "pressure",
+      PROBE_TTL_MS.pressure,
+      probes?.pressure ?? memoryPressureAsync,
+      null,
+    );
+    const power = this.probeCache.cached(
+      "power",
+      PROBE_TTL_MS.power,
+      probes?.power ?? powerSourceAsync,
+      { source: null, batteryPercent: null, charging: null },
+    );
+    const swap = this.probeCache.cached(
+      "swap",
+      PROBE_TTL_MS.swap,
+      probes?.swap ?? swapUsageAsync,
+      { totalBytes: null, usedBytes: null },
+    );
+    const panes =
+      this.options.panes ?? (() => panePidsAsync(this.options.dataDir));
+    const [refresh, pids] = await Promise.all([
+      this.sampler.refreshAsync(),
+      // 注入的读取不一定认超时，期限在这里再加一道。
+      deadline(panes(), TMUX_TIMEOUT_MS, "tmux"),
+    ]);
+    return {
+      refresh,
+      pids,
+      pressure,
+      power,
+      swap,
+      cpuCores: cpus().length,
+      atMs: refresh.atMs,
+    };
+  }
+
+  /** 一个工作空间的一次采样：取（或搭）一轮，再算这个工作空间的那一份。 */
+  async snapshot(workspaceId: string): Promise<ResourceSnapshot> {
+    return this.snapshotFrom(await this.round(), workspaceId);
+  }
+
+  /**
+   * 纯计算：一轮整机的表 → 一个工作空间的快照。SQL、树求和、组件、孤立会话；
+   * 不跑任何外部命令。采样中途被删掉的工作空间查出来就是空数组，不抛。
+   */
+  snapshotFrom(sampled: SampleRound, workspaceId: string): ResourceSnapshot {
+    const { refresh, pids } = sampled;
     const targets = sessionTargets(this.options.database, workspaceId, pids);
     const children = childrenByParent(refresh.table);
     const sessions = targets
@@ -303,15 +450,15 @@ export class ResourceService {
       aliveBackendReferences(pids),
     );
     const sampledAt = new Date(refresh.atMs).toISOString();
-    const cores = cpus().length;
+    const cores = sampled.cpuCores;
     return {
       workspaceId,
       host: hostResources({
         dataDir: this.options.dataDir,
         cpuCores: cores,
-        pressure: memoryPressure(),
-        power: powerSource(),
-        swap: swapUsage(),
+        pressure: sampled.pressure,
+        power: sampled.power,
+        swap: sampled.swap,
         cpuPercent: hostCpuPercent(refresh, cores),
         sampledAt,
       }),
@@ -380,18 +527,46 @@ export class ResourceService {
    */
   private ensurePump(): void {
     if (this.timer !== undefined) return;
-    const tick = (): void => {
-      const workspaces = this.subscribedWorkspaces();
-      if (workspaces.length === 0) {
-        this.stop();
+    this.schedule();
+  }
+
+  /**
+   * 采样循环的一拍。一轮整机表给所有在看的工作空间；下一拍在这一拍**走完之后**
+   * 才挂（`setTimeout`，不是 `setInterval`），所以循环自己不会叠。上一拍还没走完
+   * （停掉又重起的循环撞上一个还挂着的读）就跳过并计数。
+   */
+  private async tick(): Promise<void> {
+    if (this.ticking) {
+      this.metrics.sampling.noteOverlap();
+      this.schedule();
+      return;
+    }
+    const workspaces = this.subscribedWorkspaces();
+    if (workspaces.length === 0) {
+      this.stop();
+      return;
+    }
+    // 即使订阅还在，没有人连着这个工作空间的事件流时这一帧也发不到任何人手里。
+    // 不采样，而不是采完再丢掉——采样本身才是那笔开销。
+    const audience = workspaces.filter(
+      (workspaceId) => this.audience(workspaceId) > 0,
+    );
+    if (audience.length === 0) {
+      this.schedule();
+      return;
+    }
+    this.ticking = true;
+    try {
+      let sampled: SampleRound;
+      try {
+        sampled = await this.round();
+      } catch {
+        // 超时或读失败：这一轮不发（面板留着上一帧），下一拍再试。
         return;
       }
-      for (const workspaceId of workspaces) {
-        // 即使订阅还在，没有人连着这个工作空间的事件流时这一帧也发不到任何人手里。
-        // 不采样，而不是采完再丢掉——采样本身才是那笔开销。
-        if (this.audience(workspaceId) === 0) continue;
+      for (const workspaceId of audience) {
         try {
-          const snapshot = this.snapshot(workspaceId);
+          const snapshot = this.snapshotFrom(sampled, workspaceId);
           this.options.bus.emit("workspace.event", {
             workspaceId,
             event: { type: "resource.sample", snapshot } as never,
@@ -405,13 +580,17 @@ export class ResourceService {
           // 一次采样失败不该停掉循环：下一拍再试。
         }
       }
-      this.schedule(tick);
-    };
-    this.schedule(tick);
+      this.metrics.checkSlowLoop();
+    } finally {
+      this.ticking = false;
+      // 循环在这一拍里被停掉（最后一个订阅过期）就不再挂下一拍。
+      if (this.timer !== undefined) this.schedule();
+    }
   }
 
-  private schedule(tick: () => void): void {
-    this.timer = setTimeout(tick, this.effectiveInterval());
+  private schedule(): void {
+    if (this.timer !== undefined) clearTimeout(this.timer);
+    this.timer = setTimeout(() => void this.tick(), this.effectiveInterval());
     // 采样循环不该把进程拖着不退。
     this.timer.unref?.();
   }
