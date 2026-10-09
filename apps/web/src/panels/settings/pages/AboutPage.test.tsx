@@ -88,6 +88,28 @@ vi.mock("../../../app/use-access", () => ({
   useAccess: () => ({ member: access.member }),
 }));
 
+const native = vi.hoisted(() => ({
+  available: false,
+  info: null as { version: string; build: string } | null,
+  protocol: { major: 1, minor: 26 },
+}));
+vi.mock("../../../mobile/native-bridge", () => ({
+  nativeBridge: () => ({
+    available: native.available,
+    appInfo: async () => native.info,
+  }),
+}));
+vi.mock("../../../api/identity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../api/identity")>()),
+  identityHello: async () => ({
+    protocol: native.protocol,
+    sourceId: "h1",
+    hostInstanceId: "",
+    capabilities: [],
+    maxFrameBytes: 0,
+  }),
+}));
+
 import { AboutPage, loadThirdPartyNotices } from "./AboutPage";
 import { usePreferencesStore } from "../../../app/preferences-store";
 import { SETTINGS_SECTIONS } from "../nav";
@@ -158,7 +180,51 @@ beforeEach(() => {
 afterEach(() => {
   access.remote = false;
   access.member = false;
+  native.available = false;
+  native.info = null;
+  native.protocol = { major: 1, minor: 26 };
   cleanup();
+});
+
+describe("设置 → 关于：手机 / 平板 App", () => {
+  it("App 自己的版本与构建号、主机版本与协议并列；没有桌面的更新动作", async () => {
+    native.available = true;
+    native.info = { version: "1.0.0", build: "3185" };
+    health.version = "0.2.5";
+    updates.start.mockClear();
+    draw({ state: "idle" });
+    expect(await screen.findByText("1.0.0（3185）")).toBeTruthy();
+    expect(screen.getByText("App 版本")).toBeTruthy();
+    expect(await screen.findByText("0.2.5")).toBeTruthy();
+    expect(await screen.findByText("1.26")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    expect(updates.start).not.toHaveBeenCalled();
+  });
+
+  it("主机协议低于 App 的要求：提示更新主机", async () => {
+    native.available = true;
+    native.info = { version: "1.0.0", build: "1" };
+    native.protocol = { major: 1, minor: 13 };
+    draw({ state: "idle" });
+    expect(await screen.findByText("主机版本过旧")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "主机协议 1.13，App 需要 1.14 或更新。请更新电脑端或服务器端。",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("主机的协议主版本更新：提示更新 App（英文）", async () => {
+    usePreferencesStore.setState({ locale: "en" });
+    native.available = true;
+    native.protocol = { major: 2, minor: 0 };
+    draw({ state: "idle" });
+    expect(await screen.findByText("Update the app")).toBeTruthy();
+    // 旧安装包的插件没有 appInfo：版本写「未知」，不猜。
+    expect(screen.getAllByText("Unknown").length).toBeGreaterThan(0);
+  });
 });
 
 describe("设置 → 关于：版本与更新", () => {
