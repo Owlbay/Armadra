@@ -7,6 +7,26 @@ import * as endpointFile from "./endpoint";
 import { type Memory, newMemory } from "./reduce";
 
 /**
+ * The hello a Claude Code mod sends at `session.start` (`POST /node/mod`,
+ * contract §55): versions and the transport, nothing else.
+ */
+export interface ModHello {
+  readonly nodeId: string;
+  readonly engine: string;
+  readonly version: string;
+  readonly base: string | null;
+  readonly surface: string | null;
+  readonly isInteractive: boolean;
+  readonly profile: "terminal" | "acp";
+  readonly transport: "socket" | "tcp" | "process";
+  readonly modRevision: number;
+  readonly reportedAt: string;
+}
+
+/** How many nodes' hellos are kept; the oldest goes first past this. */
+export const MAX_MOD_HELLOS = 512;
+
+/**
  * The hook service — contract §5.2 / §5.4.
  *
  * Three surfaces, one router:
@@ -22,6 +42,8 @@ import { type Memory, newMemory } from "./reduce";
 export class HookService {
   private readonly auth: HookAuth;
   private readonly memory = new Map<string, Memory>();
+  /** In memory only: a core restart starts with none (contract §55). */
+  private readonly modHellos = new Map<string, ModHello>();
   private currentPort: number | undefined;
 
   /**
@@ -104,6 +126,22 @@ export class HookService {
       this.memory.set(nodeId, memory);
     }
     return action(memory);
+  }
+
+  /** Keeps the latest hello per node, replacing the one before. */
+  recordModHello(hello: ModHello): void {
+    this.modHellos.delete(hello.nodeId);
+    this.modHellos.set(hello.nodeId, hello);
+    while (this.modHellos.size > MAX_MOD_HELLOS) {
+      const oldest = this.modHellos.keys().next().value;
+      if (oldest === undefined) break;
+      this.modHellos.delete(oldest);
+    }
+  }
+
+  /** The hellos this core has heard, oldest first. */
+  modSessions(): readonly ModHello[] {
+    return [...this.modHellos.values()];
   }
 
   /** Writes the endpoint file. Called at start-up and whenever the port moves. */

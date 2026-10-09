@@ -30,6 +30,7 @@ import {
   type IngestContext,
   ingest,
 } from "./ingest";
+import { receiveModHello } from "./mod-hello";
 import type { HookService } from "./service";
 
 /**
@@ -81,6 +82,27 @@ export class HookServer {
         match.params.agentId ?? "",
         body,
         headerRecord(request),
+      );
+    });
+
+    // Contract §55.3: a Claude Code mod says it loaded.
+    this.router.handle("POST", "/node/mod", (_match, request) => {
+      const refusal = this.requireBearer(request);
+      if (refusal !== undefined) return refusal;
+      let body: unknown;
+      try {
+        body = request.json<unknown>();
+      } catch {
+        return {
+          status: 400,
+          body: { code: "bad_request", message: "请求体不是 JSON" },
+        };
+      }
+      return receiveModHello(
+        this.options.hooks,
+        body,
+        single(request.headers[NODE_TOKEN_HEADER]),
+        this.options.now,
       );
     });
 

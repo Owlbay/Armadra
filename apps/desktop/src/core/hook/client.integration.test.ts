@@ -161,6 +161,36 @@ describe.skipIf(!haveClient() || process.platform === "win32")(
       expect(seen).toEqual(["list:true"]);
     });
 
+    it("carries the mod's hello when the mod's own fetch was refused (§55.3)", async () => {
+      const one = await fixture();
+      one.service.issueNodeToken(one.nodeId);
+      const answer = await run(
+        ["mod-hello"],
+        agentEnv(one),
+        JSON.stringify({
+          nodeId: "someone-else",
+          engine: "claude",
+          version: "2.1.293",
+          base: "2.1.293",
+          surface: "terminal",
+          isInteractive: true,
+          profile: "terminal",
+          transport: "socket",
+          modRevision: 1,
+        }),
+      );
+      expect(answer.status, answer.stderr).toBe(0);
+      expect(answer.stdout).toBe("");
+      // Its own node and the way it came, whatever the body said.
+      expect(one.service.modSessions()).toMatchObject([
+        { nodeId: one.nodeId, transport: "process" },
+      ]);
+      // Not JSON: still quiet, still 0.
+      const junk = await run(["mod-hello"], agentEnv(one), "not json");
+      expect(junk.status).toBe(0);
+      expect(junk.stdout + junk.stderr).toBe("");
+    });
+
     it("reports the endpoint to its own doctor", async () => {
       const one = await fixture();
       one.service.issueNodeToken(one.nodeId);
