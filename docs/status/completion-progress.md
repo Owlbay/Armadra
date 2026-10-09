@@ -3830,3 +3830,26 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - `version.mjs`：`mobileVersion`、`setMobileVersion`、`checkMobile`、`MOBILE_MANIFEST`、`MOBILE_CHANGELOG`、`MOBILE_TAG_PREFIX`、`MOBILE_PAGE_PROTOCOL`；`compatibility.mjs`：`readMobileCompatibility`、`normalizeMobile`。
 - `apps/mobile/scripts/app-version.mjs`：`parseMobileVersion`、`mobileVersion`、`buildNumber`、`nativeVersionFiles`、`writeNativeVersion`；环境变量 `ARMADRA_BUILD_NUMBER`。
 - web：`NativeBridge.appInfo()` → `NativeAppInfo { version, build }`；`MINIMUM_HOST_PROTOCOL`、`hostCompatibility`、`formatProtocol`；`MobileAbout`。
+
+## 终端选区随按键释放结束（#227，2026-10-10）
+
+根因：xterm 的选区（以及应用开鼠标上报时的松开上报）靠 `mousedown` 时挂在 `document` 上的 `mouseup` 收尾，它的 `mousemove` 不看 `buttons`。画布平移用的 d3-zoom 在 `window` 捕获相位接住 `mouseup` 并 `stopImmediatePropagation()`；手形工具下左键按在终端上、或中键按在终端上（这两种都会平移画布），按下那一下 xterm 与 d3-zoom 都收到，松开那一下只有 d3-zoom 收到，于是松开后选区仍跟着指针走、开了鼠标上报的应用一直以为键按着。窗口外松开、失焦、`pointercancel`、页面切后台是同一类「键松了，`document` 不知道」。
+
+做了什么：
+
+- 新增 `terminal/surface/pointer-release.ts` 的 `guardPointerRelease(body)`，在 `use-xterm.ts` 随 xterm 实例装卸：终端体捕获相位记下按下的键，`document` 真收到 `mouseup` 就划掉；`pointerup` 这一轮派发完仍没划掉、`mousemove` 的 `buttons` 里已没有这个键、`blur`、`visibilitychange` 到 hidden、`pointercancel` 时，在 `document` 上补派一个 `mouseup`，xterm 按自己的逻辑收尾（选区停在松开处；上报模式下应用收到松开）。只在有键按着时挂 `window` 监听；正常的节点内拖选、画布平移、应用自己的鼠标模式都不改路径。
+- e2e：`ui-features` 加场景 `terminalSelection`（`tools/probes/ui-features/terminal-selection.mjs`）；`harness.mjs` 的中键按下带上 `buttons: 4`。
+
+实测（macOS arm64，基于 main 9cd38293）：
+
+- 修复前场景 `--only=terminalSelection` 在「手形工具：松开后不按键移动，选区不变」失败（松开时无选区，晃一下出三段选区）；探索时中键拖出节点，`cat -v` 只收到 `^[[<1;5;2M`，没有松开。修复后全过：选择工具节点外 / 窗口外松开、手形工具拖动平移画布且选区不再变、`?1002h`+SGR 下中键松开收到 `^[[<1;5;2m`、节点内拖选照常、控制台 0 条 error。
+- 新增 `pointer-release.test.ts` 10 条：节点内正常拖选不补派、节点外松开、被吞的 `mouseup` 在 `pointerup` 之后补上且之后移动不改选区、无键移动先收尾、`blur` / `pointercancel` / `visibilitychange`、中键被吞仍有松开、未按键时不挂监听、拖动中卸载摘监听。
+
+没做 / 偏离：
+
+- 手形工具按在终端上仍会先被 xterm 当作一次按下（随即在松开时收尾），没有在手形工具下让终端完全不接收指针。
+- 没有在 Electron 里用真实 HID 事件复现；CDP 合成的窗口外松开在无头 Chrome 里本来就能送达。
+
+接口：
+
+- web：`guardPointerRelease(body: HTMLElement): () => void`（`terminal/surface/pointer-release.ts`）。无契约、迁移变化。
