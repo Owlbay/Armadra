@@ -475,7 +475,9 @@ async function scenario(options, output, report, cleanups, save) {
   report.launch = { kind: target.kind, app: target.app ?? null };
   log("产物", target.kind, target.app ?? target.binary);
 
-  const scratch = mkdtempSync(join(tmpdir(), "armadra-terminal-memory-"));
+  // 短前缀：数据目录里的 runtime.sock / tmux.sock 走 Unix socket，路径上限约 104 字节，
+  // macOS 的 TMPDIR 本身就有 40 多个字符。
+  const scratch = mkdtempSync(join(tmpdir(), "atm-"));
   cleanups.push(() =>
     rmSync(scratch, { recursive: true, force: true, maxRetries: 10 }),
   );
@@ -490,7 +492,7 @@ async function scenario(options, output, report, cleanups, save) {
     `${JSON.stringify({ terminal: { backend: options.backend } }, null, 2)}\n`,
   );
   const socket = join(data, "tmux.sock");
-  const home = probeHome("armadra-terminal-memory-home-");
+  const home = probeHome("atm-home-");
   cleanups.push(home.remove);
 
   // 持续输出：每个终端一个 perl 进程，rate 行/秒，彩色前缀 + 约 100 列文本。
