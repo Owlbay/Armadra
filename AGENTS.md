@@ -19,6 +19,10 @@
 - 桌面脚本测试与 `pnpm --filter @armadra/desktop test` 同一条命令；跑之前先 `pnpm libs:build`，否则依赖 `@armadra/shared` 产物的用例会整文件失败。发布与 CI 脚本用 `pnpm release:test`、`pnpm ci:workflows`、`pnpm release:check`。
 - 仓库级脚本在 `tools/`，各 app 自己的脚本仍在各自的 `scripts/`。
 
+## 需求流程
+
+- 新需求与缺陷先建 GitHub issue（中英双语表单），在 issue 中补全现状、目标、验收与设计后标 `ready`，再按包开 PR（`Closes #N`），CI 全绿后合并；细则见 [贡献指南](.github/CONTRIBUTING.md)「需求流程」。
+
 ## Review guidelines
 
 - 审查意见用简体中文，先给结论，每条写明文件与行号、会出什么错、怎么修。
