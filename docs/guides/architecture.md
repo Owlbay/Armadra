@@ -144,7 +144,11 @@ ClientHello 的 ALPN 分流，`core/gateway/alpn.ts`）、证书在 `<数据目�
 `apps/mobile` 是 Capacitor 手机壳：把同一份 `apps/web` 产物打进 iOS / Android
 安装包，经 Gateway 跨源访问 core（Bearer 会话、一次性 WS 票）；原生只补钥匙串、
 证书钉扎、扫码、推送解密与深链，不含业务。见
-[客户端平台](client-platforms.md#原生-appcapacitor-手机壳g3-1)。
+[客户端平台](client-platforms.md#原生-appcapacitor-手机壳g3-1)。连接表非空时启动落在「选择服务」
+（`apps/web/src/services/ServicePicker.tsx`，`mobile/entry.ts::startupTarget`）：点一行记下进入意图再重载，
+推送切换（`#push=`）与偏好 `services.autoEnter` 才直接进；同一个列表也是中继托管页面登录后挑主机的那一步、
+桌面「切换服务」对话框（换当前源，桌面壳另可经 `window:open { sourceId }` 在新窗口打开，新窗口页面读
+`?source=` 定初始当前源；它不是主窗口，`sendToWindow` 与抢占的快捷键只对主窗口）。
 
 ## 3. 画布层
 
