@@ -29,10 +29,11 @@ export { type SessionTokens, createSessionTokens } from "./session-tokens";
  *   换票函数。
  */
 
-/** 换一份访问：给源与路，答访问。 */
+/** 换一份访问：给源与路（同一类里哪一条，§55），答访问。 */
 export type AccessExchange = (
   sourceId: string,
   via: Via,
+  origin?: string,
 ) => Promise<SourceAccess>;
 
 /** 访问令牌离到期不到这么久就当它已经过期，先换一份。 */
@@ -46,20 +47,31 @@ export function createCachedCredentialProvider(
   exchange: AccessExchange,
   now: () => number = Date.now,
 ): CredentialProvider {
-  const cache = new Map<string, { via: Via; access: SourceAccess }>();
+  const cache = new Map<
+    string,
+    { via: Via; origin: string | undefined; access: SourceAccess }
+  >();
   const pending = new Map<string, Promise<SourceAccess>>();
 
   const fresh = (access: SourceAccess) =>
     access.expiresAtMs === 0 ||
     access.expiresAtMs - now() > ACCESS_RENEW_LEAD_MS;
 
-  const run = (sourceId: string, via: Via): Promise<SourceAccess> => {
-    const key = `${sourceId}\u0000${via}`;
+  const run = (
+    sourceId: string,
+    via: Via,
+    origin: string | undefined,
+  ): Promise<SourceAccess> => {
+    const key = `${sourceId}\u0000${via}\u0000${origin ?? ""}`;
     let inflight = pending.get(key);
     if (inflight === undefined) {
-      inflight = exchange(sourceId, via)
+      inflight = (
+        origin === undefined
+          ? exchange(sourceId, via)
+          : exchange(sourceId, via, origin)
+      )
         .then((access) => {
-          cache.set(sourceId, { via, access });
+          cache.set(sourceId, { via, origin, access });
           return access;
         })
         .finally(() => {
@@ -71,15 +83,20 @@ export function createCachedCredentialProvider(
   };
 
   return {
-    getAccess(sourceId, via) {
+    getAccess(sourceId, via, origin) {
       const cached = cache.get(sourceId);
-      if (cached !== undefined && cached.via === via && fresh(cached.access))
+      if (
+        cached !== undefined &&
+        cached.via === via &&
+        (origin === undefined || cached.origin === origin) &&
+        fresh(cached.access)
+      )
         return Promise.resolve(cached.access);
-      return run(sourceId, via);
+      return run(sourceId, via, origin);
     },
-    refresh(sourceId, via) {
+    refresh(sourceId, via, origin) {
       cache.delete(sourceId);
-      return run(sourceId, via);
+      return run(sourceId, via, origin);
     },
     invalidate(sourceId) {
       cache.delete(sourceId);
@@ -102,13 +119,23 @@ const sessionAnswerSchema = z.object({
  * 契约 §33）。刷新令牌与远程服务的会话都留在 core，页面只拿访问令牌；
  * 刷新失败时 core 自己经远程服务重取断言，再失败答 `source_unauthorized`。
  */
-export const exchangeViaLocalCore: AccessExchange = async (sourceId, via) => {
+export const exchangeViaLocalCore: AccessExchange = async (
+  sourceId,
+  via,
+  origin,
+) => {
   const answer = await request(
     `/api/sources/${encodeURIComponent(sourceId)}/session`,
     sessionAnswerSchema,
     {
       method: "POST",
-      ...json(via === "local" ? {} : { via }),
+      ...json(
+        via === "local"
+          ? {}
+          : origin === undefined
+            ? { via }
+            : { via, route: { via, origin } },
+      ),
     },
     localSource,
   );
@@ -127,7 +154,11 @@ export function createDesktopCredentialProvider(
   exchange: AccessExchange = exchangeViaLocalCore,
   now?: () => number,
 ): CredentialProvider {
-  return createCachedCredentialProvider(exchange, now);
+  // 本机 core 在几条中继里并行要断言（§55），页面不必逐条试。
+  return {
+    ...createCachedCredentialProvider(exchange, now),
+    selectsRelay: true,
+  };
 }
 
 /* ------------------------------ 远程服务的会话 ------------------------------ */

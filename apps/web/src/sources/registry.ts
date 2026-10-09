@@ -221,6 +221,18 @@ const clientSourceSchema = z.object({
   cloudIssuer: z.string().default(""),
   fingerprint: z.string().default(""),
   orderIndex: z.number().default(0),
+  routes: z
+    .array(
+      z.object({
+        via: z.enum(["direct", "relayed"]),
+        origin: z.string().min(1),
+        cloudIssuer: z.string().default(""),
+        fingerprint: z.string().default(""),
+        preferred: z.boolean().default(false),
+        lastOkAtMs: z.number().default(0),
+      }),
+    )
+    .default([]),
 });
 
 const sourceListSchema = z.object({
@@ -247,6 +259,8 @@ export const loadSourcesFromLocalCore: SourceLoader = async () => {
     cloudIssuer: source.cloudIssuer,
     fingerprint: source.fingerprint,
     orderIndex: source.orderIndex,
+    // 镜像字段之外没有别的路时不带（与 §55 之前的描述一致）。
+    ...(source.routes.length === 0 ? {} : { routes: source.routes }),
   }));
 };
 

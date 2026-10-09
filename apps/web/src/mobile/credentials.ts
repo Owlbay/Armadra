@@ -18,7 +18,8 @@ import {
   thisDevice,
 } from "../sources/cloud-client";
 import { type RelayVault, createRelayedAccess } from "../sources/relay-access";
-import { loadConnections, remoteSlotOf } from "./connections";
+import { routesOf } from "../sources/routing";
+import { loadConnections, remoteSlotOf, touchRoute } from "./connections";
 import {
   type NativeBridge,
   type StoredSession,
@@ -44,10 +45,12 @@ export interface MobileCredentialDeps {
   /** 源表里的描述（直连地址、签发方）。 */
   readonly describe: (sourceId: string) => SourceDescriptor | undefined;
   /**
-   * 这个源用钥匙串里哪一份远程服务登录（{@link serviceIdOf}）；`null` = 早先
-   * 没记过，落回签发方的单槽。缺省读连接表旁的记录（`connections.ts`）。
+   * 这个源的这条中继用钥匙串里哪一份远程服务登录（{@link serviceIdOf}）；`null`
+   * = 早先没记过，落回签发方的单槽。缺省读连接表旁的记录（`connections.ts`）。
    */
-  readonly slotOf?: (sourceId: string) => string | null;
+  readonly slotOf?: (sourceId: string, origin?: string) => string | null;
+  /** 一条路连通了（选路按最近成功排）。缺省记进连接表。 */
+  readonly touched?: (sourceId: string, via: Via, origin: string) => void;
   /** 连接表（给 `me.stream` 选用哪一份登录）。缺省读本地存储。 */
   readonly connections?: () => readonly SourceDescriptor[];
   readonly cloud?: CloudOptions;
@@ -112,12 +115,17 @@ export function createMobileCredentialProvider(
     session.expiresAtMs - now() > ACCESS_RENEW_LEAD_MS;
   const slotOf = deps.slotOf ?? remoteSlotOf;
   const connections = deps.connections ?? loadConnections;
+  const touched =
+    deps.touched ??
+    ((sourceId: string, via: Via, origin: string) => {
+      if (via !== "local") touchRoute(sourceId, via, origin, now());
+    });
 
   /* ------------------------------ 经中继（共用） ------------------------------ */
 
-  /** 这个源用的那一槽：记过的，或签发方早先的单槽。 */
-  const slotFor = (sourceId: string, issuer: string) =>
-    slotOf(sourceId) ?? serviceIdOf(issuer);
+  /** 这个源这条中继用的那一槽：记过的，或签发方早先的单槽。 */
+  const slotFor = (sourceId: string, origin: string, issuer: string) =>
+    slotOf(sourceId, origin) ?? serviceIdOf(issuer);
 
   const remoteIn = async (slot: string) =>
     (await deps.bridge.getRemotes()).find((item) => item.serviceId === slot);
@@ -127,7 +135,7 @@ export function createMobileCredentialProvider(
    * 源会话一份（键源 + `relayed`）。一槽各有自己的云会话缓存，主人与访客在
    * 同一个签发方下互不顶替。
    */
-  const vaultFor = (slot: string): RelayVault => ({
+  const vaultFor = (slot: string, issuer: string): RelayVault => ({
     cloudRefreshToken: async () => (await remoteIn(slot))?.refreshToken ?? null,
     async saveCloudRefreshToken(_issuer, refreshToken) {
       const remote = await remoteIn(slot);
@@ -135,8 +143,10 @@ export function createMobileCredentialProvider(
         await deps.bridge.setRemote({ ...remote, refreshToken });
     },
     async session(sourceId) {
+      // 钥匙串一个源只存一份经中继的会话（键 `sourceId` + `via`）：存着的是别的
+      // 中继的，就当没有——core 的会话绑在登录它的中继上，拿去这条换票必然被拒。
       const stored = await sessionFor(sourceId, "relayed");
-      return stored === undefined
+      return stored === undefined || stored.origin !== originOf(issuer)
         ? undefined
         : {
             accessToken: stored.accessToken,
@@ -158,16 +168,17 @@ export function createMobileCredentialProvider(
       }),
   });
   const relays = new Map<string, ReturnType<typeof createRelayedAccess>>();
-  const relayFor = (slot: string) => {
-    let relay = relays.get(slot);
+  const relayFor = (slot: string, issuer: string) => {
+    const key = `${slot}\u0000${issuer}`;
+    let relay = relays.get(key);
     if (relay === undefined) {
       relay = createRelayedAccess({
-        vault: vaultFor(slot),
+        vault: vaultFor(slot, issuer),
         device: () => thisDevice(),
         ...(deps.cloud === undefined ? {} : { cloud: deps.cloud }),
         now,
       });
-      relays.set(slot, relay);
+      relays.set(key, relay);
     }
     return relay;
   };
@@ -177,9 +188,13 @@ export function createMobileCredentialProvider(
    * 一台），没有主人才用访客的。
    */
   const streamSlot = (issuer: string) => {
-    const slots = connections()
-      .filter((row) => row.cloudIssuer === issuer)
-      .map((row) => slotFor(row.sourceId, issuer));
+    const slots = connections().flatMap((row) =>
+      routesOf(row)
+        .filter(
+          (route) => route.via === "relayed" && route.cloudIssuer === issuer,
+        )
+        .map((route) => slotFor(row.sourceId, route.origin, issuer)),
+    );
     return (
       slots.find((slot) => !isGuestSlot(slot)) ??
       slots[0] ??
@@ -188,7 +203,7 @@ export function createMobileCredentialProvider(
   };
   const cloudAuth: CloudAuth = {
     access: (issuer) =>
-      relayFor(streamSlot(issuer)).cloudSessions.access(issuer),
+      relayFor(streamSlot(issuer), issuer).cloudSessions.access(issuer),
     invalidate(issuer) {
       for (const relay of relays.values())
         relay.cloudSessions.invalidate(issuer);
@@ -206,9 +221,10 @@ export function createMobileCredentialProvider(
     descriptor: SourceDescriptor | undefined,
     sourceId: string,
     force: boolean,
+    wanted: string | undefined,
   ): Promise<SourceAccess> => {
     const stored = await sessionFor(sourceId, "direct");
-    const origin = descriptor?.baseUrl || stored?.origin || "";
+    const origin = wanted || descriptor?.baseUrl || stored?.origin || "";
     if (stored === undefined || origin === "") throw unauthorized();
     let session = stored;
     if (force || !fresh(stored)) {
@@ -233,6 +249,7 @@ export function createMobileCredentialProvider(
       }
     }
     const base = origin.replace(/\/+$/, "");
+    touched(sourceId, "direct", origin);
     return {
       accessToken: session.accessToken,
       expiresAtMs: session.expiresAtMs,
@@ -241,32 +258,53 @@ export function createMobileCredentialProvider(
     };
   };
 
+  /**
+   * 经中继：给了 `wanted` 走那一条，否则走首选的那条（§55）。槽按 `(源, 来源)`，
+   * 同一台主机经两个中继各用自己那个服务的登录。
+   */
   const relayed = async (
     descriptor: SourceDescriptor | undefined,
     sourceId: string,
     force: boolean,
+    wanted: string | undefined,
   ): Promise<SourceAccess> => {
-    const issuer = descriptor?.cloudIssuer ?? "";
+    const routes =
+      descriptor === undefined
+        ? []
+        : routesOf(descriptor).filter((route) => route.via === "relayed");
+    const route =
+      wanted === undefined
+        ? routes[0]
+        : routes.find((one) => one.origin === wanted);
+    const issuer = route?.cloudIssuer || descriptor?.cloudIssuer || "";
     if (issuer === "") throw unauthorized();
-    const slot = slotFor(sourceId, issuer);
+    const origin = route?.origin ?? descriptor?.relayOrigin ?? issuer;
+    const slot = slotFor(sourceId, origin, issuer);
     if ((await remoteIn(slot)) === undefined) throw unauthorized();
-    return relayFor(slot).access(issuer, sourceId, force);
+    const access = await relayFor(slot, issuer).access(issuer, sourceId, force);
+    touched(sourceId, "relayed", origin);
+    return access;
   };
 
   const forced = new Set<string>();
-  const cached = createCachedCredentialProvider(async (sourceId, via) => {
-    const force = forced.delete(sourceId);
-    const descriptor = deps.describe(sourceId);
-    if (via === "direct") return direct(descriptor, sourceId, force);
-    if (via === "relayed") return relayed(descriptor, sourceId, force);
-    throw unauthorized();
-  }, now);
+  const cached = createCachedCredentialProvider(
+    async (sourceId, via, origin) => {
+      const force = forced.delete(sourceId);
+      const descriptor = deps.describe(sourceId);
+      if (via === "direct") return direct(descriptor, sourceId, force, origin);
+      if (via === "relayed")
+        return relayed(descriptor, sourceId, force, origin);
+      throw unauthorized();
+    },
+    now,
+  );
 
   return {
-    getAccess: (sourceId, via) => cached.getAccess(sourceId, via),
-    refresh(sourceId, via) {
+    getAccess: (sourceId, via, origin) =>
+      cached.getAccess(sourceId, via, origin),
+    refresh(sourceId, via, origin) {
       forced.add(sourceId);
-      return cached.refresh(sourceId, via);
+      return cached.refresh(sourceId, via, origin);
     },
     invalidate: (sourceId) => cached.invalidate(sourceId),
     cloudAuth,

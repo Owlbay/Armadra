@@ -302,6 +302,8 @@ export function createRemoteConnection(
   const sockets = new Set<ManagedSocket>();
   let access: SourceAccess | null = null;
   let via: Via | null = null;
+  /** 同一类路里走的是哪一条（§55）；凭据来源自己选的是 `undefined`。 */
+  let origin: string | undefined;
   let hello: HelloInfo | null = null;
   let connecting: Promise<void> | null = null;
   let renewing: Promise<boolean> | null = null;
@@ -327,12 +329,16 @@ export function createRemoteConnection(
     lastError: SourceFailure | null = null,
   ) => status.set(state, via, lastError, now());
 
+  /** 选路选中的那一条（凭据来源自己选的不传）。 */
+  const onRoute = (): [] | [string] => (origin === undefined ? [] : [origin]);
+
   /** 拿到一份访问：已有就用，没有就选路（不改状态，`connect` 负责状态）。 */
   const ensureAccess = async (): Promise<SourceAccess> => {
     if (access !== null) return access;
     const route = await pickRoute(descriptor, provider, options.probe);
     access = route.access;
     via = route.via;
+    origin = route.origin;
     return access;
   };
 
@@ -342,13 +348,13 @@ export function createRemoteConnection(
       const route = via;
       if (route === null || route === "local") return false;
       try {
-        access = await provider.refresh(id, route);
+        access = await provider.refresh(id, route, ...onRoute());
         return true;
       } catch (first) {
         if (route === "relayed") {
           provider.invalidate(id);
           try {
-            access = await provider.getAccess(id, "relayed");
+            access = await provider.getAccess(id, "relayed", ...onRoute());
             return true;
           } catch (second) {
             setStatus(
@@ -517,6 +523,7 @@ export function createRemoteConnection(
       ticketed = new WeakMap();
       provider.invalidate(id);
       via = null;
+      origin = undefined;
       setStatus("idle");
     },
     async renew() {
@@ -548,6 +555,7 @@ export function createRemoteConnection(
       // 重新走一遍选路（D27：重连与回到前台时再探直连）。
       access = null;
       via = null;
+      origin = undefined;
       try {
         await ensureAccess();
       } catch (error) {
@@ -639,6 +647,7 @@ export function createRemoteConnection(
       if (mine !== epoch || via !== "relayed") return;
       access = next;
       via = "direct";
+      origin = undefined;
       setStatus("ready");
       for (const socket of sockets) socket.reroute();
     })().finally(() => {

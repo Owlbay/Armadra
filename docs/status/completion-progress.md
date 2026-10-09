@@ -3893,14 +3893,44 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - 桌面壳：IPC `window:open`（`window`），preload `window.armadra.windows.openSource({ sourceId })`；`main/window.ts` 的 `openSourceWindow`、`sourceWindowUrl`、`onWindowCreated(listener, scope)`。
 - 存储键：`armadra.sources.recent`、`armadra.services.autoEnter`（localStorage），`armadra.services.enter`（sessionStorage）。
 
-## Claude Code mod M1：状态上报改走 mod、状态栏、版本门与环境回退（契约 §56，2026-10-10）
+## 一源多路：客户端源表的路由表（A7-2，契约 §55，迁移 0044，2026-10-10）
+
+做了什么：
+
+- 迁移 `0044_client_source_routes.sql`：一台主机每种到达方式一行（`direct` / `relayed` × 来源），`client_sources` 的地址列留作首选路由的镜像。回填直连优先；旧版挂第二个中继留下的错配（旧中继来源 + 新 issuer，两者都是登记过的远程服务）拆成两条路。SecretStore 不动，凭据键就是路的来源。
+- core `sources`：`mount` / `mountByLink` 以这一次的中继来源为凭据键并 upsert 一条路，不再覆盖前一个中继的那份；`session` 加 `route`，省略时直连探测与至多 3 条中继并行要断言、第一条在线的用；新 `sources.routePrefer` / `sources.routeRemove`（最后一条答 `conflict`）；`remoteSources.mounted` 改为「经这个服务有路」；`update` 改地址即换那条路。协议 minor 26 → 27。
+- 桌面壳的远程信任放行每条路的来源（直连按路的指纹钉扎，中继沿用同名远程服务的指纹）。
+- 页面：`SourceDescriptor.routes`（缺时由镜像推出）；选路中继按首选、最近成功逐条试，桌面交给本机 core 选；凭据来源接口加可选 `origin`。手机连接表 v2：行上 `routes[]`，远程服务槽按 `(sourceId, origin)`，v1 表一次性拆路、旧槽搬到那条中继；经中继的会话只在钥匙串里那份来自同一中继时才拿来换票。
+- 探针 `multi-source` 加一条断言：经中继挂载后路由表只有这一条、首选、与镜像一致。
+- 契约 §55（55.1 表与镜像、55.2 选路与两条 procedure、55.3 其余读者），§33 的生成表随出参更新；架构指南的迁移表与 `core/sources/` 一行。
+
+实测：
+
+- 新单测：core 一源多路 11（两个中继各一槽、来回切换 6 次不再 `cloud/login`、首选不通 / 不在线时用另一条、`mounted` 按服务、`routePrefer` / `routeRemove` 与最后一条、删首选后接替、答案与路由表里没有凭据、直连 + 中继、`update` 换来源、删源连同路由）；迁移 4（回填、错配拆分、不是登记服务的中继节点不拆、升级后旧凭据直接换票不重新登录）；壳的信任 1；页面选路 4；手机连接表 5（两条中继、按来源的槽、v1 → v2 搬表搬槽、坏表不升、最近成功）；手机凭据 1（按来源选槽、别的中继的会话不拿来换票）。
+- `pnpm libs:build && pnpm -r --if-present test`：desktop 5467 / 74 跳过（整跑时 `parity-terminals`、`stream-queue.integration`、`resources/sessions` 三个文件因负载失败，单独重跑通过），web 4250、shared 384、server 98 / 4 跳、mobile 10、push-relay 9；`node --test scripts/*.test.mjs` 73 / 2 跳。`pnpm check` 通过。
+- 契约对偶：`sources.list` / `addDirect` / `mount` 的出参与 `session` 的入参改为断言「协议包形状的超集、字段逐个是同一个对象、只多 §55 的字段」——协议包（cloud 仓 0.2.1）还没有 `routes`，原先「就是同一个对象」的断言不再成立。
+
+没做 / 偏离：
+
+- 手机的原生钥匙串按 `sourceId + via` 存会话（`ConnectionVault.swift` / `ArmadraNativePlugin.java`），不是设计说的按 `(sourceId, origin)`：同一台主机经两个中继时只存得下最近那条的会话，切到另一条会用断言重新登录（源 core 上多一台设备）。页面这侧已按来源分槽、不会拿错的会话去换票；原生改键与迁移留给手机包。
+- 手机连接表的 `kind` 照 v1（有中继那条路就是 `relayed`），没有改成随首选：`me.stream` 与通知条按它认经中继的连接。`me.stream` 仍按镜像的签发方订阅，一源的其余中继不另开流。
+- 设置页没有管理路的界面（列出、设首选、删一条），只有接口；设计的 A7-1 / A7-3 再接。
+- 契约节号与 minor 取合入时 main 的最大值 +1（现为 §55 / 1.27）；与同期别的包撞号时后合的一方改号。
+
+接口：
+
+- core：`SourcesStore.routes / allRoutes / route / upsertRoute / preferRoute / deleteRoute / touchRouteOk / mirror`；`SourcesService.session(sourceId, via?, route?)`、`routePrefer`、`routeRemove`；`RELAY_RACE`。
+- shared：`clientSourceRouteSchema`、`clientSourceSchema`（加 `routes`）、`sourcesListOutputSchema`、`sourcesSessionInputSchema`（加 `route`）、`sourceRouteInputSchema`、`sources.routePrefer` / `sources.routeRemove`、类型 `ClientSourceRoute` / `SourceRouteRef`。
+- web：`SourceRoute`、`SourceDescriptor.routes?`、`routesOf`、`Route.origin`、`CredentialProvider.getAccess/refresh(…, origin?)` 与 `selectsRelay`；手机 `remoteSlotOf(sourceId, origin?)`、`setRemoteSlot(sourceId, serviceId, origin?)`、`touchRoute`。
+
+## Claude Code mod M1：状态上报改走 mod、状态栏、版本门与环境回退（契约 §57，2026-10-10）
 
 做了什么：
 
 - 产物：`<数据目录>/integration/claude/` 多出 `settings-permission.json`（只有 `PermissionRequest`）与 `mod/`（`armadra-mod`：`.claude-plugin/plugin.json`、`hooks/hooks.json`、`hooks/armadra.ts`）。生成器在 `core/hook/install/claude-mod/`（`template` / `transport` / `status`，`ui` / `commands` / `i18n` 是留给 M2 / M3 的空段）。`mod/` 在 core 每次启动时删掉重写，之后每次启动前只按字节比较。
 - 模块：九个 `classic.*` 事件（设置 hook 的除 `PermissionRequest` 外全部）原样经 `$.http.fetch` 走 Unix socket POST 到 `/hook/claude`，socket 不通走 TCP 端口，都被拒就 `$.process.run` 起 `armadra-hook claude`；`classic.PreToolUse` 的工具调用信封拼回设置 hook 的形状。每个 hook 立即 `next(e)` 且带 `.catch`，`SessionEnd` 最多等 800 ms。交互式会话的状态栏只画节点名。`session.start` 发 hello（`POST /node/mod`），报告改走另一条路时再发；fetch 被拒时 hello 经新的 `armadra-hook mod-hello`。不注册 `PermissionRequest` / `tool.check` / `tool.call`，不调 `prompt.*` / `session.append`，token 只在函数局部。
 - 门：`CLAUDE_MODS_MIN = 2.1.293`，读 `claude --version` 的探测缓存，未知即关；Windows、执行主机第一版不挂。门开时 `run/claude` 接 `--settings settings-permission.json` 与第二个 `--plugin-dir mod`，并在节点环境里有 `CLAUDE_CODE_SAFE_MODE` 或 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 时改接全套设置 hook（`LauncherSpec.fallback`）。
-- core：`terminalBinding` 可以不带 `sourceRevision`，core 在同样的门之后对同一个 `.seq` 计数器（同一把 `.lock`）代分配（`runs/reports.ts::allocateSourceRevision`）；`POST /node/mod` 的 hello 只存内存、每节点一条；`GET /api/agents/claude/integration` 带 `mods`；`GET /node/overlay` 进路由表、答 501（M2）。`INTEGRATION_REVISION` 改为 `<hook>×10000 + <mod>×100 + <skill>` = 50118；协议 minor 26 → 28。
+- core：`terminalBinding` 可以不带 `sourceRevision`，core 在同样的门之后对同一个 `.seq` 计数器（同一把 `.lock`）代分配（`runs/reports.ts::allocateSourceRevision`）；`POST /node/mod` 的 hello 只存内存、每节点一条；`GET /api/agents/claude/integration` 带 `mods`；`GET /node/overlay` 进路由表、答 501（M2）。`INTEGRATION_REVISION` 改为 `<hook>×10000 + <mod>×100 + <skill>` = 50118；协议 minor 27 → 29。
 - 探针 `claude-mod-launch`（A 档，`requires: ["claude"]`，CI 没有 Claude 时记 skipped；e2e 运行器新增 `claude` 需求）：真 core + 画布 Agent 终端里经 `run/claude` 跑真 Claude `-p`，模型是本机假 Messages API，假 key。`compatibility.json` 新增 `claudeMods`（`minVersion`、`verified`，不进围栏）。
 
 实测（macOS arm64；本机全局 `claude` 是 2.1.287，低于门槛，没动它；2.1.293 与 2.1.295 用 `npm install --prefix /tmp/…` 装到临时目录验证）：
@@ -3923,5 +3953,5 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - core：`claudeModSource` / `claudeModManifest` / `claudeModHooks` / `MOD_PLUGIN_NAME` / `MOD_MODULE_FILE`、`claudeModPluginTest`；`CLAUDE_MODS_MIN`、`CLAUDE_MODS_BROKEN`、`CLAUDE_MODS_FALLBACK_ENV`、`claudeLoadsMods`、`claudeModsGate`、`probedClaudeVersion`、`resetClaudeMod`；`ArtifactLayout.{settingsPermission,modDir,modManifest,modHooks,modModule}`、`InjectionRequest.claudeVersion`、`Injection.fallback`、`injectionFromLayout(..., { claudeMods })`、`LauncherSpec.fallback`；`MOD_REVISION`；`allocateSourceRevision`；`HookService.recordModHello` / `modSessions`、`ModHello`、`parseModHello` / `receiveModHello`；`IntegrationState.mods`、`modsState`、`IntegrationOptions.modSessions`。
 - 客户端：`armadra-hook mod-hello`（内部）。
 - shared：`integrationModsSchema`、`modSessionSchema`、`MOD_GATE_REASONS`。
-- 线上：§56（hook 的 `terminalBinding` 可缺 `sourceRevision`、`POST /node/mod`、`GET /node/overlay` 501、`agents.integration.mods`），协议 1.28。
+- 线上：§57（hook 的 `terminalBinding` 可缺 `sourceRevision`、`POST /node/mod`、`GET /node/overlay` 501、`agents.integration.mods`），协议 1.29。
 - 工具：`tools/probes/claude-mod-launch.mjs`（`findClaude`、`--record-compat`）、e2e 需求 `claude`、`compatibility.json` 的 `claudeMods`、`tools/vendor/claude-mod-api.d.ts`。

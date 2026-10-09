@@ -60,6 +60,47 @@ describe("源表 → 放行与钉扎", () => {
     ]);
   });
 
+  it("一源多路（§55）：镜像之外的路也放行，中继按 issuer 沿用指纹", () => {
+    const trust = trustFromSourceTable({
+      remotes: [
+        ...table.remotes,
+        {
+          serviceId: "s3",
+          issuer: "https://lan.test:8443",
+          fingerprint: FP_RELAY,
+        },
+      ],
+      sources: [
+        {
+          sourceId: "far",
+          kind: "relayed",
+          baseUrl: "",
+          relayOrigin: "https://relay.test:8102",
+          routes: [
+            { via: "relayed", origin: "https://relay.test:8102" },
+            { via: "relayed", origin: "https://lan.test:8443" },
+            {
+              via: "direct",
+              origin: "https://192.168.1.21:8443",
+              fingerprint: FP_GATEWAY,
+            },
+            { via: "relayed", origin: "javascript:alert(1)" },
+          ],
+        },
+      ],
+    });
+    expect(trust.origins).toEqual([
+      "https://192.168.1.21:8443",
+      "https://lan.test:8443",
+      "https://relay.test:8102",
+    ]);
+    expect(trust.pins).toEqual([
+      { host: "192.168.1.21", fingerprint: FP_GATEWAY },
+      { host: "lan.test", fingerprint: FP_RELAY },
+      { host: "relay.test", fingerprint: FP_RELAY },
+    ]);
+  });
+
   it("零配置或认不出的答案：什么也不放行", () => {
     expect(trustFromSourceTable({ sources: [{ kind: "local" }] })).toEqual(
       EMPTY_TRUST,

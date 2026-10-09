@@ -11,7 +11,8 @@ import { parsePairingQr } from "../host/qr";
 import { LOCAL_SOURCE_ID } from "../api/source";
 import { openAfterJoin } from "../sources/join-intent";
 import { forgetRecent, setEnterIntent } from "../services/recent";
-import { SourceError } from "../sources/types";
+import { routesOf } from "../sources/routing";
+import { type SourceDescriptor, SourceError } from "../sources/types";
 import {
   CloudError,
   CloudTransportError,
@@ -406,7 +407,8 @@ export function createRelayEnrollment(
       cloudIssuer: issuer,
       fingerprint: "",
     });
-    setRemoteSlot(sourceId, slot);
+    // 槽按 `(源, 这条中继)`：同一台主机经另一个中继挂上时不顶替这一份（§55）。
+    setRemoteSlot(sourceId, slot, issuer);
   };
 
   return {
@@ -556,16 +558,22 @@ export async function forgetConnection(
   sourceId: string,
   bridge: NativeBridge = nativeBridge(),
 ): Promise<void> {
+  // 一个连接的每条中继各用一槽（§55）；删完连接，没有别的连接还在用的槽才删。
+  const slotsOf = (item: SourceDescriptor) =>
+    routesOf(item)
+      .filter((route) => route.via === "relayed" && route.cloudIssuer !== "")
+      .map(
+        (route) =>
+          remoteSlotOf(item.sourceId, route.origin) ??
+          serviceIdOf(route.cloudIssuer),
+      );
   const row = loadConnections().find((item) => item.sourceId === sourceId);
-  const slotOf = (item: { sourceId: string; cloudIssuer: string }) =>
-    remoteSlotOf(item.sourceId) ?? serviceIdOf(item.cloudIssuer);
-  const slot = row === undefined || row.cloudIssuer === "" ? null : slotOf(row);
+  const slots = row === undefined ? [] : [...new Set(slotsOf(row))];
   await bridge.removeSession(sourceId);
   removeConnection(sourceId);
   forgetRecent(sourceId);
-  if (slot === null) return;
-  const stillUsed = loadConnections().some(
-    (item) => item.cloudIssuer !== "" && slotOf(item) === slot,
-  );
-  if (!stillUsed) await bridge.removeRemote(slot);
+  if (slots.length === 0) return;
+  const stillUsed = new Set(loadConnections().flatMap(slotsOf));
+  for (const slot of slots)
+    if (!stillUsed.has(slot)) await bridge.removeRemote(slot);
 }
