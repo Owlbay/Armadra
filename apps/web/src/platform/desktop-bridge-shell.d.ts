@@ -61,6 +61,15 @@ interface ArmadraBridge {
     locale(): Promise<string>;
   };
   /**
+   * 系统内存压力等级变了（`memory:pressure`，主进程只在变化时推）。旧壳没有
+   * 这一项，所以是可选的；页面经 `terminal/memory-pressure.ts` 转进回收总线。
+   */
+  readonly memory?: {
+    onPressure(
+      listener: (event: { level: "normal" | "warning" | "critical" }) => void,
+    ): () => void;
+  };
+  /**
    * 一个被拖进来或选中的 `File` 的绝对路径（`webUtils.getPathForFile`）。
    * 页面把路径交给 Runtime，字节从不经过渲染进程。
    */
