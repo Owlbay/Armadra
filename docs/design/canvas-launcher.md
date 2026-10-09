@@ -1,13 +1,15 @@
 # 画布启动器：注入由数据目录里的启动器完成，启动行不再带注入
 
 > 状态：**已实施（2026-10-02）**。原先记下的两处出入已补上：集成页的「Worker 待升级」提示与集成状态的 `outdatedHosts`（补全 G1-2，契约 §21.2）；`packaged-smoke.mjs` 改为断言 Codex 信任记录没有写回（`2d55207a`）。实测见[状态文档](../status/typescript-core-status.md) §63。取代[画布内注入](./canvas-only-integration.md)的 §2 后半（方言引用里 Codex 的环境变量展开、`.cmd` 包装的词过滤）、§3 的「Codex 的启动行要短」、§4 全部（信任记录）与 §5 的迁移记录形状；取代[远端画布注入](./remote-canvas-injection.md) §2 第 3 条（垫片的生成方式）与 Codex 信任那一段。Hook 事件契约、技能正文、产物目录 `integration/<cli>/`、Worker 中继与一次性迁移的备份规则不变。实施完成后按 §16 回改那两份文档。
+>
+> **2026-10-09 回改（§7）**：Codex 不再带 `--dangerously-bypass-hook-trust`，改为在同一层 `-c` 里带我们这八个 Hook 的信任记录（`hooks.state`），并以 `-c features.daemon_auto_start=false` 声明内嵌模式。TUI 启动时不再打那两行警告（旗标警告与「Running without the shared background server」），用户自己没审过的 Hook 在画布内也不再被绕过审查。
 
 ## 1. 目标与硬约束
 
 用户拍板：
 
 1. **不改用户的 CLI 配置与系统配置，数据目录之外一个字节不写**（远端主机上只写 Worker 的状态目录）。注入只发生在从画布启动的 Agent 上。
-2. Codex 的 Hook 信任改用会话级旗标 `--dangerously-bypass-hook-trust`：零写入。代价接受：用户自己没审过的用户层 / 插件 Hook 在画布内的 Codex 会话里也会跑，TUI 每次启动打一行警告。
+2. Codex 的 Hook 信任改用会话级旗标 `--dangerously-bypass-hook-trust`：零写入。代价接受：用户自己没审过的用户层 / 插件 Hook 在画布内的 Codex 会话里也会跑，TUI 每次启动打一行警告。（2026-10-09 起改为会话层信任记录，仍是零写入，代价随之取消，见 §7。）
 3. 旧全局安装的迁移仍然**自动**，并补一步：把当前版本写进 `~/.codex/config.toml` 的 `/<session-flags>/config.toml:*` 信任记录也清掉（已升级过的机器上 `global-migration.json` 已存在，第二步要能单独跑一次）。
 4. Windows 在范围内：`cmd.exe`、pwsh 7、Windows PowerShell 5.1，CI 的 windows runner 真跑。
 
@@ -36,14 +38,14 @@
 
 ### 2.1 机制表
 
-| 平台 \ CLI                | Claude                                                                                               | Codex                                                                                                                                | OpenCode                                        | Pi / OMP                                                                                                           | Copilot                            |
-| ------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------- |
-| 注入 argv（启动器追加）   | `--settings <settings.json>` `--plugin-dir <plugin>` `--append-system-prompt-file <instructions.md>` | `--dangerously-bypass-hook-trust` `-c check_for_update_on_startup=false` 八个 `-c hooks.<Event>=[…]` `-c developer_instructions="…"` | 无                                              | `--extension <module>` `--skill <dir>` `--append-system-prompt <file>`（OMP 为 `=` 形与 `--config=<overlay.yml>`） | `--plugin-dir <plugin>`            |
-| 注入 env（只给 CLI 进程） | 无                                                                                                   | 无                                                                                                                                   | `OPENCODE_CONFIG_DIR` `OPENCODE_CONFIG_CONTENT` | 无                                                                                                                 | `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` |
-| macOS / Linux 启动器      | `run/<cli>`：POSIX `sh`，`exec`，不留中间进程（§4）                                                  | 同左                                                                                                                                 | 同左                                            | 同左                                                                                                               | 同左                               |
-| Windows 启动器            | `run\<cli>.exe` + `<cli>.launch`：同一个 C# 控制台程序 `armadra-launch.exe` 的副本（§5）             | 同左                                                                                                                                 | 同左                                            | 同左                                                                                                               | 同左                               |
-| SSH 节点                  | 启动行仍是裸的 `claude --model …`；远端 `shims/<cli>` → 远端 `run/<cli>`（§6.2）                     | 同左（Codex 的 `-c` 写在远端启动器里）                                                                                               | 同左                                            | 同左                                                                                                               | 同左                               |
-| 恢复                      | 启动器每次都注入，恢复与新开相同                                                                     | `codex resume <id>` 在前、注入在后；`--dangerously-bypass-hook-trust` 在 `resume` 子命令后也认（§7.1）                               | 同 Claude                                       | 同 Claude                                                                                                          | 同 Claude                          |
+| 平台 \ CLI                | Claude                                                                                               | Codex                                                                                                                                                         | OpenCode                                        | Pi / OMP                                                                                                           | Copilot                            |
+| ------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------- |
+| 注入 argv（启动器追加）   | `--settings <settings.json>` `--plugin-dir <plugin>` `--append-system-prompt-file <instructions.md>` | `-c check_for_update_on_startup=false` `-c features.daemon_auto_start=false` 八个 `-c hooks.<Event>=[…]` `-c hooks.state={…}` `-c developer_instructions="…"` | 无                                              | `--extension <module>` `--skill <dir>` `--append-system-prompt <file>`（OMP 为 `=` 形与 `--config=<overlay.yml>`） | `--plugin-dir <plugin>`            |
+| 注入 env（只给 CLI 进程） | 无                                                                                                   | 无                                                                                                                                                            | `OPENCODE_CONFIG_DIR` `OPENCODE_CONFIG_CONTENT` | 无                                                                                                                 | `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` |
+| macOS / Linux 启动器      | `run/<cli>`：POSIX `sh`，`exec`，不留中间进程（§4）                                                  | 同左                                                                                                                                                          | 同左                                            | 同左                                                                                                               | 同左                               |
+| Windows 启动器            | `run\<cli>.exe` + `<cli>.launch`：同一个 C# 控制台程序 `armadra-launch.exe` 的副本（§5）             | 同左                                                                                                                                                          | 同左                                            | 同左                                                                                                               | 同左                               |
+| SSH 节点                  | 启动行仍是裸的 `claude --model …`；远端 `shims/<cli>` → 远端 `run/<cli>`（§6.2）                     | 同左（Codex 的 `-c` 写在远端启动器里）                                                                                                                        | 同左                                            | 同左                                                                                                               | 同左                               |
+| 恢复                      | 启动器每次都注入，恢复与新开相同                                                                     | `codex resume <id>` 在前、注入在后；`-c` 在 `resume` 子命令后也认（§7.1）                                                                                     | 同 Claude                                       | 同 Claude                                                                                                          | 同 Claude                          |
 
 ### 2.2 启动行
 
@@ -170,12 +172,15 @@ exec '/…/integration/run/claude' claude "$@"
 ```
 armadra-launch 1
 gate=ARMADRA_NODE_ID
-arg=--dangerously-bypass-hook-trust
 arg=-c
 arg=check_for_update_on_startup=false
 arg=-c
-arg=hooks.SessionStart=[{hooks=[{type="command",command="C:\\Users\\me\\AppData\\Roaming\\Armadra\\bin\\armadra-hook.exe codex"}]}]
+arg=features.daemon_auto_start=false
+arg=-c
+arg=hooks.SessionStart=[{hooks=[{type="command",command="C:\\Users\\me\\AppData\\Roaming\\Armadra\\bin\\armadra-hook.exe codex",timeout=600}]}]
 …
+arg=-c
+arg=hooks.state={"C:\\<session-flags>\\config.toml:session_start:0:0"={trusted_hash="sha256:…"},…}
 arg=-c
 arg=developer_instructions="…\n…"
 ```
@@ -241,20 +246,24 @@ Codex 信任：`integration.sync` 不再带 `codexCommand`；Worker 侧 `syncInt
 
 ## 7. Codex
 
-### 7.1 旗标，实测（2026-10-02，Codex 0.160.0，本机）
+### 7.1 信任记录与内嵌模式，实测（2026-10-09，Codex 0.160.0，本机）
 
-- `codex --help`、`codex exec --help`、`codex resume --help` 都列出 `--dangerously-bypass-hook-trust`（「Run enabled hooks without requiring persisted hook trust for this invocation」）。所以 `codex resume <id> … --dangerously-bypass-hook-trust` 这个位置是认的，与 `-c` 一样写在子命令之后。
-- 临时 `CODEX_HOME`（空目录、没有 `config.toml`、没有登录）下 `codex exec --skip-git-repo-check --dangerously-bypass-hook-trust -c check_for_update_on_startup=false -c 'hooks.SessionStart=[{hooks=[{type="command",command="echo fired >> <file>"}]}]' "Reply OK"`：请求因 401 失败，但 `SessionStart` 的 Hook **跑了**（文件里有 `fired`），`CODEX_HOME` 里没有生成 `config.toml`。
-- 对照：同样的命令不带旗标，Hook 没跑；带 `-c bypass_hook_trust=true` 代替旗标，Codex 打印 `session-flags: \`bypass_hook_trust\` is ignored.`，Hook 也没跑。**只有命令行旗标有效**，`-c`形式不可用（原生二进制里虽有`bypass_hook_trust` 覆盖项，但会话旗标层忽略它）。
-- 二进制里的警告原文：`` `--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation. ``——TUI 每次启动打这一行，接受。
-- 版本：PR openai/codex#24317 修的是 TUI 之前**忽略**这个旗标、仍弹「Hooks need review」的问题（用户给的说法是 0.134 起）。这个旗标本身首次出现在哪个版本没核实到；实现时拿 `@openai/codex@0.133.0` 的 `--help` 对一次，核不到就把门槛定为 **0.134.0**，常量 `CODEX_HOOK_TRUST_BYPASS_MIN`。
+2026-10-02 的方案是 `--dangerously-bypass-hook-trust`（实测见本节末）。它让 TUI 每次启动打两行警告（旗标本身一行、「Running without the shared background server」一行），还会把用户自己没审过的 Hook 一并放行。现在的做法：
+
+- **信任记录放在 `-c` 层**。Codex 从用户层与会话旗标层（`-c`）都读 `hooks.state`（`hooks/src/config_rules.rs`，0.134.0 到 0.162.0 的源码一致）。我们的 Hook 来源键是会话层的合成路径 `/<session-flags>/config.toml`（Windows 为 `C:\<session-flags>\config.toml`），状态键 `<来源>:<event>:0:0`；哈希是 `{event_name, hooks: [{type, command, timeout, async}]}` 按键排序的 JSON 的 SHA-256（`codexHookTrustHash`）。于是启动器多带一个 `-c hooks.state={"<键>"={trusted_hash="sha256:…"},…}`，Codex 只信任这八个 Hook，`config.toml` 一个字节不写。
+- **超时写明**。哈希含规范化后的 `timeout`，而默认值随版本变过（0.145 起 `SessionEnd` 夹在 1–3 s）。每个表写明今天的默认值：`SessionEnd` 1，其余 600。
+- **内嵌模式写明**。Codex 0.156 起 TUI 默认连共享后台服务器；有任何 `-c`（少数 `features.*` 除外）就退回内嵌并打「Running without the shared background server: … requires embedded mode.」。画布内本来就得内嵌：Hook 在会话所在的进程里跑，接到共享服务器上就在它的进程、带它的环境里跑，`ARMADRA_NODE_ID` 不是这个节点的；`-c` 层也只属于这一个进程。所以加 `-c features.daemon_auto_start=false`：提示只在自动启动打开时才打，关掉后不再出现；启动路径与之前完全相同（之前也是因为 `-c` 走内嵌），不变慢，并发仍由启动闸门（契约 §52）排队。`features` 里认不出的键旧版本只记日志，所以不按版本区分；不用 `--no-daemon`，因为 0.156 之前的 Codex 不认这个旗标、会拒绝启动。
+- **实测**：临时 `HOME` 与 `CODEX_HOME`（指向本地不可达地址的 mock 提供方，不登录），`codex app-server <启动器的参数>` 的 `hooks/list` 八个 Hook 全是 `trusted`、哈希与 `codexHookTrustHash` 相同；同样的参数起 TUI，启动后 0 条警告，提交一句话后 `SessionStart`、`UserPromptSubmit` 的 Hook 都跑了且带节点的 `ARMADRA_NODE_ID`；`CODEX_HOME` 里的 `config.toml` 前后字节相同。对照：旧参数（旗标 + 不写超时）启动即「2 warnings」。
+- 用户自己的、没审过的 Hook 不再被放行：TUI 会照画布外一样提示审查。
+- 以前（2026-10-02）：`codex --help`、`codex exec --help`、`codex resume --help` 都列出 `--dangerously-bypass-hook-trust`；`-c bypass_hook_trust=true` 被会话旗标层忽略。
 
 ### 7.2 版本门槛的处理
 
 `canvasInjection` 对 Codex 读 `agent/probe.ts::storedProbe("codex")`：
 
-- 版本已知且 `< CODEX_HOOK_TRUST_BYPASS_MIN`：**不带旗标也不带八个 `-c hooks.*`**（没有信任又没有旗标，TUI 会停在「Hooks need review」对话框上，正好挡住首投；旧版本不认旗标则直接拒绝启动——两种都比没有 Hook 更糟）。仍带 `check_for_update_on_startup=false` 与 `developer_instructions`。集成页 `warning`：「Codex x.y.z 太旧，画布内启动不带 Hook；0.134 起支持」。状态来源退回画面安静判定（`startsSilently` 已把 Codex 当作不报开场的那类）。
-- 版本未知（还没探过、或探测失败）：带。与今天行为一致；探测在装配后 3 秒跑，`GET /api/agents` 绝大多数时候已知。
+- 版本已知且 `< CODEX_SESSION_HOOK_TRUST_MIN`（0.134.0）：**不带八个 `-c hooks.*` 与信任记录**（没有信任，TUI 会停在「Hooks need review」对话框上，正好挡住首投——比没有 Hook 更糟）。仍带 `check_for_update_on_startup=false`、`features.daemon_auto_start=false` 与 `developer_instructions`。集成页 `warning`：「Codex x.y.z 太旧，画布内启动不带 Hook；0.134 起支持」。状态来源退回画面安静判定（`startsSilently` 已把 Codex 当作不报开场的那类）。
+- 版本未知（还没探过、或探测失败）：带。与之前行为一致；探测在装配后 3 秒跑，`GET /api/agents` 绝大多数时候已知。远端执行主机不探版本，一律带，键按 POSIX。
+- 以后的 Codex 若改了哈希的组成，症状是画布内启动停在「Hooks need review」：用 `app-server` 的 `hooks/list` 对一次 `currentHash`（`inject.test.ts` 里有 0.160.0 的两条实测答案）。
 
 ### 7.3 `developer_instructions`
 
@@ -401,7 +410,7 @@ Worker（新版本）在 `integration.sync` 里：不再收到 `codexCommand`；
 - `agent/windows-launch.test.ts`（`it.runIf(win32)`，扩）：用 `scripts/launch-exe.mjs` 把 C# 编到临时目录，复制成 `run\claude.exe` + `.launch`，把 `shellCommandLine` 生成的整行交给真 `cmd.exe`、`pwsh`、`powershell.exe`：十八个值原样到达；`arg=` 里带 `"`、`&`、`%`、中文的 Codex 式 TOML 串原样到达；门关着时没有注入；退出码透传（假程序 `process.exit(7)`）；程序是 `.cmd` 包装时经 `cmd.exe` 起来、不安全的注入词被跳过并有 stderr 提示；垫片模式摘 `PATH`。
 - `scripts/launch-exe.test.mjs`（`node --test`，Windows 才编译）：C# 源能用系统 `csc` 编过；`after-pack` 的 Windows 目标把 `cli/armadra-launch.exe` 放进 resources。
 - `agent/canvas-launch.test.ts`：三种方言的行形状（含空格路径的启动器在 pwsh 用 `&`）、`args` 不含注入、冷启动 / 唤醒 / 依赖路带启动器、SSH 行裸、Windows 没有 `.exe` 时裸行、结构性用例（§9）。
-- `hook/install/inject.test.ts`：Codex 的 `args` 含 `--dangerously-bypass-hook-trust` 且八个 `-c` 在后；版本门槛（探测缓存注入：`0.133.0` → 没有旗标没有 Hook，有说明；未知 → 带）；`prepareInjection` 不碰 `config.toml`（临时 `HOME` 下跑完，`~/.codex/config.toml` 不存在）。
+- `hook/install/inject.test.ts`：Codex 的 `args` 全是 `-c`（没有 `--dangerously-` 旗标），八个 Hook 表写明超时、每个都有信任记录，哈希对得上 Codex 0.160.0 的实测答案；版本门槛（探测缓存注入：`0.133.0` → 没有 Hook 没有信任记录，有说明；未知 → 带）；`prepareInjection` 不碰 `config.toml`（临时 `HOME` 下跑完，`~/.codex/config.toml` 不存在）。
 - `hook/install/migrate.test.ts`：没有记录的机器 v1+v2 一起、`version: 1` 的记录只跑 v2 并升版、只删 `/<session-flags>/` 前缀的键、备份只在有变化时留、认不出的 `config.toml` 记 `error` 不改、`ARMADRA_NO_GLOBAL_WRITES` 下不跑、第二次启动不再跑。
 - `hook/ingest.test.ts`：§12 两条。
 - `collab/skill.test.ts`：`developerInstructions` 首行带 `r16` 与条件句；`SKILLS_REVISION` 两处一致。
@@ -418,13 +427,13 @@ Worker（新版本）在 `integration.sync` 里：不再收到 `codexCommand`；
 
 ### 13.3 端到端（`tools/probes/agent-e2e.mjs` 场景 5）
 
-- 读 `GET /api/agents` 的 `launcher`，断言 Claude / Codex 的行都有；`GET /api/agents/codex/integration` 的 `launchArgs` 含旗标与八个 `-c`。
-- 画布内：`exec <launcher> codex exec --skip-git-repo-check "Reply OK"`（环境带 `ARMADRA_NODE_ID`）——会话记录里有 `[Armadra canvas rules r16]` 与技能路径、Hook 打到 core、`stderr` 里有 `--dangerously-bypass-hook-trust is enabled` 那行。
+- 读 `GET /api/agents` 的 `launcher`，断言 Claude / Codex 的行都有；`GET /api/agents/codex/integration` 的 `launchArgs` 含八个 `-c hooks.*` 与信任记录、没有 `--dangerously-` 旗标。
+- 画布内：`exec <launcher> codex exec --skip-git-repo-check "Reply OK"`（环境带 `ARMADRA_NODE_ID`）——会话记录里有 `[Armadra canvas rules r16]` 与技能路径、Hook 打到 core、`stderr` 里没有旗标警告。
 - 画布外：同一条命令、同一环境但去掉 `ARMADRA_NODE_ID`——这就是「历史里重跑」：会话记录没有画布规则、Hook 没打到 core。Claude 同样两遍（`-p --output-format stream-json`，init 里有没有 `armadra` 插件）。
 - 旗标在位置参数之后：Claude 与 Codex 各跑一次 `<launcher> <cli> … "Reply OK"`，确认注入仍被接受（§2.2 末尾）。
 - 临时 `CODEX_HOME` 里跑完**没有** `config.toml`（之前断言的是「信任记录只写进了临时 CODEX_HOME」，反过来）。
 - 收尾的 `fingerprint()` 已守 `~/.codex/config.toml`、`~/.claude/settings.json` 等字节不变，不用改；加一条：探针起的 core 的数据目录里 `global-migration.json` 的 `version` 为 2 且 `sessionTrust.removed` 为空（探针的 `HOME` 没有旧记录）。
-- 场景 1（Codex 首投）顺带证明 TUI 的那行警告不挡首投；场景 4（唤醒）证明 `resume` 行经启动器。
+- 场景 1（Codex 首投）顺带证明信任记录生效、没有审查对话框挡首投；场景 4（唤醒）证明 `resume` 行经启动器。
 
 ## 14. 已知的边
 
@@ -433,25 +442,29 @@ Worker（新版本）在 `integration.sync` 里：不再收到 `codexCommand`；
 - 核心升级前开的 tmux 会话：环境里没有 `ARMADRA_SHIMS` / 前置的 `PATH`，手敲不注入；新版页面敲的启动行写绝对路径，照常注入。
 - `custom:` 条目 `launchCmd` 指向读不出的 `.cmd`：Windows 启动器经 `cmd.exe` 起它，注入只在词都批处理安全时生效——Codex 基的自定义条目在这种包装下不带 Hook（stderr 有提示）。
 - Codex < 0.134：没有 Hook（§7.2）。
-- 用户自己的用户层 / 插件 Hook 在画布内的 Codex 会话里也会跑（用户接受）。
+- 用户自己没审过的用户层 / 插件 Hook：画布内与画布外一样要审查（2026-10-09 起；之前的旗标会放行它们）。用户有这类 Hook 时，画布内的 Codex 启动也会先停在审查对话框上。
 - `developer_instructions` 的条件句靠模型遵守；硬保证仍是 Hook 客户端的 `ARMADRA_NODE_ID` 门。
 - 启动行上的程序路径（`/opt/homebrew/bin/claude`）与今天一样进 shell 历史；进历史的不再有数据目录之内的任何路径（启动器路径除外）。
 - 页面 `prompt` 在行上时，注入旗标落在位置参数之后（§2.2）。
 
 ## 15. 被否的方案
 
-| 方案                                                      | 为什么不选                                                                                           |
-| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| 继续把注入写在行上，只把 Codex 的信任换成旗标             | 问题 1、3、4、5 都还在；旗标只解决问题 2                                                             |
-| 一个通用启动器 `run/armadra-launch <cli> <程序> …`        | 垫片必须同名，等于还是每个 CLI 一个文件；通用启动器要在运行时找产物，多一层解析，`ps` 里看不出是哪家 |
-| 把注入塞进节点 shell 的环境（`CLAUDE_*`、`CODEX_*` 之类） | 多数注入是 argv，不是环境；环境注入正是问题 5                                                        |
-| 启动器用 node（`armadra-hook.js` 同款）                   | §5.1：桌面壳要 `ELECTRON_RUN_AS_NODE`，三种 Windows 方言没有统一写法；node 不能 exec                 |
-| `.cmd` / `.ps1` 启动器                                    | §5.1                                                                                                 |
-| 继续写 Codex 信任记录但只写进临时 `CODEX_HOME`            | 画布内的 Codex 得换配置目录，用户的登录、会话历史、配置全丢                                          |
-| `-c bypass_hook_trust=true` 代替旗标                      | 实测被会话旗标层忽略（§7.1）                                                                         |
-| 用 `codex app-server` 的 `hooks/trust` 之类动词写信任     | 仍是写用户的 `config.toml`，违反硬约束                                                               |
-| 远端继续内联注入到垫片                                    | 两套生成逻辑；统一成「垫片委托启动器」后本机与远端一份代码                                           |
-| 由页面而不是 core 判断 Codex 版本门槛                     | 版本缓存在 core 的设置里，`canvasInjection` 已是唯一答注入的地方                                     |
+| 方案                                                        | 为什么不选                                                                                           |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| 继续把注入写在行上，只把 Codex 的信任换成旗标               | 问题 1、3、4、5 都还在；旗标只解决问题 2                                                             |
+| 一个通用启动器 `run/armadra-launch <cli> <程序> …`          | 垫片必须同名，等于还是每个 CLI 一个文件；通用启动器要在运行时找产物，多一层解析，`ps` 里看不出是哪家 |
+| 把注入塞进节点 shell 的环境（`CLAUDE_*`、`CODEX_*` 之类）   | 多数注入是 argv，不是环境；环境注入正是问题 5                                                        |
+| 启动器用 node（`armadra-hook.js` 同款）                     | §5.1：桌面壳要 `ELECTRON_RUN_AS_NODE`，三种 Windows 方言没有统一写法；node 不能 exec                 |
+| `.cmd` / `.ps1` 启动器                                      | §5.1                                                                                                 |
+| 继续写 Codex 信任记录但只写进临时 `CODEX_HOME`              | 画布内的 Codex 得换配置目录，用户的登录、会话历史、配置全丢                                          |
+| `-c bypass_hook_trust=true` 代替旗标                        | 实测被会话旗标层忽略（§7.1）                                                                         |
+| 继续用 `--dangerously-bypass-hook-trust`（2026-10-02 方案） | TUI 每次启动打警告，且连用户没审过的 Hook 一起放行；会话层信任记录同样零写入（§7.1）                 |
+| `--profile` 指向我们的配置                                  | 只认 `$CODEX_HOME/<name>.config.toml`，要往用户目录写文件；且同样退回内嵌并打提示                    |
+| 接共享后台服务器                                            | Hook 在服务器进程里跑，节点身份不对；服务器不接受本进程的 `-c` 层                                    |
+| `--no-daemon`                                               | 0.156 之前的 Codex 不认，远端又不探版本；`-c features.daemon_auto_start=false` 效果相同且旧版本无害  |
+| 用 `codex app-server` 的 `hooks/trust` 之类动词写信任       | 仍是写用户的 `config.toml`，违反硬约束                                                               |
+| 远端继续内联注入到垫片                                      | 两套生成逻辑；统一成「垫片委托启动器」后本机与远端一份代码                                           |
+| 由页面而不是 core 判断 Codex 版本门槛                       | 版本缓存在 core 的设置里，`canvasInjection` 已是唯一答注入的地方                                     |
 
 ## 16. 实施后要回改的文档
 

@@ -609,9 +609,10 @@ G5-25 追加：`GET /api/usage` 与 `POST /api/usage/refresh` 里 Claude 那一�
   "agentId": "codex",
   "mode": "canvas",
   "launchArgs": [
-    "--dangerously-bypass-hook-trust",
     "-c",
     "check_for_update_on_startup=false",
+    "-c",
+    "features.daemon_auto_start=false",
     "…"
   ],
   "launchEnv": [],
