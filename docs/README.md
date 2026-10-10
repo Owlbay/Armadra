@@ -62,6 +62,7 @@
 | [远端画布注入](design/remote-canvas-injection.md)                               | SSH 终端里的 CLI：产物同步、垫片与经 Worker 中继的 Hook                                                                                                                                                                                                                 |
 | [画布启动器](design/canvas-launcher.md)                                         | 注入由数据目录里的启动器完成：启动行不带注入、Codex 零写入、Windows C# 启动器、迁移 v2 与工作分解                                                                                                                                                                       |
 | [Claude Code mods](design/claude-mods.md)                                       | Claude 的状态上报改由 mod 进程内转发、状态栏、版本门与环境回退、斜杠命令与 ACP 挂载（M1、M3 已实施），横条（M2）                                                                                                                                                        |
+| [性能方案](design/performance.md)                                               | Runtime 采样异步化与诊断、终端生命周期与渲染器策略、内存压力、终端内存探针（P1–P5 已实施）                                                                                                                                                                              |
 | [补全架构](design/completion-architecture.md)                                   | 二至四部分与平台线补全后的整体架构：新域边界、迁移 0030 起与契约 §14 起预分配、Yjs 实时协同、Gateway、ACP / 工作流 / runners 模型、移动端与推送、安全模型、三档测试                                                                                                     |
 | [补全执行计划](design/completion-plan.md)                                       | 五个波次 49 个工作包：文件归属、依赖、编号、测试、dev-stack、验证命令、热点文件表与需用户提供的条件清单                                                                                                                                                                 |
 | [设计系统](design/design-system.md)                                             | token、组件清单、画布视觉语言、全部界面模式与文案规范，附迁移顺序                                                                                                                                                                                                       |
@@ -110,6 +111,7 @@
 | [补全进度](status/completion-progress.md)                | 补全执行计划 49 个工作包与 G5 的 31 个包逐包的「做了什么 / 实测 / 没做」；剩余用户事项见用户待办清单                                |
 | [安全审查 2026-10](status/security-review-2026-10.md)    | 补全计划新增面的安全审查：已修的中高危、低危的修复状态与设计约束                                                                    |
 | [用户待办清单](status/user-action-checklist.md)          | G5 之后剩下要用户提供或动手的事项：证书与签名、发布与镜像、外部账号、真机验证、CLI 登录、仓库管理；每条写提供什么、填在哪里、怎么验 |
+| [CI 偶发失败记录](status/ci-flakes.md)                   | 与改动无关、重跑即过的失败用例与出现位置；反复出现的开 issue 修根因                                                                 |
 
 - [本地 CLI 插件实施与验收](status/local-cli-plugin.md)：P0–P4 批次、A01–A16 证据与未完成项。
 
@@ -134,6 +136,6 @@
 | [Host 设备认证](history/host-device-auth.md)              | `armadra-host` 的 owner 多设备认证接口    |
 
 现状对应的文档：进程与装配见[架构](guides/architecture.md)，core 的线上形状见 [core 的 JSON 面](contracts/core-json-api.md)，服务器壳的账号模型见[服务器账号、中转与共享](design/server-accounts-and-sharing.md)。
-`research/` 保存研究材料：[产品需求与成本调研](research/product-demand-and-cost-evidence.md)、[M0 探针记录](research/m0-executor-probes.md)与[运行入口](../tools/probes/README.md)、[UI 风格参考](research/ui-style-references/README.md)、[立项会话归档](research/chatgpt-conversation-archive.md)。
+`research/` 保存研究材料：[产品需求与成本调研](research/product-demand-and-cost-evidence.md)、[M0 探针记录](research/m0-executor-probes.md)与[运行入口](../tools/probes/README.md)、[UI 风格参考](research/ui-style-references/README.md)、[右键建 ACP Agent 慢的根因](research/acp-create-latency.md)、[ACP v2 调研](research/acp-v2-2026-10.md)、[多端加入时页面刷新的根因](research/join-refresh-investigation.md)、[Claude Code mods 可行性](research/claude-mods-feasibility.md)、[立项会话归档](research/chatgpt-conversation-archive.md)。
 
 架构变化同步更新 `guides/architecture.md`。
