@@ -64,6 +64,17 @@ class Rotating {
   revokeAll(): void {
     for (const device of this.current.values()) this.revoked.add(device);
   }
+
+  /**
+   * 改口令（cloud-api §18）：撤销别的设备，这台的刷新令牌换新（旧的作废，不当重放）。
+   */
+  rotateAfterPasswordChange(device: string): string {
+    for (const [value, owner] of this.current) {
+      if (owner === device) this.current.delete(value);
+      else this.revoked.add(owner);
+    }
+    return this.issue(device);
+  }
 }
 
 export interface FakeCore {
@@ -107,6 +118,10 @@ export interface FakeWorld {
   readonly cloud: {
     sessions: Rotating;
     accessTokens: Set<string>;
+    /** 访问令牌 → 设备（改口令要知道是哪台）。 */
+    deviceOf: Map<string, string>;
+    /** 账号现在的口令（改口令会换）。 */
+    password: string;
     locked: boolean;
     online: boolean;
     assertions: number;
@@ -165,6 +180,8 @@ export function fakeWorld(): FakeWorld {
     cloud: {
       sessions: cloudSessions,
       accessTokens,
+      deviceOf: new Map(),
+      password: PASSWORD,
       locked: false,
       online: true,
       assertions: 0,
@@ -227,6 +244,7 @@ export function fakeWorld(): FakeWorld {
 function sessionBody(world: FakeWorld, refreshToken: string, device: string) {
   const accessToken = token("cloud-access");
   world.cloud.accessTokens.add(accessToken);
+  world.cloud.deviceOf.set(accessToken, device);
   return {
     session: {
       accessToken,
@@ -304,7 +322,7 @@ async function cloud(
         details: { retryAfterMs: 60_000 },
       });
     }
-    if (input.account !== ACCOUNT || input.password !== PASSWORD) {
+    if (input.account !== ACCOUNT || input.password !== world.cloud.password) {
       return json(401, { code: "credentials_invalid", message: "nope" });
     }
     const device = `dev-${Math.random().toString(36).slice(2, 8)}`;
@@ -361,6 +379,35 @@ async function cloud(
     return json(401, { code: "unauthenticated", message: "no" });
   }
   if (path === "/v1/auth/logout") return json(200, {});
+  if (path === "/v1/auth/password") {
+    // 改口令（cloud-api §18）：挑战 → 旧口令 → 策略；成功换口令、撤销别的设备。
+    if (world.cloud.challenge?.scope.includes("auth.changePassword")) {
+      const challenge = input.challenge as { token?: unknown } | undefined;
+      if (challenge === undefined) {
+        return json(400, { code: "challenge_required", message: "need" });
+      }
+      if (challenge.token !== CHALLENGE_TOKEN) {
+        return json(400, { code: "challenge_invalid", message: "bad" });
+      }
+    }
+    if (input.password !== world.cloud.password) {
+      return json(401, { code: "credentials_invalid", message: "nope" });
+    }
+    const next = String(input.newPassword ?? "");
+    if (next.length < 12) {
+      return json(400, { code: "password_too_short", message: "short" });
+    }
+    world.cloud.password = next;
+    const device = world.cloud.deviceOf.get(access) ?? "";
+    return json(
+      200,
+      sessionBody(
+        world,
+        world.cloud.sessions.rotateAfterPasswordChange(device),
+        device,
+      ),
+    );
+  }
   if (path === "/v1/me/sources") {
     return json(200, {
       sources: world.cloud.sources.map((one) => ({

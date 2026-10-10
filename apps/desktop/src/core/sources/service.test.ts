@@ -377,6 +377,137 @@ describe("远程服务（个人中转）", () => {
     });
   });
 
+  describe("改口令（§63）", () => {
+    const NEXT = "saffron glacier meadow";
+
+    beforeEach(() => {
+      world.cloud.capabilities.push("auth.password-change");
+    });
+
+    const stored = (serviceId: string) =>
+      JSON.parse(backend.values.get(`armadra-remote-${serviceId}`) ?? "{}") as {
+        refreshToken?: string;
+      };
+
+    it("成功：带旧口令与访问令牌调 auth.changePassword，换新的刷新令牌写回", async () => {
+      const { remote } = await addRemote();
+      const before = stored(remote.serviceId).refreshToken;
+      expect(
+        await service.remotePasswordChange({
+          serviceId: remote.serviceId,
+          password: PASSWORD,
+          newPassword: NEXT,
+        }),
+      ).toEqual({});
+      const call = world.requests.find((one) =>
+        one.url.endsWith("/v1/auth/password"),
+      );
+      expect(call?.body).toEqual({ password: PASSWORD, newPassword: NEXT });
+      expect(call?.headers?.authorization).toMatch(/^Bearer cloud-access-/);
+      const after = stored(remote.serviceId).refreshToken;
+      expect(after).toMatch(/^refresh-/);
+      expect(after).not.toBe(before);
+      expect(world.cloud.password).toBe(NEXT);
+      // 换回来的会话照常可用；口令不进日志。
+      expect(
+        (await service.remoteSources(remote.serviceId)).sources,
+      ).toHaveLength(2);
+      expect(logs.join("\n")).not.toContain(NEXT);
+      expect(logs.join("\n")).not.toContain(PASSWORD);
+    });
+
+    it("远程服务不报 auth.password-change：not_implemented，不发口令", async () => {
+      const { remote } = await addRemote();
+      world.cloud.capabilities = world.cloud.capabilities.filter(
+        (one) => one !== "auth.password-change",
+      );
+      expect(
+        await code(
+          service.remotePasswordChange({
+            serviceId: remote.serviceId,
+            password: PASSWORD,
+            newPassword: NEXT,
+          }),
+        ),
+      ).toBe("not_implemented");
+      expect(
+        world.requests.some((one) => one.url.endsWith("/v1/auth/password")),
+      ).toBe(false);
+    });
+
+    it("旧口令不对 credentials_invalid、新口令太短 password_too_short；保存的登录不变", async () => {
+      const { remote } = await addRemote();
+      const before = stored(remote.serviceId).refreshToken;
+      expect(
+        await code(
+          service.remotePasswordChange({
+            serviceId: remote.serviceId,
+            password: "wrong",
+            newPassword: NEXT,
+          }),
+        ),
+      ).toBe("credentials_invalid");
+      expect(
+        await code(
+          service.remotePasswordChange({
+            serviceId: remote.serviceId,
+            password: PASSWORD,
+            newPassword: "short",
+          }),
+        ),
+      ).toBe("password_too_short");
+      expect(stored(remote.serviceId).refreshToken).toBe(before);
+      expect(world.cloud.password).toBe(PASSWORD);
+    });
+
+    it("要求挑战而没带：不发口令，challenge_required 带 siteKey；带令牌放进 challenge", async () => {
+      const { remote } = await addRemote();
+      world.cloud.challenge = {
+        siteKey: "0xSITE",
+        scope: ["auth.changePassword"],
+      };
+      const failure = await service
+        .remotePasswordChange({
+          serviceId: remote.serviceId,
+          password: PASSWORD,
+          newPassword: NEXT,
+        })
+        .catch((error: unknown) => error);
+      expect((failure as CoreFailure).code).toBe("challenge_required");
+      expect((failure as CoreFailure).details).toEqual({
+        provider: "turnstile",
+        siteKey: "0xSITE",
+      });
+      expect(
+        world.requests.some((one) => one.url.endsWith("/v1/auth/password")),
+      ).toBe(false);
+      await service.remotePasswordChange({
+        serviceId: remote.serviceId,
+        password: PASSWORD,
+        newPassword: NEXT,
+        challengeToken: CHALLENGE_TOKEN,
+      });
+      const call = world.requests.find((one) =>
+        one.url.endsWith("/v1/auth/password"),
+      );
+      expect(call?.body).toMatchObject({
+        challenge: { provider: "turnstile", token: CHALLENGE_TOKEN },
+      });
+    });
+
+    it("没有这一行：not_found", async () => {
+      expect(
+        await code(
+          service.remotePasswordChange({
+            serviceId: "9".repeat(32),
+            password: PASSWORD,
+            newPassword: NEXT,
+          }),
+        ),
+      ).toBe("not_found");
+    });
+  });
+
   it("SaaS 只预留：加入与轮询答 not_implemented", async () => {
     expect(
       await code(

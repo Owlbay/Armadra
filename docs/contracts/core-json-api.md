@@ -3936,3 +3936,27 @@ mod 在 `session.start` 用 `$.command.register` 注册七条命令（都是 `im
 - **挑战面板**：页面自己的来源就是中继来源（托管页面）时直接渲染 Turnstile 组件（脚本 `https://challenges.cloudflare.com/turnstile/v0/api.js`，显式渲染）；否则（桌面窗口、服务器壳网页、手机 App）内嵌中继托管的 `<issuer>/app/challenge?siteKey=…&parent=<页面来源>` 同源页，该页只渲染组件，用 `postMessage({ type: "armadra-challenge", token }, parent)` 把令牌交回，面板只认来自中继来源的消息。`/app/challenge` 由 `apps/web` 随 `/app/` 一起托管。
 - 页面 CSP：桌面与 Gateway 的 `frame-src` 已放行 `https:`，不为此改；中继给 `/app/*` 的 CSP 需放行 `https://challenges.cloudflare.com` 的 `script-src`、`frame-src`、`connect-src`，并允许 `/app/challenge` 被嵌入（cloud 仓的防护包）。
 - 界面文案在 `apps/web/src/i18n/`（`challenge.*`、`error.challengeRequired`、`error.challengeInvalid`），中英同步。
+
+## 63. 改远程服务账号的口令
+
+> 协议 1.36。对端的约定是 cloud-api §18（协议包 0.3.10）：`POST /v1/auth/password { password, newPassword, challenge? }`，要账号本人的会话；成功后远程服务撤销账号的其它设备，答这台设备换了刷新令牌的新会话。远程服务在 `platform.info.capabilities` 报 `auth.password-change` 才有这条。
+
+### 63.1 core 作为客户端
+
+- **`sources.remotePasswordChange`** `POST /api/sources/remotes/{serviceId}/password { password, newPassword, challengeToken? }` → `{}`，`settings:write`：`password` 是旧口令。core 先问 `platform.info`：没报 `auth.password-change` 答 `501 not_implemented`（不发口令）；`challenge.scope` 含 `auth.changePassword` 而没带令牌，答 `400 challenge_required`，`details` 同 §62.1。然后用这一行的访问令牌调远程服务；成功后把答回的刷新令牌写回 SecretStore、换掉缓存的访问令牌（与刷新同一条串行队，不会拿旧刷新令牌去换），这台设备保持登录。口令与令牌不存、不记，日志只有 `serviceId`。
+- **错误**：旧口令不对 `401 credentials_invalid`（计入远程服务的锁定计数，锁着时 `429 account_locked`）；新口令不合策略 `400 password_too_short` / `password_too_long` / `password_contains_name` / `password_too_common` / `password_breached`（码与 core 自己的口令策略同名，页面按码取文案）；`rate_limited`、`challenge_invalid`、`source_unauthorized`（这一行的登录已失效）、`source_unreachable` 同 §33；没有这一行 `404 not_found`；SaaS 行 `501 not_implemented`。
+- **别的设备**：远程服务撤销的是这个账号在其它设备上的会话（手机、别的桌面、托管页面），它们要用新口令重新登录。经这个中继挂上的源用的是各自主机的会话（§33.2），本机登记到这个中继用的是源钥（§31），都不受影响。
+
+<!-- rpc:begin contract=§63.1 -->
+
+| procedure                      | kind     | input                                                                                   | output | errors                                                                                                                                                                                                                                                                                                                           | scope            | 自   | 原路径                                           |
+| ------------------------------ | -------- | --------------------------------------------------------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- | ---- | ------------------------------------------------ |
+| `sources.remotePasswordChange` | mutation | `{ serviceId: string, password: string, newPassword: string, challengeToken?: string }` | `{}`   | `unauthenticated`、`forbidden`、`not_found`、`credentials_invalid`、`account_locked`、`rate_limited`、`password_too_short`、`password_too_long`、`password_contains_name`、`password_too_common`、`password_breached`、`challenge_required`、`challenge_invalid`、`source_unauthorized`、`source_unreachable`、`not_implemented` | `settings:write` | 1.36 | `POST /api/sources/remotes/{serviceId}/password` |
+
+<!-- rpc:end -->
+
+### 63.2 页面
+
+- 设置 → 远程访问的中转账号行（已登录、个人中转）菜单里有「修改口令」：远程服务报 `auth.password-change` 才显示（页面经 `sources.remoteSession` 的 `capabilities` 得知）。对话框只有当前口令、新口令、确认新口令三项；两次输入不一致不提交。要求人机验证时升起 §62.2 的挑战面板，action 是 `armadra-password`。成功提示一句并关闭。
+- **挑战页**（§62.2 的 `/app/challenge`）多两个查询参数：`action`（`armadra-login` 缺省、`armadra-password`；别的值按缺省），内嵌时由面板带上；`mode=copy` 时不需要 `parent`，验证通过后把令牌显示在只读输入框里并给「复制」——给运维脚本（cloud 仓 `apps/relay-workers/scripts/rotate-password.sh`）在终端里粘贴用。
+- 界面文案在 `apps/web/src/i18n/`（`remote.password.*`、`challenge.copy*`），中英同步。

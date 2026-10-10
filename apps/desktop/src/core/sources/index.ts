@@ -211,6 +211,7 @@ export function install(
     mount: (input) => service.mount(input),
     remoteSession: (input) => service.remoteSession(input.serviceId),
     remoteLogout: (input) => service.remoteLogout(input.serviceId),
+    remotePasswordChange: (input) => service.remotePasswordChange(input),
     mountByLink: (input) => service.mountByLink(input),
     shareLinks: (input) => shareLinks.list(input.serviceId),
     shareLinkCreate: (input) => shareLinks.create(input),

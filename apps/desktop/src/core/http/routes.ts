@@ -74,6 +74,24 @@ const FORGE_REPO_ROUTES: readonly RouteEntry[] = (
   implemented: true,
 }));
 
+/** `/api/sources/remotes/{serviceId}/*` 的路由（契约 §33.2、§33.6、§61、§63）。 */
+const REMOTE_SERVICE_ROUTES: readonly RouteEntry[] = (
+  [
+    ["", ["PUT", "DELETE"]],
+    ["/poll", ["POST"]],
+    ["/sources", ["GET"]],
+    ["/mount", ["POST"]],
+    ["/session", ["POST"]],
+    ["/logout", ["POST"]],
+    ["/password", ["POST"]],
+  ] as const
+).map(([path, methods]) => ({
+  path: `/api/sources/remotes/{serviceId}${path}`,
+  methods,
+  surface: "runtime",
+  implemented: true,
+}));
+
 export const ROUTES: readonly RouteEntry[] = [
   // 「被读取 N 次」：谁读过这个节点的上下文（设计 agent-delivery.md §13）。
   // 不挂在工作空间下，因为它问的是一个节点的历史，而节点 id 全局唯一。
@@ -1060,42 +1078,7 @@ export const ROUTES: readonly RouteEntry[] = [
     surface: "runtime",
     implemented: true,
   },
-  {
-    path: "/api/sources/remotes/{serviceId}",
-    methods: ["PUT", "DELETE"],
-    surface: "runtime",
-    implemented: true,
-  },
-  {
-    path: "/api/sources/remotes/{serviceId}/poll",
-    methods: ["POST"],
-    surface: "runtime",
-    implemented: true,
-  },
-  {
-    path: "/api/sources/remotes/{serviceId}/sources",
-    methods: ["GET"],
-    surface: "runtime",
-    implemented: true,
-  },
-  {
-    path: "/api/sources/remotes/{serviceId}/mount",
-    methods: ["POST"],
-    surface: "runtime",
-    implemented: true,
-  },
-  {
-    path: "/api/sources/remotes/{serviceId}/session",
-    methods: ["POST"],
-    surface: "runtime",
-    implemented: true,
-  },
-  {
-    path: "/api/sources/remotes/{serviceId}/logout",
-    methods: ["POST"],
-    surface: "runtime",
-    implemented: true,
-  },
+  ...REMOTE_SERVICE_ROUTES,
   {
     path: "/api/sources/join",
     methods: ["POST"],
