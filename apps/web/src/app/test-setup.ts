@@ -24,7 +24,7 @@ if (typeof globalThis.ResizeObserver !== "function") {
 /**
  * `localStorage`：Node 25 起全局自带一个 Web Storage 的 getter，没给
  * `--localstorage-file` 时它答 `undefined`，而且盖住了 jsdom 的那一个。于是
- * 同一份用例在新 Node 上所有本机存储读写都静默失败、在 CI 的 Node 22 上是真
+ * 同一份用例在新 Node 上所有本机存储读写都静默失败、在 CI 的 Node 24 上是真
  * 存储——编辑器草稿在用例之间串了数据，本机却复现不出来。这里一律换回 jsdom
  * 自己的，让两边跑的是同一件事。
  */

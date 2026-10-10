@@ -37,6 +37,14 @@ import { newId } from "./tokens";
 
 export const PASSKEY_CHALLENGE_TTL_MS = 2 * 60 * 1000;
 export const PASSKEY_TIMEOUT_MS = 60 * 1000;
+
+/**
+ * 注册时提供的公钥算法（COSE）：EdDSA、ES256、RS256，显式写死。库的缺省在运行时
+ * 支持后量子算法（Node 24 起）时把 ML-DSA-44 排第一，浏览器就登记一把 1.3 KB 的公钥，
+ * 撞上 `identity_credentials.public_key` 的 1024 字节上限（已发布的迁移，不改），
+ * 注册答 409。算法集不随 Node 版本变。
+ */
+export const PASSKEY_ALGORITHMS = [-8, -7, -257] as const;
 export const RP_NAME = "Armadra";
 const MAX_CHALLENGES = 4096;
 
@@ -240,6 +248,7 @@ export class Passkeys {
       userID: userHandle(input.principalId),
       timeout: PASSKEY_TIMEOUT_MS,
       attestationType: "none",
+      supportedAlgorithmIDs: [...PASSKEY_ALGORITHMS],
       excludeCredentials: input.existing.map((row) => ({
         id: row.webauthnId,
         transports: [...row.transports],

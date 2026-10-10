@@ -2185,7 +2185,7 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 
 ## 31. 云登录与登记：`/api/identity/cloud/*`
 
-> 状态：实施契约（A2-3，迁移 `0040_cloud_identity`，实现 `core/identity/cloud/`；规格见平台实现规格 core 包 §2（docs/design/platform/core-packages.md））。下面的形状表由 `tools/contract/generate.mjs` 从 `packages/shared/src/contract/cloud.ts` 生成；出入参就是协议包 `@armadra/platform-protocol/core-api` 的 schema 对象（`cloudLoginInputSchema`、`cloudLoginOutputSchema`、`cloudRegisterInputSchema`、`cloudRegisterOutputSchema`、`cloudStatusOutputSchema`、`tunnelStatusSchema` 等），cloud 仓与这里同一份。远程服务一侧的接口见 [cloud-api.md](https://github.com/Owlbay/armadra-cloud/blob/main/docs/contracts/cloud-api.md) §4、§10，这里不另抄。
+> 状态：实施契约（A2-3，迁移 `0040_cloud_identity`，实现 `core/identity/cloud/`；规格见平台实现规格 core 包 §2（docs/design/platform/core-packages.md））。下面的形状表由 `tools/contract/generate.mjs` 从 `packages/shared/src/contract/cloud.ts` 生成；出入参就是协议包 `@armadra/platform-protocol/core-api` 的 schema 对象（`cloudLoginInputSchema`、`cloudLoginOutputSchema`、`cloudRegisterInputSchema`、`cloudRegisterOutputSchema`、`cloudStatusOutputSchema`、`tunnelStatusSchema` 等），cloud 仓与这里同一份。远程服务一侧的接口见 [cloud-api.md](https://github.com/AMA-Link/armadra-cloud/blob/main/docs/contracts/cloud-api.md) §4、§10，这里不另抄。
 
 范围：本机 core 登记到远程服务（目前只有个人中转；SaaS 只留形状），并用远程服务签发的源访问断言换本机会话。每条都有 procedure（`POST /api/rpc/identity/cloud/<动词>`，§34.1）与下表「原路径」那条旧路径，两者是同一份实现；`identity.cloud.login` 是匿名面，只经旧路径，RPC 上答 501 `not_implemented`。整段 `/api/identity/cloud` 由身份域自己认会话（与 `/api/identity/*` 同一档），权限按下表的 scope 判：登记、撤销、可信来源要 `settings:write`，读状态要 `settings:read`（服务器壳上的成员都没有，一律 403 且不触发外呼），绑定只要登录（`identity:read`）。
 
@@ -2264,7 +2264,7 @@ GitLab（自托管与 gitlab.com 同一套 `/api/v4`）记作 `gitlab`，经 §2
 
 ## 32. 隧道面：core 作为出站隧道客户端
 
-> 状态：实施契约（A3-2，实现 `core/relay/`；规格见平台实现规格 core 包 §4（docs/design/platform/core-packages.md））。中继一侧的线上行为见 [cloud-api.md](https://github.com/Owlbay/armadra-cloud/blob/main/docs/contracts/cloud-api.md) §7、§8，这里不另抄。
+> 状态：实施契约（A3-2，实现 `core/relay/`；规格见平台实现规格 core 包 §4（docs/design/platform/core-packages.md））。中继一侧的线上行为见 [cloud-api.md](https://github.com/AMA-Link/armadra-cloud/blob/main/docs/contracts/cloud-api.md) §7、§8，这里不另抄。
 
 范围：core 经中继节点建立出站隧道，让登记过的远程服务（§31）的客户端经中继访问本机 core。隧道本身没有 HTTP 路径可调用，这一节记的是它的行为边界与可观察面。
 

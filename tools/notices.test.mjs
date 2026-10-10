@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,6 +21,7 @@ import {
   renderNotices,
   scanBundle,
   unlistedBundled,
+  withResolvedPeers,
 } from "./notices.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -79,6 +81,62 @@ test("pnpm's grouped listing becomes one sorted row per installed version, works
       "zeta@1.0.0 MIT /z",
     ],
   );
+});
+
+test("resolved peers and optional dependencies pnpm 12 leaves out are added, with their own dependencies", () => {
+  const dir = mkdtempSync(join(tmpdir(), "armadra-notices-peers-"));
+  const install = (store, name, manifest) => {
+    const path = join(dir, ".pnpm", store, "node_modules", name);
+    mkdirSync(path, { recursive: true });
+    writeFileSync(
+      join(path, "package.json"),
+      JSON.stringify({ name, ...manifest }),
+    );
+    return path;
+  };
+  try {
+    const debug = install("debug@4.4.3_supports-color@7.2.0", "debug", {
+      version: "4.4.3",
+      license: "MIT",
+      peerDependenciesMeta: { "supports-color": { optional: true } },
+    });
+    const color = install("supports-color@7.2.0", "supports-color", {
+      version: "7.2.0",
+      license: "MIT",
+      dependencies: { "has-flag": "^4.0.0" },
+    });
+    symlinkSync(
+      color,
+      join(
+        dir,
+        ".pnpm",
+        "debug@4.4.3_supports-color@7.2.0",
+        "node_modules",
+        "supports-color",
+      ),
+    );
+    const flag = install("has-flag@4.0.0", "has-flag", {
+      version: "4.0.0",
+      license: "MIT",
+    });
+    symlinkSync(
+      flag,
+      join(dir, ".pnpm", "supports-color@7.2.0", "node_modules", "has-flag"),
+    );
+    const listing = withResolvedPeers({
+      MIT: [
+        { name: "debug", versions: ["4.4.3"], paths: [debug], license: "MIT" },
+      ],
+    });
+    assert.deepEqual(
+      packagesFrom(listing).map(
+        (row) => `${row.name}@${row.version} ${row.license}`,
+      ),
+      ["debug@4.4.3 MIT", "has-flag@4.0.0 MIT", "supports-color@7.2.0 MIT"],
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("the rendered notices carry full texts, Electron/Chromium and ama pointers, and no absolute paths", () => {

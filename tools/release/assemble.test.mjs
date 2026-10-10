@@ -501,7 +501,7 @@ test("every target publishes its own feed, and latest.json names it by digest", 
     const result = await assemble({
       directory,
       version: "0.2.0",
-      repo: "Owlbay/Armadra",
+      repo: "AMA-Link/Armadra",
       tag: "v0.2.0",
       secret: secretFromKey(generateKey()),
     });
@@ -514,7 +514,7 @@ test("every target publishes its own feed, and latest.json names it by digest", 
       const entry = result.manifest.platforms[target];
       assert.equal(
         entry.feed.url,
-        `https://github.com/Owlbay/Armadra/releases/download/v0.2.0/${feed}`,
+        `https://github.com/AMA-Link/Armadra/releases/download/v0.2.0/${feed}`,
       );
       assert.equal(entry.feed.sha256, await sha256(join(directory, feed)));
     }
@@ -539,7 +539,7 @@ test("a feed that disagrees with SHA256SUMS about the bytes fails assembly", asy
     const result = await assemble({
       directory,
       version: "0.2.0",
-      repo: "Owlbay/Armadra",
+      repo: "AMA-Link/Armadra",
       tag: "v0.2.0",
       secret: secretFromKey(generateKey()),
     });
@@ -564,7 +564,7 @@ test("a missing feed is a hole electron-updater would hit as a 404", async () =>
     const result = await assemble({
       directory,
       version: "0.2.0",
-      repo: "Owlbay/Armadra",
+      repo: "AMA-Link/Armadra",
       tag: "v0.2.0",
       secret: secretFromKey(generateKey()),
     });

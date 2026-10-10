@@ -59,8 +59,8 @@
       "sha256": "47f55bff6664588581495b3a934337b749929bd12cc1dba3854b6fff4568b363"
     },
     "images": {
-      "cloud": "ghcr.io/owlbay/armadra-cloud:0.3.5",
-      "relay": "ghcr.io/owlbay/armadra-relay:0.3.5"
+      "cloud": "ghcr.io/ama-link/armadra-cloud:0.3.5",
+      "relay": "ghcr.io/ama-link/armadra-relay:0.3.5"
     }
   },
   "mobile": {

@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: 安全问题 / Security vulnerability
-    url: https://github.com/Owlbay/Armadra/security/advisories/new
+    url: https://github.com/AMA-Link/Armadra/security/advisories/new
     about: 请私下报告，不要开公开 issue。见 SECURITY.md。 / Please report privately, not in a public issue. See SECURITY.md.
   - name: 文档索引 / Documentation index
-    url: https://github.com/Owlbay/Armadra/blob/main/docs/README.md
+    url: https://github.com/AMA-Link/Armadra/blob/main/docs/README.md
     about: 开 issue 前可以先查开发指南与架构文档。 / Check the guides and architecture docs before opening an issue.

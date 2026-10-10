@@ -2,7 +2,7 @@
 
 ## 环境
 
-Node.js ≥ 22 与 pnpm（版本锁定于根 `package.json`）——没有别的工具链。
+Node.js ≥ 24 与 pnpm（版本锁定于根 `package.json`）——没有别的工具链。
 tmux 是推荐终端后端，缺失时退回直连 PTY。
 macOS 桌面目标 ≥ 13.3，并需 Xcode Command Line Tools。
 

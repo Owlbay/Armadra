@@ -32,8 +32,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  PNPM_VERSION: "11.18.0"
-  NODE_VERSION: "22"
+  PNPM_VERSION: "12.8.1"
+  NODE_VERSION: "24"
   ARMADRA_RELEASE_CHANNEL: stable
 
 jobs:
@@ -896,7 +896,7 @@ jobs:
             Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery | Out-Null
             Repair-WinGetPackageManager -AllUsers -Latest
           }
-          $dir = Get-ChildItem -Directory -Recurse rendered/channels/winget/manifests | Where-Object { Test-Path (Join-Path $_.FullName 'Owlbay.Armadra.yaml') } | Select-Object -First 1
+          $dir = Get-ChildItem -Directory -Recurse rendered/channels/winget/manifests | Where-Object { Test-Path (Join-Path $_.FullName 'AMA-Link.Armadra.yaml') } | Select-Object -First 1
           winget validate --manifest $dir.FullName --disable-interactivity
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: scoop install

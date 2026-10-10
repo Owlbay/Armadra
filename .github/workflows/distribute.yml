@@ -7,9 +7,9 @@
 #
 # 每个渠道一个作业，各认各的 secret，缺了就跳过并告警，不让整个工作流失败：
 #   - publish-tap：HOMEBREW_TAP_TOKEN，推 Casks/armadra.rb 到 tap 仓库（变量
-#     ARMADRA_HOMEBREW_TAP，缺省 Owlbay/homebrew-tap）；
+#     ARMADRA_HOMEBREW_TAP，缺省 AMA-Link/homebrew-tap）；
 #   - publish-scoop：SCOOP_BUCKET_TOKEN，推 bucket/armadra.json（变量
-#     ARMADRA_SCOOP_BUCKET，缺省 Owlbay/scoop-bucket）；
+#     ARMADRA_SCOOP_BUCKET，缺省 AMA-Link/scoop-bucket）；
 #   - publish-winget：WINGET_TOKEN，wingetcreate 向 microsoft/winget-pkgs 提 PR——
 #     包已在仓库里时 `update`，第一次用渲染好的三件套 `submit`（首次人工审核）。
 #   - mirror：更新镜像（W-MIRROR）。release.yml 的 mirror 作业已把这一版传到桶里
@@ -36,7 +36,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  NODE_VERSION: "22"
+  NODE_VERSION: "24"
 
 jobs:
   render:
@@ -116,7 +116,7 @@ jobs:
         shell: bash
         env:
           CHANNEL_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          TAP: ${{ vars.ARMADRA_HOMEBREW_TAP || 'Owlbay/homebrew-tap' }}
+          TAP: ${{ vars.ARMADRA_HOMEBREW_TAP || 'AMA-Link/homebrew-tap' }}
         run: |
           set -euo pipefail
           node tools/release/publish-channels.mjs push --channel tap \
@@ -156,7 +156,7 @@ jobs:
         shell: bash
         env:
           CHANNEL_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
-          BUCKET: ${{ vars.ARMADRA_SCOOP_BUCKET || 'Owlbay/scoop-bucket' }}
+          BUCKET: ${{ vars.ARMADRA_SCOOP_BUCKET || 'AMA-Link/scoop-bucket' }}
         run: |
           set -euo pipefail
           node tools/release/publish-channels.mjs push --channel scoop \
@@ -198,10 +198,10 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Invoke-WebRequest -Uri https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
-          $id = 'Owlbay.Armadra'
+          $id = 'AMA-Link.Armadra'
           $existing = $true
           try {
-            Invoke-RestMethod -Uri "https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/o/Owlbay/Armadra" -Headers @{ 'User-Agent' = 'armadra-release' } | Out-Null
+            Invoke-RestMethod -Uri "https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/a/AMA-Link/Armadra" -Headers @{ 'User-Agent' = 'armadra-release' } | Out-Null
           } catch {
             $existing = $false
           }
@@ -211,7 +211,7 @@ jobs:
               --urls "$base/Armadra_$($env:VERSION)_windows-x86_64-setup.exe|x64" "$base/Armadra_$($env:VERSION)_windows-aarch64-setup.exe|arm64" `
               --submit --token $env:WINGET_TOKEN
           } else {
-            .\wingetcreate.exe submit --token $env:WINGET_TOKEN "rendered/winget/manifests/o/Owlbay/Armadra/$env:VERSION"
+            .\wingetcreate.exe submit --token $env:WINGET_TOKEN "rendered/winget/manifests/a/AMA-Link/Armadra/$env:VERSION"
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

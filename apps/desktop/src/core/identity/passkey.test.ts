@@ -101,6 +101,11 @@ describe("软件认证器：注册 → 断言", () => {
     });
     expect(begun.options.rp.id).toBe("localhost");
     expect(begun.options.attestation).toBe("none");
+    // 算法集写死，不随运行时是否支持后量子算法变（Node 24 起库缺省把 ML-DSA-44
+    // 排第一，公钥超过 public_key 的 1024 字节上限）。
+    expect(begun.options.pubKeyCredParams.map((param) => param.alg)).toEqual([
+      -8, -7, -257,
+    ]);
     const response = authenticator.create(begun.options, ORIGIN);
     const created = await passkeys.verifyRegistration({
       challengeId: begun.challengeId,

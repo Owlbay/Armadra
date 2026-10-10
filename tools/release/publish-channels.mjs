@@ -41,7 +41,7 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 export const TEMPLATE_DIR = join(root, "tools/release/templates");
 
 /** winget 的包标识：发布者.产品。 */
-export const WINGET_ID = "Owlbay.Armadra";
+export const WINGET_ID = "AMA-Link.Armadra";
 
 /** 每个渠道：模板 → 渲染目录里的相对路径。winget 的目录按 winget-pkgs 的布局。 */
 export function channelFiles(version) {

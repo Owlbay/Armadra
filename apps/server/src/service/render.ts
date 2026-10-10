@@ -92,7 +92,7 @@ export function renderSystemd(spec: Spec): string {
   lines.push("");
   lines.push("[Unit]");
   lines.push(`Description=Armadra 服务器壳 (${systemdValue(spec.identifier)})`);
-  lines.push("Documentation=https://github.com/yovinchen/Armadra");
+  lines.push("Documentation=https://github.com/AMA-Link/Armadra");
   lines.push("After=network-online.target");
   lines.push("Wants=network-online.target");
   lines.push("");
