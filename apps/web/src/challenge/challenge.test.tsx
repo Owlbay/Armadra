@@ -174,6 +174,60 @@ describe("挑战页 /app/challenge", () => {
     delete window.turnstile;
   });
 
+  it("action 选令牌用途：armadra-password 照用，不认识的按登录", async () => {
+    const fake = fakeTurnstile();
+    window.turnstile = fake.api;
+    render(
+      <ChallengePage
+        search="?siteKey=0xSITE&parent=https%3A%2F%2Fa.b&action=armadra-password"
+        post={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(fake.api.render).toHaveBeenCalled());
+    expect(vi.mocked(fake.api.render).mock.calls[0]![1]).toMatchObject({
+      action: "armadra-password",
+    });
+    cleanup();
+    render(
+      <ChallengePage
+        search="?siteKey=0xSITE&parent=https%3A%2F%2Fa.b&action=evil"
+        post={vi.fn()}
+      />,
+    );
+    await waitFor(() =>
+      expect(vi.mocked(fake.api.render).mock.calls.at(-1)![1]).toMatchObject({
+        action: "armadra-login",
+      }),
+    );
+    delete window.turnstile;
+  });
+
+  it("mode=copy：不要 parent、不 postMessage，令牌显示出来可复制", async () => {
+    const fake = fakeTurnstile();
+    window.turnstile = fake.api;
+    const post = vi.fn();
+    const copy = vi.fn(async () => undefined);
+    render(
+      <ChallengePage
+        search="?siteKey=0xSITE&mode=copy&action=armadra-password"
+        post={post}
+        copy={copy}
+      />,
+    );
+    await waitFor(() => expect(fake.api.render).toHaveBeenCalled());
+    fake.pass("tk-copy");
+    const field = (await screen.findByLabelText(
+      "验证令牌",
+    )) as HTMLInputElement;
+    expect(field.value).toBe("tk-copy");
+    expect(field.readOnly).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "复制" }));
+    await waitFor(() => expect(copy).toHaveBeenCalledWith("tk-copy"));
+    expect(await screen.findByRole("button", { name: "已复制" })).toBeTruthy();
+    expect(post).not.toHaveBeenCalled();
+    delete window.turnstile;
+  });
+
   it("缺 siteKey 或 parent：什么也不渲染", () => {
     const { container } = render(
       <ChallengePage search="?siteKey=k" post={vi.fn()} />,
@@ -188,6 +242,11 @@ describe("小工具", () => {
     expect(isChallengePath("/app/")).toBe(false);
     expect(challengeFrameUrl(ISSUER, "k 1", "https://a.b")).toBe(
       `${ISSUER}/app/challenge?siteKey=k+1&parent=https%3A%2F%2Fa.b`,
+    );
+    expect(
+      challengeFrameUrl(ISSUER, "k", "https://a.b", "armadra-password"),
+    ).toBe(
+      `${ISSUER}/app/challenge?siteKey=k&parent=https%3A%2F%2Fa.b&action=armadra-password`,
     );
     expect(isChallengeMessage({ type: CHALLENGE_MESSAGE, token: "t" })).toBe(
       true,

@@ -5,6 +5,7 @@ import { Button } from "@/ui/button";
 import {
   challengeFrameUrl,
   isChallengeMessage,
+  TURNSTILE_LOGIN_ACTION,
   type TurnstileApi,
 } from "./turnstile";
 import { TurnstileWidget } from "./TurnstileWidget";
@@ -13,6 +14,8 @@ export interface ChallengeFrameProps {
   /** 要求挑战的中继来源。 */
   readonly issuer: string;
   readonly siteKey: string;
+  /** 令牌用途（缺省登录；改口令是 `armadra-password`，契约 §63）。 */
+  readonly action?: string;
   readonly onToken: (token: string) => void;
   /** 页面自己的来源（缺省 `location.origin`）；等于 `issuer` 时直接渲染组件。 */
   readonly origin?: string;
@@ -38,6 +41,7 @@ function originOf(value: string): string {
 export function ChallengeFrame({
   issuer,
   siteKey,
+  action = TURNSTILE_LOGIN_ACTION,
   onToken,
   origin = globalThis.location?.origin ?? "",
   load,
@@ -84,6 +88,7 @@ export function ChallengeFrame({
       <TurnstileWidget
         key={attempt}
         siteKey={siteKey}
+        action={action}
         onToken={onToken}
         onError={() => setFailed(true)}
         {...(load === undefined ? {} : { load })}
@@ -94,7 +99,7 @@ export function ChallengeFrame({
     <iframe
       key={attempt}
       title={t("challenge.title")}
-      src={challengeFrameUrl(relay, siteKey, originOf(origin))}
+      src={challengeFrameUrl(relay, siteKey, originOf(origin), action)}
       sandbox="allow-scripts allow-same-origin"
       referrerPolicy="no-referrer"
       className="h-[80px] w-full border-0"
