@@ -6738,6 +6738,10 @@
                       },
                       "fingerprint": {
                         "type": "string"
+                      },
+                      "challengeToken": {
+                        "type": "string",
+                        "maxLength": 2048
                       }
                     },
                     "required": ["kind", "issuer", "account", "password"]

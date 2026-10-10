@@ -214,6 +214,53 @@ describe("远程访问页", () => {
     );
   });
 
+  it("远程服务要求人机验证：升起挑战面板，令牌到了带着重提交（契约 §62）", async () => {
+    api.listSources.mockResolvedValue({ sources: [local], remotes: [] });
+    api.addPersonalRelay
+      .mockResolvedValueOnce({ kind: "challenge", siteKey: "0xSITE" })
+      .mockResolvedValueOnce({ kind: "done", value: {} });
+    api.notifyShellSourcesChanged.mockResolvedValue(true);
+    mount();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Add relay account" }),
+    );
+    fireEvent.change(screen.getByLabelText("Address"), {
+      target: { value: ISSUER },
+    });
+    fireEvent.change(screen.getByLabelText("Account"), {
+      target: { value: "dev" },
+    });
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "pw" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    // 页面不在中继来源上：内嵌中继的挑战页，令牌经 postMessage 回来。
+    const frame = await waitFor(() => {
+      const found = document.querySelector("iframe");
+      if (found === null) throw new Error("no frame");
+      return found;
+    });
+    const url = new URL(frame.getAttribute("src")!);
+    expect(url.origin).toBe(new URL(ISSUER).origin);
+    expect(url.searchParams.get("siteKey")).toBe("0xSITE");
+    expect(api.addPersonalRelay).toHaveBeenCalledTimes(1);
+    fireEvent(
+      window,
+      new MessageEvent("message", {
+        data: { type: "armadra-challenge", token: "tk-1" },
+        origin: new URL(ISSUER).origin,
+      }),
+    );
+    await waitFor(() =>
+      expect(api.addPersonalRelay).toHaveBeenLastCalledWith({
+        issuer: ISSUER,
+        account: "dev",
+        password: "pw",
+        challengeToken: "tk-1",
+      }),
+    );
+  });
+
   it("错误按 code 的文案显示在表单里，不关对话框", async () => {
     api.listSources.mockResolvedValue({ sources: [local], remotes: [] });
     api.addPersonalRelay.mockRejectedValue(

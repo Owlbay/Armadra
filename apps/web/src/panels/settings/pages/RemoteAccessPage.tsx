@@ -39,6 +39,7 @@ import {
   takeJoinLink,
 } from "../../../sources/join-intent";
 import { SettingsGroup } from "../SettingsGroup";
+import { ChallengeSheet } from "../../../mobile/ChallengeSheet";
 import { isNativeApp } from "../../../mobile/native-bridge";
 import { RenameDialog } from "../../../services/RenameDialog";
 import { ServicesSettingsGroup } from "../../../services/ServicesSettingsGroup";
@@ -767,9 +768,16 @@ function AddRelayDialog({
   const [confirming, setConfirming] = React.useState("");
   const [error, setError] = React.useState("");
   const [busy, setBusy] = React.useState(false);
+  // 远程服务要求人机验证（契约 §62）：升起挑战面板，令牌到了带着刚填的内容再提交。
+  const [challenge, setChallenge] = React.useState<{
+    readonly siteKey: string;
+    readonly issuer: string;
+    readonly fingerprint: string;
+  } | null>(null);
 
   React.useEffect(() => {
     if (draft === null) return;
+    setChallenge(null);
     setIssuer(draft.issuer);
     setAccount(draft.account);
     setPassword("");
@@ -777,7 +785,7 @@ function AddRelayDialog({
     setError("");
   }, [draft]);
 
-  async function submit(fingerprint: string) {
+  async function submit(fingerprint: string, challengeToken?: string) {
     if (busy) return;
     const checked = checkAddress(issuer);
     if (!checked.ok) {
@@ -792,9 +800,18 @@ function AddRelayDialog({
         account,
         password,
         ...(fingerprint ? { fingerprint } : {}),
+        ...(challengeToken ? { challengeToken } : {}),
       });
       if (answer.kind === "confirm") {
         setConfirming(answer.fingerprint);
+        return;
+      }
+      if (answer.kind === "challenge") {
+        setChallenge({
+          siteKey: answer.siteKey,
+          issuer: checked.address,
+          fingerprint,
+        });
         return;
       }
       setPassword("");
@@ -899,6 +916,19 @@ function AddRelayDialog({
             </Button>
           </ResponsiveDialogFooter>
         </form>
+        {challenge !== null && (
+          <ChallengeSheet
+            open
+            issuer={challenge.issuer}
+            siteKey={challenge.siteKey}
+            onCancel={() => setChallenge(null)}
+            onToken={(token) => {
+              const { fingerprint } = challenge;
+              setChallenge(null);
+              void submit(fingerprint, token);
+            }}
+          />
+        )}
       </ResponsiveDialogContent>
     </ResponsiveDialog>
   );

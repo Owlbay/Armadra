@@ -52,9 +52,30 @@ export function presentedFingerprint(error: unknown): string | null {
     : null;
 }
 
+/**
+ * core 在远程服务要求人机验证而没带令牌时答 `challenge_required`，`details` 是
+ * `{ provider, siteKey }`（契约 §62.1）。认出就返回站点密钥，页面升起挑战面板；
+ * 别的失败原样抛。
+ */
+export function presentedChallenge(error: unknown): string | null {
+  if (
+    !(error instanceof RuntimeRequestError) ||
+    error.code !== "challenge_required"
+  )
+    return null;
+  const body = error.body as { details?: { siteKey?: unknown } } | null;
+  const value = body?.details?.siteKey;
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
 export type Confirmable<T> =
   | { readonly kind: "done"; readonly value: T }
   | { readonly kind: "confirm"; readonly fingerprint: string };
+
+/** 加个人中转还可能要先过人机验证（契约 §62）。 */
+export type Challengeable<T> =
+  | Confirmable<T>
+  | { readonly kind: "challenge"; readonly siteKey: string };
 
 async function confirmable<T>(work: () => Promise<T>): Promise<Confirmable<T>> {
   try {
@@ -66,6 +87,18 @@ async function confirmable<T>(work: () => Promise<T>): Promise<Confirmable<T>> {
   }
 }
 
+async function challengeable<T>(
+  work: () => Promise<T>,
+): Promise<Challengeable<T>> {
+  try {
+    return await confirmable(work);
+  } catch (error) {
+    const siteKey = presentedChallenge(error);
+    if (siteKey === null) throw error;
+    return { kind: "challenge", siteKey };
+  }
+}
+
 /* ------------------------------ 远程服务 ------------------------------- */
 
 /** 加个人中转或重新登录（同一 `issuer` 再加一次就是重新登录）。 */
@@ -74,14 +107,17 @@ export function addPersonalRelay(input: {
   account: string;
   password: string;
   fingerprint?: string;
+  /** 挑战面板交回的一次性令牌（契约 §62）。 */
+  challengeToken?: string;
 }) {
-  return confirmable(() =>
+  return challengeable(() =>
     localClient().sources.remoteAdd({
       kind: "personal",
       issuer: input.issuer.trim(),
       account: input.account.trim(),
       password: input.password,
       ...(input.fingerprint ? { fingerprint: input.fingerprint } : {}),
+      ...(input.challengeToken ? { challengeToken: input.challengeToken } : {}),
     }),
   );
 }

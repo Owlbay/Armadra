@@ -26,6 +26,27 @@ export class CloudError extends Error {
   }
 }
 
+/** 远程服务要求的挑战（`platform.info.challenge`，cloud-api §16、契约 §62）。 */
+export interface CloudChallenge {
+  readonly provider: "turnstile";
+  readonly siteKey: string;
+  readonly scope: readonly string[];
+}
+
+/**
+ * 登录要先过挑战而请求没带令牌：对端答了 `challenge_required`，`challenge` 是随后
+ * 从 `platform.info` 读到的 siteKey。页面据此渲染挑战组件，带令牌重调一次。
+ */
+export class CloudChallengeRequired extends CloudError {
+  readonly challenge: CloudChallenge;
+
+  constructor(challenge: CloudChallenge) {
+    super(400, "challenge_required");
+    this.name = "CloudChallengeRequired";
+    this.challenge = challenge;
+  }
+}
+
 /** 连不上（DNS、证书、超时）：区别于对端明确的拒绝。 */
 export class CloudTransportError extends Error {
   constructor(cause: unknown) {
@@ -220,20 +241,46 @@ async function send<T>(
 
 const bearer = (token: string) => ({ Authorization: `Bearer ${token}` });
 
-/** `POST /v1/auth/login`；个人中转没有第二因素，答了 `mfa` 就当不支持。 */
+/**
+ * `POST /v1/auth/login`；个人中转没有第二因素，答了 `mfa` 就当不支持。
+ * `challengeToken` 是挑战组件交回的一次性令牌（契约 §62）；没带而对端要求时抛
+ * {@link CloudChallengeRequired}（带着 siteKey），不是笼统的 `challenge_required`。
+ */
 export async function cloudLogin(
   issuer: string,
   account: string,
   password: string,
   device: CloudDevice,
   options: CloudOptions = {},
+  challengeToken?: string,
 ): Promise<CloudSession> {
-  const answer = await send(
-    `${trimmed(issuer)}/v1/auth/login`,
-    loginAnswer,
-    { body: { account, password, device } },
-    options,
-  );
+  const body = {
+    account,
+    password,
+    device,
+    ...(challengeToken === undefined || challengeToken === ""
+      ? {}
+      : { challenge: { provider: "turnstile", token: challengeToken } }),
+  };
+  let answer: z.infer<typeof loginAnswer>;
+  try {
+    answer = await send(
+      `${trimmed(issuer)}/v1/auth/login`,
+      loginAnswer,
+      { body },
+      options,
+    );
+  } catch (error) {
+    if (
+      !(error instanceof CloudError) ||
+      error.code !== "challenge_required" ||
+      error instanceof CloudChallengeRequired
+    )
+      throw error;
+    const info = await cloudPlatformInfo(issuer, options).catch(() => null);
+    if (info?.challenge === undefined) throw error;
+    throw new CloudChallengeRequired(info.challenge);
+  }
   if (!("session" in answer)) throw new CloudError(501, "mfa_unsupported");
   return answer.session;
 }
@@ -272,6 +319,15 @@ const platformInfoSchema = z.object({
   issuer: z.string().min(1),
   capabilities: z.array(z.string()).default([]),
   webApp: z.string().nullable().default(null),
+  /** 要求挑战时才有（协议包 0.3.5 起）；形状不对当作没有。 */
+  challenge: z
+    .object({
+      provider: z.literal("turnstile"),
+      siteKey: z.string().min(1),
+      scope: z.array(z.string()).default([]),
+    })
+    .optional()
+    .catch(undefined),
 });
 export type CloudPlatformInfo = z.infer<typeof platformInfoSchema>;
 

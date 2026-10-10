@@ -966,6 +966,8 @@ export class SourcesService {
           password: string;
           label?: string | undefined;
           fingerprint?: string | undefined;
+          /** 挑战组件交回的一次性令牌（契约 §62）；远程服务要求挑战时必带。 */
+          challengeToken?: string | undefined;
         }
       | { kind: "saas"; issuer: string; label?: string | undefined },
   ): Promise<{ remote: RemoteService; next: "ready" }> {
@@ -983,10 +985,20 @@ export class SourcesService {
     if (info.mode !== "personal") {
       throw fail("bad_request", "这个地址不是个人中转");
     }
+    // 要挑战而没带令牌：不发口令，把 siteKey 交给页面去渲染挑战组件（契约 §62）。
+    const challenge = info.challenge;
+    const token = input.challengeToken?.trim() ?? "";
+    if (challenge?.scope.includes("auth.login") && token === "") {
+      throw fail("challenge_required", "远程服务要求先完成人机验证", {
+        provider: challenge.provider,
+        siteKey: challenge.siteKey,
+      });
+    }
     const session = await this.remote.login(
       endpoint,
       input.account,
       input.password,
+      token === "" ? undefined : token,
     );
     const existing = this.store.remoteByIssuer(issuer);
     const serviceId = existing?.serviceId ?? this.newId();

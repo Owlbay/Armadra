@@ -4138,3 +4138,31 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - shared：`ClientSource.defaultLabel`、`RemoteService.defaultLabel`（`remoteServiceSchema` 改为协议包的 extend）、`remoteUpdateInputSchema`、`sources.remoteUpdate`，`SystemHello` 的 `hostName` / `systemHostName`（可选）。
 - web：`RenameDialog`、`ServicePicker` 的 `onRename`、`ServiceRow.defaultName`、`SourceDescriptor.defaultLabel`、`renameSource` / `renameRemote`（`api/remote-services.ts`）、`renameConnection`（`mobile/connections.ts`）、`helloHostName`（`sources/routing.ts`）。
 - 线上：§61，协议 1.34，协议包 0.3.1。
+
+## 客户端挑战令牌（Turnstile，A8-1，契约 §62，协议 1.35，Refs #256，2026-10-10）
+
+做了什么：
+
+- 协议包升到 0.3.5（平台协议 1.2：`auth.login` / `links.accept` 的 `challenge`、`platform.info.challenge`，cloud-api §16）。tgz 由 armadra-cloud main 只读打包（在临时目录里对 `git archive` 构建，没写 cloud 工作区）；三处 `package.json`、锁文件、`compatibility.json` 的 `platform` 段（版本、sha256、协议 1.2、镜像 tag 0.3.5）、dev-stack 镜像 tag 同步。core 协议 minor 35。
+- core：`PlatformInfo.challenge` 透传；`RemoteClient.login` 带 `challenge`；对端的 `challenge_required` / `challenge_invalid` 映射成同名错误码并登记。`sources.remoteAdd` 的 personal 支加可选 `challengeToken`；`scope` 含 `auth.login` 而没带令牌，**不发口令**，直接答 `400 challenge_required`，`details` 是 `{ provider, siteKey }`。`links.accept` 按设计 (a) 不挑战。
+- 页面：`challenge/`（`turnstile.ts` 载脚本与消息形状、`TurnstileWidget`、`ChallengeFrame`、`ChallengePage`）与 `mobile/ChallengeSheet`（`ResponsiveDialog`：手机贴底）。页面来源就是中继来源（托管页面）直接渲染组件；其余来源内嵌 `<issuer>/app/challenge?siteKey=…&parent=<来源>`，令牌经 `postMessage` 只发给 `parent`，面板只认来自中继来源的消息。`apps/web` 在 `/app/challenge` 路径只渲染挑战页（随 `/app/` 由中继托管）。
+- 三处登录：`RelaySignIn`（`cloudLogin` 没带令牌被拒时读 `platform.info` 抛带 siteKey 的 `CloudChallengeRequired`）、手机连接页（`RelayOutcome` 多 `challenge`，`begin` 入参多 `challengeToken`）、设置 → 远程访问的中转账号登录框（`addPersonalRelay` 多 `challenge` 结果与 `challengeToken`）。令牌无效是独立原因（`challengeInvalid`），不自动再弹面板。文案 `challenge.*`、`error.challenge*`、`remote.error.challengeInvalid`，中英同步。
+- CSP：core / Gateway 的 `frame-src` 已放行 `https:`，没改。
+
+实测（macOS arm64，假中继 + 假 Turnstile）：
+
+- 新单测：core 5（不要求不带 challenge、要求而没带不发口令且带 siteKey、带令牌放进登录、令牌无效、scope 不含 `auth.login` 不挑战）；shared 契约超集 1；web 挑战面板 / 页 / 小工具 8、`RelaySignIn` 2、手机 `begin` 2、`ConnectScreen` 2、`RemoteAccessPage` 1、`presentedChallenge` 2。
+- `pnpm libs:build && pnpm -r --if-present test`：desktop 5578 过（`vitest.live` 里 `passkey-cdp.live` 在 main 上同样失败）、web 全过、shared 386、server 98、mobile 32、push-relay 9。
+
+没做 / 限制：
+
+- 中继侧（cloud 仓）要做：`/app/*` 的 CSP 放行 `https://challenges.cloudflare.com`（`script-src`、`frame-src`、`connect-src`）并允许 `/app/challenge` 被嵌入；Turnstile 站点要登记的域名含中继域。
+- 没有真 Turnstile 联调（站点密钥与 secret 需用户在 CF 面板创建，D3 清单）；原生 App 的 iframe 在真机 WebView 里的表现未验。
+- `links.accept` 不挑战（Q5 缺省：只登录）。
+
+接口：
+
+- core：`PlatformChallenge`、`PlatformInfo.challenge`、`RemoteClient.login(…, challengeToken?)`、`SourcesService.remoteAdd` 的 `challengeToken`；错误码 `challenge_required` / `challenge_invalid`。
+- shared：`remoteAddInputSchema`（协议包形状的 extend）。
+- web：`CloudChallengeRequired`、`cloudLogin(…, options, challengeToken?)`、`HostedRelay.signIn(…, challengeToken?)`、`RelayOutcome` 的 `challenge`、`presentedChallenge`、`Challengeable`。
+- 线上：§62，协议 1.35，协议包 0.3.5。

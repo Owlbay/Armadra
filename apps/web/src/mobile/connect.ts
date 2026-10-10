@@ -14,6 +14,7 @@ import { forgetRecent, setEnterIntent } from "../services/recent";
 import { helloHostName, routesOf } from "../sources/routing";
 import { type SourceDescriptor, SourceError } from "../sources/types";
 import {
+  CloudChallengeRequired,
   CloudError,
   CloudTransportError,
   type CloudOptions,
@@ -255,6 +256,9 @@ export function cloudFailureOf(error: unknown): ConnectFailure {
         return "locked";
       case "rate_limited":
         return "rateLimited";
+      case "challenge_invalid":
+      case "challenge_required":
+        return "challengeInvalid";
       case "link_invalid":
         return "linkInvalid";
       case "link_expired":
@@ -288,6 +292,11 @@ export type RelayOutcome =
   | { readonly kind: "fingerprint"; readonly fingerprint: string }
   | { readonly kind: "sources"; readonly sources: readonly RelaySourceChoice[] }
   | { readonly kind: "done" }
+  /**
+   * 远程服务要求人机验证（契约 §62）：界面升起挑战面板，拿到令牌再 `begin` 一次
+   * （入参加 `challengeToken`）。
+   */
+  | { readonly kind: "challenge"; readonly siteKey: string }
   | { readonly kind: "failure"; readonly failure: ConnectFailure };
 
 const failed = (failure: ConnectFailure): RelayOutcome => ({
@@ -309,6 +318,8 @@ export interface RelayEnrollment {
     readonly issuer: string;
     readonly account: string;
     readonly password: string;
+    /** 挑战面板交回的一次性令牌（契约 §62）。 */
+    readonly challengeToken?: string;
   }): Promise<RelayOutcome>;
   /** 分享链接 / 二维码：直接挂载（指纹见过的不再问）。 */
   join(link: string): Promise<RelayOutcome>;
@@ -369,6 +380,7 @@ export function createRelayEnrollment(
   const signIn = async (
     account: string,
     password: string,
+    challengeToken?: string,
   ): Promise<RelayOutcome> => {
     try {
       session = await cloudLogin(
@@ -377,10 +389,13 @@ export function createRelayEnrollment(
         password,
         thisDevice(),
         deps.cloud,
+        challengeToken,
       );
       choices = await cloudSources(issuer, session.accessToken, deps.cloud);
     } catch (error) {
       session = null;
+      if (error instanceof CloudChallengeRequired)
+        return { kind: "challenge", siteKey: error.challenge.siteKey };
       return failed(cloudFailureOf(error));
     }
     if (choices.length === 0) return failed("noSources");
@@ -432,8 +447,8 @@ export function createRelayEnrollment(
     async begin(input) {
       const origin = issuerOrigin(input.issuer);
       if (origin === null) return failed("address");
-      const { account, password } = input;
-      return gate(origin, () => signIn(account, password));
+      const { account, password, challengeToken } = input;
+      return gate(origin, () => signIn(account, password, challengeToken));
     },
     async join(link) {
       const parsed = parseJoinLink(link);

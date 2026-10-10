@@ -18,6 +18,8 @@ export const GATEWAY_FP = "b".repeat(64);
 export const PEER_ID = "1".repeat(32);
 export const RELAYED_ID = "2".repeat(32);
 export const ACCOUNT = "owner";
+/** 假中继认的挑战令牌（契约 §62）。 */
+export const CHALLENGE_TOKEN = "turnstile-ok";
 export const PASSWORD = "correct horse battery staple";
 
 let counter = 0;
@@ -114,6 +116,11 @@ export interface FakeWorld {
     capabilities: string[];
     /** `platform.info` 报的服务端名称（契约 §61）；空串不报。 */
     name: string;
+    /**
+     * `platform.info.challenge`（契约 §62）：`null` 不要求；要求时登录必须带
+     * `challenge.token === "turnstile-ok"`，其余答 `challenge_invalid`。
+     */
+    challenge: { siteKey: string; scope: string[] } | null;
   };
   readonly cores: Map<string, FakeCore>;
   /** 直连 hello 不回答（等超时）。 */
@@ -174,6 +181,7 @@ export function fakeWorld(): FakeWorld {
         "me.stream",
       ],
       name: "",
+      challenge: null,
     },
     cores,
     slow: new Set(),
@@ -272,9 +280,23 @@ async function cloud(
       capabilities: [...world.cloud.capabilities],
       relay: { addressing: "path" },
       webApp: null,
+      ...(world.cloud.challenge === null
+        ? {}
+        : {
+            challenge: { provider: "turnstile", ...world.cloud.challenge },
+          }),
     });
   }
   if (path === "/v1/auth/login") {
+    if (world.cloud.challenge?.scope.includes("auth.login")) {
+      const challenge = input.challenge as { token?: unknown } | undefined;
+      if (challenge === undefined) {
+        return json(400, { code: "challenge_required", message: "need" });
+      }
+      if (challenge.token !== CHALLENGE_TOKEN) {
+        return json(400, { code: "challenge_invalid", message: "bad" });
+      }
+    }
     if (world.cloud.locked) {
       return json(429, {
         code: "account_locked",

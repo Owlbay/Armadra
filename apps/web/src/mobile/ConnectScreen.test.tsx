@@ -296,6 +296,65 @@ describe("连接页 · 多连接（添加连接）", () => {
     await waitFor(() => expect(relay.mount).toHaveBeenCalledWith(["s1"]));
   });
 
+  it("要人机验证：升起挑战面板，令牌到了带着刚填的账号口令再登录一次", async () => {
+    const relay = outcomes();
+    relay.begin
+      .mockResolvedValueOnce({ kind: "challenge", siteKey: "0xSITE" })
+      .mockResolvedValueOnce({ kind: "done" });
+    render(<ConnectScreen {...base} relay={relay} initialView="relay" />);
+    fireEvent.change(screen.getByLabelText("地址"), {
+      target: { value: "relay.example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("账号"), { target: { value: "o" } });
+    fireEvent.change(screen.getByLabelText("口令"), {
+      target: { value: "pw" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "登录" }));
+    const frame = await waitFor(() => {
+      const found = document.querySelector("iframe");
+      if (found === null) throw new Error("no frame");
+      return found;
+    });
+    const url = new URL(frame.getAttribute("src")!);
+    expect(url.origin).toBe("https://relay.example.com");
+    expect(url.searchParams.get("siteKey")).toBe("0xSITE");
+    expect(relay.begin).toHaveBeenCalledTimes(1);
+    fireEvent(
+      window,
+      new MessageEvent("message", {
+        data: { type: "armadra-challenge", token: "tk-9" },
+        origin: "https://relay.example.com",
+      }),
+    );
+    await waitFor(() =>
+      expect(relay.begin).toHaveBeenLastCalledWith({
+        issuer: "relay.example.com",
+        account: "o",
+        password: "pw",
+        challengeToken: "tk-9",
+      }),
+    );
+  });
+
+  it("人机验证没通过：给原因，不再自动弹面板", async () => {
+    const relay = outcomes();
+    relay.begin.mockResolvedValue({
+      kind: "failure",
+      failure: "challengeInvalid",
+    });
+    render(<ConnectScreen {...base} relay={relay} initialView="relay" />);
+    fireEvent.change(screen.getByLabelText("地址"), {
+      target: { value: "relay.example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("账号"), { target: { value: "o" } });
+    fireEvent.change(screen.getByLabelText("口令"), {
+      target: { value: "pw" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "登录" }));
+    await screen.findByText("人机验证没有通过，请重试");
+    expect(document.querySelector("iframe")).toBeNull();
+  });
+
   it("口令错：错误在口令框下面，改字即清掉", async () => {
     const relay = outcomes();
     relay.begin.mockResolvedValue({ kind: "failure", failure: "credentials" });

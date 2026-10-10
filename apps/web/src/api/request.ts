@@ -74,6 +74,8 @@ const MESSAGE_BY_CODE: Readonly<Record<string, string>> = {
   credentials_invalid: "error.credentialsInvalid",
   account_locked: "error.accountLocked",
   fingerprint_mismatch: "error.fingerprintMismatch",
+  challenge_required: "error.challengeRequired",
+  challenge_invalid: "error.challengeInvalid",
   address_invalid: "error.addressInvalid",
   address_https_only: "error.addressHttpsOnly",
   address_plaintext_loopback_only: "error.addressPlaintextLoopbackOnly",

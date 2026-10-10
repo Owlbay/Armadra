@@ -192,7 +192,7 @@ describe("登记", () => {
       kind: "desktop",
       coreVersion: "0.0.0-test",
       capabilities: ["identity.native-session.v1"],
-      protocol: { major: 1, minor: 1 },
+      protocol: { major: 1, minor: 2 },
       publicKey: { kty: "OKP", crv: "Ed25519", kid: store.hostId() },
     });
     expect(cloud.registered(ISSUER)).toBe(true);
