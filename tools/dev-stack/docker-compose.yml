@@ -272,7 +272,7 @@ services:
     restart: unless-stopped
 
   cloud:
-    image: ghcr.io/owlbay/armadra-cloud:0.2.1
+    image: ghcr.io/owlbay/armadra-cloud:0.3.0
     profiles: ["platform"]
     environment:
       ARMADRA_CLOUD_ISSUER: "http://127.0.0.1:8100"
@@ -292,7 +292,7 @@ services:
     restart: unless-stopped
 
   relay:
-    image: ghcr.io/owlbay/armadra-relay:0.2.1
+    image: ghcr.io/owlbay/armadra-relay:0.3.0
     profiles: ["platform"]
     command: ["saas", "serve"]
     environment:
@@ -316,7 +316,7 @@ services:
   # 与中继共用网络命名空间（见下面的 armadra-server-nat-personal），它连 127.0.0.1:8103
   # 就是连中继自己。自签 CA 的指纹由 dev-stack.mjs 在中继起来后取出来交给 core。
   relay-personal:
-    image: ghcr.io/owlbay/armadra-relay:0.2.1
+    image: ghcr.io/owlbay/armadra-relay:0.3.0
     profiles: ["personal"]
     command:
       - personal

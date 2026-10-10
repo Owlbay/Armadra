@@ -43,7 +43,7 @@ describe("握手", () => {
     await world.register();
     const tunnel = await world.relay.nextTunnel(0);
     expect(tunnel.hello.sourceId).toBe(world.store.hostId());
-    expect(tunnel.hello.protocol).toEqual({ major: 1, minor: 0 });
+    expect(tunnel.hello.protocol).toEqual({ major: 1, minor: 1 });
     expect(tunnel.hello.tunnelToken).toBe("tunnel-token");
     const current = world;
     await until(
