@@ -4,11 +4,11 @@
  *   node apps/mobile/scripts/app-version.mjs write   # cap sync 之前（pnpm --filter @armadra/mobile sync 已带）
  *   node apps/mobile/scripts/app-version.mjs print   # → 1.0.0 (3185)
  *
- * App 有自己的版本线，与桌面 / 服务器壳无关（docs/guides/ci-release.md「移动端版本」）：
+ * App 与桌面 / 服务器同一条版本线（docs/guides/ci-release.md「版本规则」）：
  *
- * - 版本名只来自 `apps/mobile/package.json` 的 `version`，必须是纯 `X.Y.Z`——商店的
- *   `CFBundleShortVersionString` 不收预发布后缀。改它用
- *   `node tools/release/version.mjs mobile set X.Y.Z`。
+ * - 版本名来自 `apps/mobile/package.json` 的 `version`（与根版本一致，由
+ *   `node tools/release/version.mjs set X.Y.Z` 统一改）。商店的
+ *   `CFBundleShortVersionString` 不收预发布后缀，所以预发布版本只取 `X.Y.Z` 核心。
  * - 构建号单调递增：`ARMADRA_BUILD_NUMBER`（CI 显式给）优先，否则是当前提交的
  *   `git rev-list --count HEAD`——同一提交本地与 CI 算出同一个数，主干往前走只增不减。
  *   浅克隆数不出真实提交数，宁可报错也不写一个偏小的号。
@@ -34,16 +34,15 @@ export const ANDROID_VERSION_FILE = "android/app/version.properties";
 /** Android `versionCode` 的上限（Play 管理中心收的最大值）。 */
 export const MAX_BUILD_NUMBER = 2_100_000_000;
 
-const PLAIN_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+const PLAIN_VERSION =
+  /^((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))(?:-[0-9A-Za-z.-]+)?$/;
 
-/** 校验并返回 App 的版本名；不是纯 `X.Y.Z` 就抛。 */
+/** 校验并返回 App 的商店版本名：`X.Y.Z`，预发布后缀去掉；不是 semver 就抛。 */
 export function parseMobileVersion(value) {
   const text = String(value ?? "").trim();
-  if (!PLAIN_VERSION.test(text))
-    throw new Error(
-      `移动端版本 ${value} 不是纯 X.Y.Z（商店的版本名不收预发布后缀）`,
-    );
-  return text;
+  const match = PLAIN_VERSION.exec(text);
+  if (!match) throw new Error(`移动端版本 ${value} 不是 X.Y.Z[-预发布]`);
+  return match[1];
 }
 
 /** `apps/mobile/package.json` 里的版本。 */
@@ -101,7 +100,7 @@ export function nativeVersionFiles({ version, build }) {
   const name = parseMobileVersion(version);
   const code = checkedBuildNumber(String(build), "构建号");
   const header =
-    "由 apps/mobile/scripts/app-version.mjs 生成，不入库；改版本用 node tools/release/version.mjs mobile set X.Y.Z";
+    "由 apps/mobile/scripts/app-version.mjs 生成，不入库；改版本用 node tools/release/version.mjs set X.Y.Z";
   return {
     [IOS_VERSION_FILE]: `// ${header}\nMARKETING_VERSION = ${name}\nCURRENT_PROJECT_VERSION = ${code}\n`,
     [ANDROID_VERSION_FILE]: `# ${header}\nversionName=${name}\nversionCode=${code}\n`,

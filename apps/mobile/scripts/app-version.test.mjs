@@ -55,19 +55,19 @@ const FULL_CLONE = {
 };
 
 describe("移动端版本名", () => {
-  it("只收纯 X.Y.Z", () => {
+  it("商店版本名取 X.Y.Z，预发布后缀去掉", () => {
     expect(parseMobileVersion("1.0.0")).toBe("1.0.0");
-    expect(() => parseMobileVersion("1.0.0-beta.1")).toThrow(/预发布/);
+    expect(parseMobileVersion("0.3.0-beta.1")).toBe("0.3.0");
     expect(() => parseMobileVersion("1.0")).toThrow();
     expect(() => parseMobileVersion("01.0.0")).toThrow();
   });
 
-  it("仓库里的版本是独立的一条线，不跟桌面套件", () => {
+  it("仓库里的版本与桌面套件同一条线", () => {
     const desktop = JSON.parse(
       readFileSync(join(mobileRoot, "../../package.json"), "utf8"),
     ).version;
     const mobile = mobileVersion();
-    expect(mobile).not.toBe(desktop);
+    expect(mobile).toBe(desktop);
   });
 });
 
@@ -162,11 +162,18 @@ describe("写给原生工程", () => {
     );
   });
 
-  it("预发布版本写不出去", () => {
+  it("预发布版本写成核心 X.Y.Z，构建号区分", () => {
     const root = shell("1.1.0-rc.1");
+    expect(
+      writeNativeVersion({ root, env: { ARMADRA_BUILD_NUMBER: "1" } }),
+    ).toEqual({ version: "1.1.0", build: 1 });
+  });
+
+  it("不是 semver 的版本写不出去", () => {
+    const root = shell("1.1");
     expect(() =>
       writeNativeVersion({ root, env: { ARMADRA_BUILD_NUMBER: "1" } }),
-    ).toThrow(/预发布/);
+    ).toThrow(/X\.Y\.Z/);
   });
 
   it("两份生成文件都不入库", () => {

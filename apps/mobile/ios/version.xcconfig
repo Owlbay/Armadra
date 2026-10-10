@@ -1,4 +1,4 @@
-// 移动端版本（docs/guides/ci-release.md「移动端版本」）。MARKETING_VERSION 与
+// 移动端版本（docs/guides/ci-release.md「版本规则」）。MARKETING_VERSION 与
 // CURRENT_PROJECT_VERSION 只在下面这份生成文件里，由 apps/mobile/scripts/app-version.mjs
 // 从 apps/mobile/package.json 与构建号写出（pnpm --filter @armadra/mobile sync 已带）。
 // 工程与各目标的构建设置里不写这两个键；外加的 -xcconfig 只管签名与包名，不冲突。

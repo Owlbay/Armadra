@@ -39,8 +39,7 @@ export function webAsset(version) {
 /**
  * 手机壳的产物（补全架构 §10，计划 G3-1）：夜间作业产出的 debug APK 与 iOS 模拟器
  * `.app`（zip）。都不签名、不进更新清单（App 没有自更新，商店分发要用户的证书），
- * 名字没有 `<os>-<arch>` 目标段，只给人装来试。`version` 是移动端自己的版本
- * （`apps/mobile/package.json`，`version.mjs mobile print`），不是桌面套件的。
+ * 名字没有 `<os>-<arch>` 目标段，只给人装来试。`version` 是三端统一版本（`version.mjs print`）。
  */
 export function mobileAssets(version) {
   return [
