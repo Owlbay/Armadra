@@ -1,12 +1,12 @@
 # 更新记录
 
-每个版本一节，按发布倒序。括号里是合入的 PR 编号（github.com/Owlbay/Armadra）。兼容范围以 `tools/release/compatibility.json` 为准，发布说明里的 `armadra-compatibility` 围栏由它渲染。这里只记桌面 / 服务器套件；手机 / 平板 App 有自己的版本线，记在 `apps/mobile/CHANGELOG.md`（标签 `mobile-vX.Y.Z`）。
+每个版本一节，按发布倒序。括号里是合入的 PR 编号（github.com/Owlbay/Armadra）。兼容范围以 `tools/release/compatibility.json` 为准，发布说明里的 `armadra-compatibility` 围栏由它渲染。桌面、服务器与手机 / 平板 App 共用一条版本线和一个标签 `vX.Y.Z`（规则见 `docs/guides/ci-release.md`「版本规则」）；有手机端改动的版本，在「手机与平板」小节里写，其余写在「桌面 / 服务器」下。2026-10-10 之前手机端曾单独编号（1.0.0、1.1.0），内容并入对应的 0.2.5、0.2.6。
 
 ## 0.2.6（2026-10-10）
 
-多端切换、多中转与附件。手机端版本见 `apps/mobile/CHANGELOG.md`。中转仍用 armadra-cloud 0.2.1。
+多端切换、多中转与附件。中转仍用 armadra-cloud 0.2.1。
 
-### 改进与修复
+### 桌面 / 服务器
 
 - 服务选择页：手机与 iPad 启动先选服务；三端设置与命令面板可「切换服务」，桌面可在新窗口打开另一服务（#240，#229）。
 - 一个主机多条到达方式：经多个中转挂同一主机时凭据互不覆盖、切换不再新增设备（迁移 0044，契约 §55，#237）。
@@ -15,9 +15,15 @@
 - Claude Code ≥ 2.1.293 额外挂 armadra-mod：进程内上报状态、状态栏显示节点；低版本与安全模式自动降级（契约 §57，#238，#230）。
 - 协议 minor 29；中继心跳用例稳定（#243）。
 
+### 手机与平板
+
+- 启动先进入「选择服务」，设置里可切换服务。
+- 同一主机经多个中转的到达方式分开保存，连接表升级 v2。
+- ACP 会话可附图片与文件。
+
 ## 0.2.5（2026-10-10）
 
-性能、终端与 CLI 兼容。手机端起改为独立版本线（1.0.0，见 `apps/mobile/CHANGELOG.md`）。中转仍用 armadra-cloud 0.2.1。
+性能、终端与 CLI 兼容。中转仍用 armadra-cloud 0.2.1。
 
 ### 性能
 
@@ -35,9 +41,9 @@
 
 - Codex 启动不再出现 hook 信任与内嵌模式两条警告，不写用户配置（#214）。
 
-### 手机端
+### 手机与平板
 
-- 版本号独立并修正 iOS 版本一直显示 0.2.0；关于页显示 App 与主机版本、协议兼容提示（#225）。
+- 版本号由 App 的版本与构建号生成（iOS `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION`，Android `versionName` / `versionCode`），修正 iPad 上一直显示 0.2.0；设置 → 关于显示 App 与主机版本、协议兼容提示（#225）。
 
 ### 工程
 
