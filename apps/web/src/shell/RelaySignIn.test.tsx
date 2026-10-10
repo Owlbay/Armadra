@@ -90,6 +90,7 @@ describe("人机验证（契约 §62）", () => {
     await waitFor(() => expect(turnstile.render).toHaveBeenCalled());
     expect(turnstile.render.mock.calls[0]![1]).toMatchObject({
       sitekey: "0xSITE",
+      action: "armadra-login",
     });
     expect(target.signIn).toHaveBeenCalledTimes(1);
     turnstile.deliver("tk-1");
