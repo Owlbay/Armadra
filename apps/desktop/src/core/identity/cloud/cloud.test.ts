@@ -7,6 +7,8 @@ import { type Fixture, fixture } from "../../workspaces/fixture";
 import { AccountsService } from "../accounts";
 import { type AuditEvent, installAuditSink, resetAuditSink } from "../audit";
 import { Authorizer } from "../authorize";
+import { disableLinkGuests } from "../grant-sync";
+import { roleScopes, sessionViewerScopes } from "../roles";
 import { allScopes, scope } from "../scopes";
 import { IdentityService } from "../service";
 import { IdentityStore } from "../store";
@@ -190,7 +192,7 @@ describe("登记", () => {
       kind: "desktop",
       coreVersion: "0.0.0-test",
       capabilities: ["identity.native-session.v1"],
-      protocol: { major: 1, minor: 0 },
+      protocol: { major: 1, minor: 1 },
       publicKey: { kty: "OKP", crv: "Ed25519", kid: store.hostId() },
     });
     expect(cloud.registered(ISSUER)).toBe(true);
@@ -933,5 +935,252 @@ describe("装配", () => {
     expect(world.requests).toEqual([]);
     expect(backend.sets).toBe(0);
     expect(scope("settings:write").Permission).toBe("settings:write");
+  });
+});
+
+describe("cloud/login 的范围、角色同步与租约（契约 §60）", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const ownerSubject = () => ({
+    principalId: owner.principalId,
+    kind: "owner" as const,
+    scopes: allScopes(),
+  });
+  const login = async (
+    subject: string,
+    extra: Record<string, unknown>,
+    invitationToken?: string,
+  ) =>
+    call("POST", "/api/identity/cloud/login", {
+      assertion: signAssertion({
+        aud: store.hostId(),
+        nowMs: Date.now(),
+        sub: subject,
+        extra,
+      }),
+      ...(invitationToken === undefined ? {} : { invitationToken }),
+    });
+  const principalOf = (answer: Answer) =>
+    (answer.body.principal as { principalId: string }).principalId;
+  const grantsOf = (principalId: string, nowMs = Date.now()) =>
+    store
+      .transaction((tx) => tx.accounts.grantsFor(principalId, nowMs))
+      .map((grant) => [
+        grant.targetKind,
+        grant.workspaceId,
+        grant.targetId,
+        grant.role,
+        grant.origin,
+      ])
+      .sort();
+
+  beforeEach(async () => {
+    expect((await register()).status).toBe(200);
+  });
+
+  it("scp 空：邀请照旧兑换，授予记签发方并带租约，编译结果与旧版相同", async () => {
+    const invitation = accounts.issueInvitation(ownerSubject(), {
+      role: "editor",
+      targetWorkspaceId: "ws-1",
+    });
+    const answer = await login("acct:plain", {}, invitation.token);
+    expect(answer.status, answer.text).toBe(200);
+    const principalId = principalOf(answer);
+    expect(grantsOf(principalId)).toEqual([
+      ["workspace", "ws-1", "", "editor", cloudProvider(ISSUER)],
+    ]);
+    const [row] = store.transaction((tx) => tx.accounts.grantsFor(principalId));
+    expect(row!.expiresAtMs).toBeGreaterThan(Date.now() + 29 * DAY);
+    expect(accounts.effectiveGrantScopes(principalId)).toEqual(
+      roleScopes("editor", "ws-1"),
+    );
+  });
+
+  it("scp 带 ro：可写的邀请也只兑换成 viewer", async () => {
+    const invitation = accounts.issueInvitation(ownerSubject(), {
+      role: "editor",
+      targetWorkspaceId: "ws-1",
+      maxUses: 5,
+    });
+    const answer = await login(
+      "guest:lnk_ro:a",
+      { scp: ["ws:ws-1", "ro"] },
+      invitation.token,
+    );
+    expect(answer.status, answer.text).toBe(200);
+    expect(grantsOf(principalOf(answer))).toEqual([
+      ["workspace", "ws-1", "", "viewer", cloudProvider(ISSUER)],
+    ]);
+  });
+
+  it("scp 与邀请的终点对不上：invitation_invalid，不建人", async () => {
+    const invitation = accounts.issueInvitation(ownerSubject(), {
+      role: "viewer",
+      targetWorkspaceId: "ws-1",
+    });
+    const answer = await login(
+      "guest:lnk_x:a",
+      { scp: ["ws:ws-2"] },
+      invitation.token,
+    );
+    expect(answer.status).toBe(401);
+    expect(answer.body.code).toBe("invitation_invalid");
+    expect(
+      store.transaction((tx) =>
+        tx.accounts.liveOAuth(cloudProvider(ISSUER), "guest:lnk_x:a"),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("会话邀请：兑换成只读那一条会话的授予", async () => {
+    expect(() =>
+      accounts.issueInvitation(ownerSubject(), {
+        role: "editor",
+        targetWorkspaceId: "ws-1",
+        targetSessionId: "t1",
+      }),
+    ).toThrow();
+    const invitation = accounts.issueInvitation(ownerSubject(), {
+      role: "viewer",
+      targetWorkspaceId: "ws-1",
+      targetSessionId: "t1",
+    });
+    const answer = await login(
+      "guest:lnk_s:a",
+      { scp: ["ws:ws-1", "sess:t1", "ro"] },
+      invitation.token,
+    );
+    expect(answer.status, answer.text).toBe(200);
+    const principalId = principalOf(answer);
+    expect(grantsOf(principalId)).toEqual([
+      ["session", "ws-1", "t1", "viewer", cloudProvider(ISSUER)],
+    ]);
+    expect(accounts.effectiveGrantScopes(principalId)).toEqual(
+      sessionViewerScopes("ws-1", "t1"),
+    );
+  });
+
+  it("整台邀请：只有 owner 签得出，兑换成整台授予", async () => {
+    const invitation = accounts.issueInvitation(ownerSubject(), {
+      role: "operator",
+      targetHost: true,
+    });
+    const answer = await login("guest:lnk_h:a", {}, invitation.token);
+    expect(answer.status, answer.text).toBe(200);
+    expect(grantsOf(principalOf(answer))).toEqual([
+      ["host", "*", "", "operator", cloudProvider(ISSUER)],
+    ]);
+  });
+
+  it("SaaS：带 org + role 不要邀请就建成员，之后按声明整份同步，本地授予不动", async () => {
+    core.database
+      .prepare("UPDATE cloud_registrations SET mode = 'saas' WHERE issuer = ?")
+      .run(ISSUER);
+    const org = { orgId: "org_1", role: "member" };
+    const first = await login("acct:saas", { org, role: "editor" });
+    expect(first.status, first.text).toBe(200);
+    expect(first.body.created).toBe(true);
+    const principalId = principalOf(first);
+    expect(grantsOf(principalId)).toEqual([
+      ["host", "*", "", "editor", cloudProvider(ISSUER)],
+    ]);
+    accounts.putGrant(ownerSubject(), {
+      workspaceId: "ws-local",
+      subjectKind: "principal",
+      subjectId: principalId,
+      role: "driver",
+    });
+    const second = await login("acct:saas", {
+      org,
+      team: { teamId: "team_1", role: "member" },
+      role: "editor",
+      scp: ["ws:ws-1", "ro"],
+    });
+    expect(second.status, second.text).toBe(200);
+    expect(second.body.created).toBe(false);
+    expect(grantsOf(principalId)).toEqual([
+      ["workspace", "ws-1", "", "viewer", cloudProvider(ISSUER)],
+      ["workspace", "ws-local", "", "driver", ""],
+    ]);
+    const detail = JSON.parse(
+      (
+        core.database
+          .prepare(
+            "SELECT detail_json FROM audit_log WHERE action = 'cloud.login' ORDER BY id DESC LIMIT 1",
+          )
+          .get() as { detail_json: string }
+      ).detail_json,
+    ) as Record<string, unknown>;
+    expect(detail).toMatchObject({
+      org: "org_1",
+      team: "team_1",
+      role: "editor",
+      scp: ["ws:ws-1", "ro"],
+    });
+    expect(typeof detail.jti).toBe("string");
+  });
+
+  it("个人中转不带 role：没有邀请仍然 cloud_account_unlinked", async () => {
+    const answer = await login("acct:nobody", {
+      org: { orgId: "org_1", role: "member" },
+      role: "editor",
+    });
+    expect(answer.status).toBe(401);
+    expect(answer.body.code).toBe("cloud_account_unlinked");
+  });
+
+  it("租约：到期后授予不再编译；再登录一次续上", async () => {
+    const invitation = accounts.issueInvitation(ownerSubject(), {
+      role: "viewer",
+      targetWorkspaceId: "ws-1",
+    });
+    const answer = await login("acct:lease", {}, invitation.token);
+    const principalId = principalOf(answer);
+    const later = Date.now() + 31 * DAY;
+    expect(grantsOf(principalId, later)).toEqual([]);
+    store.transaction((tx) =>
+      tx.accounts.renewGrants(principalId, cloudProvider(ISSUER), Date.now()),
+    );
+    expect(grantsOf(principalId)).toEqual([]);
+    expect((await login("acct:lease", {})).status).toBe(200);
+    expect(grantsOf(principalId)).toHaveLength(1);
+    expect(grantsOf(principalId, Date.now() + 29 * DAY)).toHaveLength(1);
+  });
+
+  it("撤链接连同访客：经这条链接进来的人停用，之后登录 403", async () => {
+    const invitation = accounts.issueInvitation(ownerSubject(), {
+      role: "viewer",
+      targetWorkspaceId: "ws-1",
+      maxUses: 5,
+    });
+    const link = { linkId: "lnk_rv", invitationId: invitation.invitationId };
+    for (const guest of ["guest:lnk_rv:a", "guest:lnk_rv:b"]) {
+      const joined = await login(guest, { link }, invitation.token);
+      expect(joined.status, joined.text).toBe(200);
+    }
+    const other = await login(
+      "guest:lnk_keep:a",
+      {},
+      accounts.issueInvitation(ownerSubject(), {
+        role: "viewer",
+        targetWorkspaceId: "ws-1",
+      }).token,
+    );
+    expect(other.status).toBe(200);
+    expect(
+      disableLinkGuests(store, Date.now(), ownerSubject(), {
+        provider: cloudProvider(ISSUER),
+        linkId: "lnk_rv",
+      }),
+    ).toBe(2);
+    expect((await login("guest:lnk_rv:a", {})).status).toBe(403);
+    expect((await login("guest:lnk_keep:a", {})).status).toBe(200);
+    expect(() =>
+      disableLinkGuests(
+        store,
+        Date.now(),
+        { principalId: principalOf(other), kind: "member", scopes: [] },
+        { provider: cloudProvider(ISSUER), linkId: "lnk_keep" },
+      ),
+    ).toThrow();
   });
 });

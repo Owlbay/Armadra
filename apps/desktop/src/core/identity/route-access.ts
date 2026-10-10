@@ -32,6 +32,11 @@ import { type Scope, scope } from "./scopes";
  *     （设计 S4）。
  *
  * 没有请求身份（桌面壳、core 自己的动作）时整道门放行：那里只有本机 owner。
+ *
+ * **资源维度**（契约 §60）：只有终端与 ACP 会话的读路径带上会话 id 去问
+ * （`terminal:read@ws#session`），所以「只看这一条会话」的授权只在这两处成立；
+ * 其余一切判定照旧不带资源，受限授权在那里永远不满足——画布、文件、别的会话、
+ * 一切写入对会话查看者都是 403。
  */
 
 /**
@@ -161,6 +166,20 @@ export function createRouteGuard(options: RouteAccessOptions): RouteGuard {
     workspaceId: string,
   ): RouteVerdict => (allowed(subject, permission, workspaceId) ? ALLOW : DENY);
 
+  /** 读一条会话：工作空间上的 `terminal:read`，或只限这一条会话的那份。 */
+  const readsSession = (
+    subject: AuthorizationSubject,
+    workspaceId: string,
+    sessionId: string,
+  ): RouteVerdict =>
+    workspaceId !== "" &&
+    sessionId !== "" &&
+    options.permits(subject, [
+      scope("terminal:read", workspaceId, "", sessionId),
+    ])
+      ? ALLOW
+      : DENY;
+
   /** 至少在一块画布上有这条权限。 */
   const grantedSomewhere = (
     subject: AuthorizationSubject,
@@ -169,8 +188,10 @@ export function createRouteGuard(options: RouteAccessOptions): RouteGuard {
     (options.effectiveScopes?.(subject) ?? []).some(
       (value) => value.Permission === permission,
     );
+  // 会话查看者（契约 §60）没有画布，但看一条终端也要终端后端与模型目录这些无害读。
   const sharedSomewhere = (subject: AuthorizationSubject): boolean =>
-    grantedSomewhere(subject, "canvas:read");
+    grantedSomewhere(subject, "canvas:read") ||
+    grantedSomewhere(subject, "terminal:read");
 
   /**
    * 「自己的」那一档（契约 §23）：往自己起的终端里写、答自己终端上的审批、
@@ -372,7 +393,7 @@ export function createRouteGuard(options: RouteAccessOptions): RouteGuard {
       const sessionId = decodeURIComponent(acpSession[1] as string);
       const workspaceId = lookups.sessionWorkspace(sessionId);
       if (workspaceId === "") return DENY;
-      if (reading) return onWorkspace(subject, "terminal:read", workspaceId);
+      if (reading) return readsSession(subject, workspaceId, sessionId);
       return ownOrOthers(
         subject,
         lookups.sessionCreator(sessionId),
@@ -417,7 +438,7 @@ export function createRouteGuard(options: RouteAccessOptions): RouteGuard {
       if (requirement.permission === "credential:use") return DENY;
       // 附着到终端的 socket 能写：`…/ws` 虽是 GET，按写入判。
       if (requirement.permission === "terminal:read" && !path.endsWith("/ws")) {
-        return onWorkspace(subject, "terminal:read", workspaceId);
+        return readsSession(subject, workspaceId, sessionId);
       }
       // 设计 S5：往自己开的终端里写只要 `terminal:create`，往别人的要
       // `terminal:drive`。「自己的」按会话行上记的创建者判，重启之后照旧。

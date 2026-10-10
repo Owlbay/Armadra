@@ -125,12 +125,24 @@ export const shareLinkStateSchema = z.enum([
   "revoked",
 ]);
 
+/**
+ * 分享范围（契约 §60）：整台主机、一个工作空间、或那个工作空间里的一个会话
+ * （只读）。缺省 = 工作空间（§33.9 的旧行为）。
+ */
+export const shareTargetSchema = z.enum(["host", "workspace", "session"]);
+
 export const shareLinkSchema = z.object({
   linkId: z.string(),
   label: z.string(),
   role: z.string(),
-  /** 链接背后那张邀请指向的工作空间；本机没有记录时为空串。 */
+  /** 链接背后那张邀请指向的工作空间；本机没有记录、或分享整台时为空串。 */
   workspaceId: z.string(),
+  /** §60：分享范围；本机没有记录时不出现（当作工作空间）。 */
+  target: shareTargetSchema.optional(),
+  /** §60：`target = session` 时的会话 id。 */
+  sessionId: z.string().optional(),
+  /** §60：只读（会话分享总是只读）。 */
+  readOnly: z.boolean().optional(),
   createdAtMs: z.number().int(),
   expiresAtMs: z.number().int(),
   uses: z.number().int(),
@@ -155,7 +167,14 @@ export const shareLinkUpdateInputSchema = shareLinkRefSchema.extend({
 
 export const shareLinkCreateInputSchema = z.object({
   serviceId: z.string(),
-  workspaceId: z.string().min(1).max(256),
+  /** `target = host` 时为空串；其余必填（§60，core 答 `bad_request`）。 */
+  workspaceId: z.string().max(256),
+  /** §60：缺省 `workspace`。 */
+  target: shareTargetSchema.optional(),
+  /** §60：`target = session` 时必填。 */
+  sessionId: z.string().min(1).max(256).optional(),
+  /** §60：只读；`viewer` 之外的角色压成 `viewer`。会话分享总是只读。 */
+  readOnly: z.boolean().optional(),
   role: z.string(),
   ttlMs: z.number().int().positive(),
   maxUses: z.number().int().min(1).max(SHARE_LINK_MAX_USES),
@@ -518,6 +537,7 @@ export type SourceSession = z.infer<typeof sourceSessionSchema>;
 export type RemoteAddInput = z.infer<typeof remoteAddInputSchema>;
 export type MountByLinkInput = z.infer<typeof mountByLinkInputSchema>;
 export type ShareLink = z.infer<typeof shareLinkSchema>;
+export type ShareTarget = z.infer<typeof shareTargetSchema>;
 export type ShareLinkState = z.infer<typeof shareLinkStateSchema>;
 export type ShareLinkCreateInput = z.infer<typeof shareLinkCreateInputSchema>;
 export type ShareLinkUpdateInput = z.infer<typeof shareLinkUpdateInputSchema>;

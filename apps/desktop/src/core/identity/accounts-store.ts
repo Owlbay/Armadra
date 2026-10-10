@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { IdentityError } from "./errors";
-import type { ShareRole } from "./roles";
+import type { GrantTargetKind, ShareRole } from "./roles";
 
 /**
  * 账号、凭据、邀请、组、授予与审计的持久化（迁移 `0019_accounts.sql`）。
@@ -57,6 +57,10 @@ export interface InvitationRow {
   /** 空 = 一次性（旧行为）；有值 = 最多这么多个不同的人可以兑换。 */
   readonly maxUses: number | null;
   readonly uses: number;
+  /** 指向一个会话（迁移 0045）：须同时有 `targetWorkspaceId`；兑换出一条只读的会话授予。 */
+  readonly targetSessionId: string;
+  /** 指向整台主机（迁移 0045）：兑换出一条 `target_kind = 'host'` 的授予。 */
+  readonly targetHost: boolean;
 }
 
 export interface GroupRow {
@@ -82,7 +86,21 @@ export interface GrantRow {
   readonly grantedBy: string;
   readonly createdAtMs: number;
   readonly revokedAtMs: number;
+  /** '' = 本地给的；`cloud:<issuer 摘要>` = 按断言同步的（迁移 0045）。 */
+  readonly origin: string;
+  /** 租约到期时刻；0 = 不过期。 */
+  readonly expiresAtMs: number;
+  readonly targetKind: GrantTargetKind;
+  /** 会话授予的会话 id；其余为空串。 */
+  readonly targetId: string;
 }
+
+/** 写一条授予：迁移 0045 的四列不给就是旧行为的缺省（本地、不过期、工作空间）。 */
+export type GrantInput = Omit<
+  GrantRow,
+  "origin" | "expiresAtMs" | "targetKind" | "targetId"
+> &
+  Partial<Pick<GrantRow, "origin" | "expiresAtMs" | "targetKind" | "targetId">>;
 
 /** 审计查询的筛选（契约 §18.6），彼此 AND；`actions` 之间 OR。 */
 export interface AuditFilter {
@@ -209,6 +227,23 @@ export class AccountsTx {
     return row === undefined ? undefined : toCredential(row);
   }
 
+  /**
+   * 某个第三方身份前缀下的全部 principal（有效的映射凭据）。撤一条分享链接时用它找出
+   * 经这条链接进来的访客：`subject = guest:<linkId>:<随机>`（契约 §60）。
+   */
+  oauthPrincipalsWithSubjectPrefix(provider: string, prefix: string): string[] {
+    const rows = this.database
+      .prepare(
+        "SELECT DISTINCT principal_id FROM identity_credentials WHERE kind = 'oauth' AND provider = ? " +
+          "AND revoked_at_ms = 0 AND subject LIKE ? ESCAPE '\\' ORDER BY principal_id",
+      )
+      .all(provider, `${prefix.replace(/[\\%_]/g, "\\$&")}%`) as Record<
+      string,
+      unknown
+    >[];
+    return rows.map((row) => String(row.principal_id));
+  }
+
   createCredential(row: CredentialRow): void {
     this.database
       .prepare(
@@ -290,12 +325,15 @@ export class AccountsTx {
     return rows.map(toInvitation);
   }
 
-  createInvitation(row: InvitationRow): void {
+  createInvitation(
+    row: Omit<InvitationRow, "targetSessionId" | "targetHost"> &
+      Partial<Pick<InvitationRow, "targetSessionId" | "targetHost">>,
+  ): void {
     this.database
       .prepare(
         "INSERT INTO identity_invitations(invitation_id, issued_by, target_group_id, target_workspace_id, " +
-          "role, token_hash, created_at_ms, expires_at_ms, consumed_by, consumed_at_ms, max_uses) " +
-          "VALUES(?, ?, ?, ?, ?, ?, ?, ?, '', 0, ?)",
+          "role, token_hash, created_at_ms, expires_at_ms, consumed_by, consumed_at_ms, max_uses, " +
+          "target_session_id, target_host) VALUES(?, ?, ?, ?, ?, ?, ?, ?, '', 0, ?, ?, ?)",
       )
       .run(
         row.invitationId,
@@ -307,6 +345,8 @@ export class AccountsTx {
         row.createdAtMs,
         row.expiresAtMs,
         row.maxUses,
+        row.targetSessionId ?? "",
+        row.targetHost === true ? 1 : 0,
       );
   }
 
@@ -490,7 +530,8 @@ export class AccountsTx {
   workspaceGrants(workspaceId: string): GrantRow[] {
     const rows = this.database
       .prepare(
-        `SELECT ${GRANT_COLUMNS} WHERE workspace_id = ? AND revoked_at_ms = 0 ORDER BY created_at_ms, grant_id`,
+        `SELECT ${GRANT_COLUMNS} WHERE workspace_id = ? AND target_kind = 'workspace' AND revoked_at_ms = 0 ` +
+          "ORDER BY created_at_ms, grant_id",
       )
       .all(workspaceId) as Record<string, unknown>[];
     return rows.map(toGrant);
@@ -500,12 +541,15 @@ export class AccountsTx {
     subjectKind: GrantSubjectKind,
     subjectId: string,
     workspaceId: string,
+    targetKind: GrantTargetKind = "workspace",
+    targetId = "",
   ): GrantRow | undefined {
     const row = this.database
       .prepare(
-        `SELECT ${GRANT_COLUMNS} WHERE subject_kind = ? AND subject_id = ? AND workspace_id = ? AND revoked_at_ms = 0`,
+        `SELECT ${GRANT_COLUMNS} WHERE subject_kind = ? AND subject_id = ? AND workspace_id = ? ` +
+          "AND target_kind = ? AND target_id = ? AND revoked_at_ms = 0",
       )
-      .get(subjectKind, subjectId, workspaceId) as
+      .get(subjectKind, subjectId, workspaceId, targetKind, targetId) as
       | Record<string, unknown>
       | undefined;
     return row === undefined ? undefined : toGrant(row);
@@ -517,15 +561,16 @@ export class AccountsTx {
    * 这是授权编译的输入。组与个人的授予是并集而不是覆盖：两者给的是 scope，
    * 而 scope 只有「有」和「没有」，没有优先级。
    */
-  grantsFor(principalId: string): GrantRow[] {
+  grantsFor(principalId: string, nowMs = Date.now()): GrantRow[] {
     const groups = this.groupsOf(principalId);
+    // 租约到期（迁移 0045 的 `expires_at_ms`）的授予和撤销了的一样不算。
     const rows = this.database
       .prepare(
-        `SELECT ${GRANT_COLUMNS} WHERE revoked_at_ms = 0 AND ` +
+        `SELECT ${GRANT_COLUMNS} WHERE revoked_at_ms = 0 AND (expires_at_ms = 0 OR expires_at_ms > ?) AND ` +
           "((subject_kind = 'principal' AND subject_id = ?) OR subject_kind = 'group') " +
           "ORDER BY workspace_id, grant_id",
       )
-      .all(principalId) as Record<string, unknown>[];
+      .all(nowMs, principalId) as Record<string, unknown>[];
     return rows
       .map(toGrant)
       .filter(
@@ -534,11 +579,12 @@ export class AccountsTx {
       );
   }
 
-  createGrant(row: GrantRow): void {
+  createGrant(row: GrantInput): void {
     this.database
       .prepare(
         "INSERT INTO identity_grants(grant_id, subject_kind, subject_id, workspace_id, role, granted_by, " +
-          "created_at_ms, revoked_at_ms) VALUES(?, ?, ?, ?, ?, ?, ?, 0)",
+          "created_at_ms, revoked_at_ms, origin, expires_at_ms, target_kind, target_id) " +
+          "VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)",
       )
       .run(
         row.grantId,
@@ -548,7 +594,41 @@ export class AccountsTx {
         row.role,
         row.grantedBy,
         row.createdAtMs,
+        row.origin ?? "",
+        row.expiresAtMs ?? 0,
+        row.targetKind ?? "workspace",
+        row.targetId ?? "",
       );
+  }
+
+  /** 这个主体经某个来源拿到的全部有效授予（含租约过期的，同步时要一并撤掉）。 */
+  originGrants(principalId: string, origin: string): GrantRow[] {
+    const rows = this.database
+      .prepare(
+        `SELECT ${GRANT_COLUMNS} WHERE subject_kind = 'principal' AND subject_id = ? AND origin = ? ` +
+          "AND revoked_at_ms = 0 ORDER BY grant_id",
+      )
+      .all(principalId, origin) as Record<string, unknown>[];
+    return rows.map(toGrant);
+  }
+
+  /** 一条授予的租约改到 `expiresAtMs`。 */
+  renewGrant(grantId: string, expiresAtMs: number): void {
+    this.database
+      .prepare(
+        "UPDATE identity_grants SET expires_at_ms = ? WHERE grant_id = ? AND revoked_at_ms = 0",
+      )
+      .run(expiresAtMs, grantId);
+  }
+
+  /** 续租：这个主体经这个来源的有效授予一律延到 `expiresAtMs`。 */
+  renewGrants(principalId: string, origin: string, expiresAtMs: number): void {
+    this.database
+      .prepare(
+        "UPDATE identity_grants SET expires_at_ms = ? WHERE subject_kind = 'principal' AND subject_id = ? " +
+          "AND origin = ? AND revoked_at_ms = 0",
+      )
+      .run(expiresAtMs, principalId, origin);
   }
 
   revokeGrant(grantId: string, nowMs: number): void {
@@ -632,10 +712,11 @@ const CREDENTIAL_COLUMNS =
   "kdf_parallel, kdf_length, created_at_ms, revoked_at_ms FROM identity_credentials";
 const INVITATION_COLUMNS =
   "invitation_id, issued_by, target_group_id, target_workspace_id, role, token_hash, created_at_ms, " +
-  "expires_at_ms, consumed_by, consumed_at_ms, max_uses, uses FROM identity_invitations";
+  "expires_at_ms, consumed_by, consumed_at_ms, max_uses, uses, target_session_id, target_host " +
+  "FROM identity_invitations";
 const GRANT_COLUMNS =
-  "grant_id, subject_kind, subject_id, workspace_id, role, granted_by, created_at_ms, revoked_at_ms " +
-  "FROM identity_grants";
+  "grant_id, subject_kind, subject_id, workspace_id, role, granted_by, created_at_ms, revoked_at_ms, " +
+  "origin, expires_at_ms, target_kind, target_id FROM identity_grants";
 
 function toPrincipal(row: Record<string, unknown>): PrincipalRow {
   return {
@@ -680,6 +761,8 @@ function toInvitation(row: Record<string, unknown>): InvitationRow {
     consumedAtMs: Number(row.consumed_at_ms),
     maxUses: row.max_uses === null ? null : Number(row.max_uses),
     uses: Number(row.uses),
+    targetSessionId: String(row.target_session_id ?? ""),
+    targetHost: Number(row.target_host ?? 0) === 1,
   };
 }
 
@@ -711,6 +794,10 @@ function toGrant(row: Record<string, unknown>): GrantRow {
     grantedBy: String(row.granted_by),
     createdAtMs: Number(row.created_at_ms),
     revokedAtMs: Number(row.revoked_at_ms),
+    origin: String(row.origin),
+    expiresAtMs: Number(row.expires_at_ms),
+    targetKind: String(row.target_kind) as GrantTargetKind,
+    targetId: String(row.target_id),
   };
 }
 

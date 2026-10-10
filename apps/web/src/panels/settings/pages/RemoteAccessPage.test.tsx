@@ -54,6 +54,14 @@ vi.mock("../../../app/workspaces-query", () => ({
   useWorkspacesQuery: () => ({ data: [{ id: "w1", name: "Project" }] }),
 }));
 vi.mock("sonner", () => ({ toast: toasts }));
+vi.mock("../../../agent/sessions", async (original) => ({
+  ...(await original<typeof import("../../../agent/sessions")>()),
+  sessionsQuery: (workspaceId: string | null) => ({
+    queryKey: ["test-sessions", workspaceId],
+    queryFn: async () =>
+      workspaceId === "w1" ? [{ sessionId: "s-build", title: "build" }] : [],
+  }),
+}));
 /** 设置作用的 core 在不在眼前（缺省本机）。 */
 const access = vi.hoisted(() => ({
   remote: false,
@@ -320,7 +328,9 @@ describe("远程访问页", () => {
     await waitFor(() =>
       expect(api.createShareLink).toHaveBeenCalledWith({
         serviceId: "svc",
+        target: "workspace",
         workspaceId: "w1",
+        readOnly: false,
         role: "viewer",
         ttlMs: 7 * 24 * 60 * 60 * 1000,
         maxUses: 1000,
@@ -720,6 +730,86 @@ describe("分享收尾（P4）", () => {
     );
     expect(await screen.findByText("Online")).toBeTruthy();
     expect(api.shareStatus.mock.calls.length).toBe(reads + 1);
+  });
+
+  it("分享范围：整台可选只读，会话只读且不给角色；列表标出范围", async () => {
+    sharing();
+    api.shareStatus.mockResolvedValue(tunnel("ready"));
+    api.listShareLinks.mockResolvedValue([
+      {
+        ...link,
+        label: "build",
+        target: "session",
+        sessionId: "s-build",
+        readOnly: true,
+      },
+    ]);
+    api.createShareLink.mockResolvedValue({ link, url });
+    const choose = (form: HTMLElement, trigger: string, option: string) => {
+      fireEvent.pointerDown(
+        within(form).getByRole("combobox", { name: trigger }),
+        { button: 0, ctrlKey: false, pointerType: "mouse" },
+      );
+      fireEvent.click(screen.getByRole("option", { name: option }));
+    };
+    mount();
+    const row = await screen.findByText("build");
+    expect(
+      within(row.closest("[data-link-id]") as HTMLElement).getByText("Session"),
+    ).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "New link" }));
+    let form = await screen.findByRole("dialog");
+    choose(form, "Scope", "Whole host");
+    expect(within(form).queryByRole("combobox", { name: "Workspace" })).toBe(
+      null,
+    );
+    fireEvent.click(within(form).getByRole("switch", { name: "Read-only" }));
+    fireEvent.click(within(form).getByRole("button", { name: "Create" }));
+    await waitFor(() =>
+      expect(api.createShareLink).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          target: "host",
+          readOnly: true,
+          role: "viewer",
+          label: "Whole host",
+        }),
+      ),
+    );
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("img", { name: "Share link QR code" }),
+      ).toBeNull(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "New link" }));
+    form = await screen.findByRole("dialog");
+    choose(form, "Scope", "Session");
+    expect(within(form).queryByRole("combobox", { name: "Role" })).toBe(null);
+    expect(within(form).queryByRole("switch", { name: "Read-only" })).toBe(
+      null,
+    );
+    await waitFor(() =>
+      expect(
+        within(form)
+          .getByRole("combobox", { name: "Session" })
+          .textContent?.includes("build"),
+      ).toBe(true),
+    );
+    fireEvent.click(within(form).getByRole("button", { name: "Create" }));
+    await waitFor(() =>
+      expect(api.createShareLink).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          target: "session",
+          workspaceId: "w1",
+          sessionId: "s-build",
+          readOnly: true,
+          role: "viewer",
+        }),
+      ),
+    );
   });
 
   it("刚建好的链接：设置框重新挂载（窄屏 / 宽屏切换）后二维码与整条链接还在", async () => {

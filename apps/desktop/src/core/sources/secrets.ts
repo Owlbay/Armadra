@@ -41,16 +41,24 @@ export interface SavedShareLink {
   readonly url: string;
   readonly invitationId: string;
   readonly workspaceId: string;
+  /** 分享范围（契约 §60）；旧条目没有 = 工作空间。 */
+  readonly target?: "host" | "workspace" | "session";
+  readonly sessionId?: string;
+  readonly readOnly?: boolean;
 }
 
 function savedLinkOf(value: unknown): SavedShareLink | undefined {
   if (typeof value !== "object" || value === null) return undefined;
-  const { url, invitationId, workspaceId } = value as Record<string, unknown>;
+  const { url, invitationId, workspaceId, target, sessionId, readOnly } =
+    value as Record<string, unknown>;
   if (typeof url !== "string" || url === "") return undefined;
   return {
     url,
     invitationId: typeof invitationId === "string" ? invitationId : "",
     workspaceId: typeof workspaceId === "string" ? workspaceId : "",
+    ...(target === "host" || target === "session" ? { target } : {}),
+    ...(typeof sessionId === "string" && sessionId !== "" ? { sessionId } : {}),
+    ...(readOnly === true ? { readOnly: true } : {}),
   };
 }
 

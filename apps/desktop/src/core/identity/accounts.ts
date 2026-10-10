@@ -18,8 +18,18 @@ import {
   resetRefusal,
   resetTokenHash,
 } from "./password-reset";
-import { type ShareRole, parseShareRole, rolePermissions } from "./roles";
-import { type Scope, scope } from "./scopes";
+import {
+  type GrantProvenance,
+  invitationWithin,
+  putGrantRow,
+} from "./grant-sync";
+import {
+  HOST_WORKSPACE,
+  type ShareRole,
+  parseShareRole,
+  rolePermissions,
+} from "./roles";
+import { type Scope, permits, scope } from "./scopes";
 import type { IdentityStore, IdentityTx, PasswordResetRow } from "./store";
 import {
   ID_PATTERN,
@@ -500,6 +510,10 @@ export class AccountsService {
       role: unknown;
       targetGroupId?: string;
       targetWorkspaceId?: string;
+      /** 只看这一个会话（契约 §60）：须同时给它的工作空间，角色只能是 viewer。 */
+      targetSessionId?: string;
+      /** 整台主机（契约 §60）：不能再给工作空间或会话。 */
+      targetHost?: boolean;
       ttlMs?: number;
       maxUses?: number;
     },
@@ -508,10 +522,17 @@ export class AccountsService {
     const role = parseShareRole(input.role);
     const targetGroupId = input.targetGroupId ?? "";
     const targetWorkspaceId = input.targetWorkspaceId ?? "";
+    const targetSessionId = input.targetSessionId ?? "";
+    const targetHost = input.targetHost === true;
     if (
       (targetGroupId !== "" && !ID_PATTERN.test(targetGroupId)) ||
       (targetWorkspaceId !== "" && !validIdentifier(targetWorkspaceId)) ||
-      (targetGroupId === "" && targetWorkspaceId === "")
+      (targetSessionId !== "" && !validIdentifier(targetSessionId)) ||
+      (targetGroupId === "" && targetWorkspaceId === "" && !targetHost) ||
+      // 会话总在某个工作空间里，而且会话分享只有只读（向别人的终端写入要 driver）。
+      (targetSessionId !== "" &&
+        (targetWorkspaceId === "" || role !== "viewer")) ||
+      (targetHost && targetWorkspaceId !== "")
     ) {
       // 一张既不指向组也不指向工作空间的邀请接受了什么也不会发生。
       throw new IdentityError("invalid");
@@ -524,6 +545,7 @@ export class AccountsService {
         actor,
         targetGroupId,
         targetWorkspaceId,
+        targetHost,
       );
       const now = this.now();
       if (
@@ -533,9 +555,17 @@ export class AccountsService {
         throw new IdentityError("notFound");
       }
       const expiresAtMs = now + invitationTtl(input.ttlMs);
+      // 没有请求身份时的本机 owner（桌面壳、core 自己的动作）主体 id 是空串：签发人
+      // 记成库里那一个 owner（`issued_by` 是外键）。
+      const issuedBy =
+        actor.principalId !== ""
+          ? actor.principalId
+          : actor.kind === "owner"
+            ? (tx.accounts.owner()?.principalId ?? "")
+            : "";
       tx.accounts.createInvitation({
         invitationId,
-        issuedBy: actor.principalId,
+        issuedBy,
         targetGroupId,
         targetWorkspaceId,
         role,
@@ -546,12 +576,19 @@ export class AccountsService {
         consumedAtMs: 0,
         maxUses,
         uses: 0,
+        targetSessionId,
+        targetHost,
       });
       this.note(tx.accounts, actor, now, {
         action: "identity.invitation.issue",
         target: invitationId,
         workspaceId: targetWorkspaceId,
-        detail: maxUses === null ? { role } : { role, maxUses },
+        detail: {
+          role,
+          ...(maxUses === null ? {} : { maxUses }),
+          ...(targetSessionId === "" ? {} : { sessionId: targetSessionId }),
+          ...(targetHost ? { host: true } : {}),
+        },
       });
       return {
         invitationId,
@@ -638,6 +675,7 @@ export class AccountsService {
         actor,
         row.targetGroupId,
         row.targetWorkspaceId,
+        row.targetHost,
       );
       try {
         this.redeemable(tx.accounts, input, this.now());
@@ -756,6 +794,13 @@ export class AccountsService {
     subject: string;
     createdVia: string;
     defaultRole?: { role: ShareRole; workspaceIds: readonly string[] };
+    /** 经云登录：兑换出的授予记来源与租约（契约 §60）。 */
+    provenance?: GrantProvenance;
+    /**
+     * 断言 `scp` 声明的范围（契约 §60）：给了就必须盖住这张邀请的终点——签发方说
+     * 「只给工作空间 A」而邀请指向 B 或整台，是两边对不上，一律不兑换。
+     */
+    scope?: { workspaceIds: readonly string[]; sessionIds: readonly string[] };
   }): {
     principalId: string;
     role: ShareRole;
@@ -772,6 +817,9 @@ export class AccountsService {
     const registered = this.options.store.transaction((tx) => {
       const now = this.now();
       const row = this.redeemable(tx.accounts, input, now);
+      if (!invitationWithin(row, input.scope)) {
+        throw new IdentityError("unauthenticated");
+      }
       if (tx.accounts.liveOAuth(input.provider, input.subject) !== undefined) {
         throw new IdentityError("conflict");
       }
@@ -812,10 +860,16 @@ export class AccountsService {
           createdVia: input.createdVia,
         },
       });
-      const redeemed = this.redeem(tx.accounts, actor, row, now);
+      const redeemed = this.redeem(
+        tx.accounts,
+        actor,
+        row,
+        now,
+        input.provenance,
+      );
       if (input.defaultRole !== undefined) {
         for (const workspaceId of input.defaultRole.workspaceIds) {
-          this.put(tx.accounts, {
+          putGrantRow(tx.accounts, {
             subjectKind: "principal",
             subjectId: principalId,
             workspaceId,
@@ -842,6 +896,7 @@ export class AccountsService {
         actor,
         row.targetGroupId,
         row.targetWorkspaceId,
+        row.targetHost,
       );
       if (row.consumedAtMs !== 0) return;
       const now = this.now();
@@ -901,6 +956,7 @@ export class AccountsService {
     actor: AuthorizationSubject,
     row: InvitationRow,
     now: number,
+    provenance?: GrantProvenance,
   ): { role: ShareRole; groupId: string; workspaceId: string } {
     if (row.targetGroupId !== "") {
       accounts.putGroupMember({
@@ -910,14 +966,45 @@ export class AccountsService {
         joinedAtMs: now,
       });
     }
-    if (row.targetWorkspaceId !== "") {
-      this.put(accounts, {
+    // 契约 §60：邀请指向整台 / 工作空间 / 会话，兑换出对应目标的一条授予。经云登录
+    // 兑换的记下来源与租约；断言带 `ro` 的压到 viewer（会话授予本来就只读）。
+    const role: ShareRole = provenance?.readOnly === true ? "viewer" : row.role;
+    const lease =
+      provenance === undefined
+        ? {}
+        : { origin: provenance.origin, expiresAtMs: provenance.leaseUntilMs };
+    if (row.targetHost) {
+      putGrantRow(accounts, {
+        subjectKind: "principal",
+        subjectId: actor.principalId,
+        workspaceId: HOST_WORKSPACE,
+        targetKind: "host",
+        role,
+        grantedBy: row.issuedBy,
+        nowMs: now,
+        ...lease,
+      });
+    } else if (row.targetWorkspaceId !== "" && row.targetSessionId !== "") {
+      putGrantRow(accounts, {
         subjectKind: "principal",
         subjectId: actor.principalId,
         workspaceId: row.targetWorkspaceId,
-        role: row.role,
+        targetKind: "session",
+        targetId: row.targetSessionId,
+        role: "viewer",
         grantedBy: row.issuedBy,
         nowMs: now,
+        ...lease,
+      });
+    } else if (row.targetWorkspaceId !== "") {
+      putGrantRow(accounts, {
+        subjectKind: "principal",
+        subjectId: actor.principalId,
+        workspaceId: row.targetWorkspaceId,
+        role,
+        grantedBy: row.issuedBy,
+        nowMs: now,
+        ...lease,
       });
     }
     if (row.maxUses === null) {
@@ -1138,7 +1225,7 @@ export class AccountsService {
           ? tx.accounts.principal(input.subjectId) !== undefined
           : tx.accounts.group(input.subjectId) !== undefined;
       if (!exists) throw new IdentityError("notFound");
-      const row = this.put(tx.accounts, {
+      const row = putGrantRow(tx.accounts, {
         subjectKind: input.subjectKind,
         subjectId: input.subjectId,
         workspaceId: input.workspaceId,
@@ -1206,7 +1293,7 @@ export class AccountsService {
   /** 一个 principal 今天从授予里拿到的全部 scope，界面用它显示「有效权限」。 */
   effectiveGrantScopes(principalId: string): Scope[] {
     return this.options.store.transaction((tx) =>
-      compileGrants(tx.accounts, principalId),
+      compileGrants(tx.accounts, principalId, this.now()),
     );
   }
 
@@ -1248,58 +1335,6 @@ export class AccountsService {
 
   /* -------------------------------- internals ----------------------------- */
 
-  private put(
-    accounts: AccountsTx,
-    input: {
-      subjectKind: GrantSubjectKind;
-      subjectId: string;
-      workspaceId: string;
-      role: ShareRole;
-      grantedBy: string;
-      nowMs: number;
-    },
-  ): {
-    grantId: string;
-    subjectKind: GrantSubjectKind;
-    subjectId: string;
-    workspaceId: string;
-    role: ShareRole;
-    grantedBy: string;
-    createdAtMs: number;
-  } {
-    const live = accounts.liveGrant(
-      input.subjectKind,
-      input.subjectId,
-      input.workspaceId,
-    );
-    if (live !== undefined) {
-      if (live.role === input.role) {
-        return {
-          grantId: live.grantId,
-          subjectKind: live.subjectKind,
-          subjectId: live.subjectId,
-          workspaceId: live.workspaceId,
-          role: live.role,
-          grantedBy: live.grantedBy,
-          createdAtMs: live.createdAtMs,
-        };
-      }
-      accounts.revokeGrant(live.grantId, input.nowMs);
-    }
-    const grantId = newId();
-    const row = {
-      grantId,
-      subjectKind: input.subjectKind,
-      subjectId: input.subjectId,
-      workspaceId: input.workspaceId,
-      role: input.role,
-      grantedBy: input.grantedBy,
-      createdAtMs: input.nowMs,
-    };
-    accounts.createGrant({ ...row, revokedAtMs: 0 });
-    return row;
-  }
-
   /**
    * 判定入口。owner 恒真（设计 §4.1），其余按「会话快照 ∪ 编译出来的授予」。
    *
@@ -1314,19 +1349,9 @@ export class AccountsService {
     if (actor.kind === "owner") return;
     const granted = [
       ...actor.scopes,
-      ...compileGrants(accounts, actor.principalId),
+      ...compileGrants(accounts, actor.principalId, this.now()),
     ];
-    const allowed = required.every((request) =>
-      granted.some(
-        (grant) =>
-          grant.Permission === request.Permission &&
-          (grant.WorkspaceID === "" ||
-            grant.WorkspaceID === request.WorkspaceID) &&
-          (grant.ExecutionHostID === "" ||
-            grant.ExecutionHostID === request.ExecutionHostID),
-      ),
-    );
-    if (!allowed) throw new IdentityError("permission");
+    if (!permits(granted, required)) throw new IdentityError("permission");
   }
 
   /** 有没有全局的 `identity:manage`（owner 恒有）。不抛，给「要不要过滤」用。 */
@@ -1381,7 +1406,12 @@ export class AccountsService {
     actor: AuthorizationSubject,
     targetGroupId: string,
     targetWorkspaceId: string,
+    targetHost = false,
   ): void {
+    // 整台分享等于把每块画布都交出去：只有能管账号的人（owner）签得出。
+    if (targetHost) {
+      this.require(accounts, actor, [scope("identity:manage")]);
+    }
     if (targetWorkspaceId !== "") {
       this.require(accounts, actor, [
         scope("workspace:share", targetWorkspaceId),

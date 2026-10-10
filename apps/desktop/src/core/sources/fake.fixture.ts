@@ -89,6 +89,8 @@ export interface FakeLink {
   maxUses?: number | null;
   expiresAtMs?: number;
   createdAtMs?: number;
+  /** 协议 1.1 的分享范围（`links.scope` 能力）。 */
+  scope?: Record<string, unknown>;
 }
 
 export interface FakeWorld {
@@ -164,6 +166,7 @@ export function fakeWorld(): FakeWorld {
         "auth.password",
         "links.source-invite",
         "links.update",
+        "links.scope",
         "me.stream",
       ],
     },
@@ -245,6 +248,7 @@ function linkSummary(linkId: string, link: FakeLink): Record<string, unknown> {
         : (link.expiresAtMs ?? Date.now() + 86_400_000),
     createdAtMs: link.createdAtMs ?? 0,
     revokedAtMs: link.state === "revoked" ? Date.now() : null,
+    ...(link.scope === undefined ? {} : { scope: link.scope }),
   };
 }
 
@@ -348,6 +352,13 @@ async function cloud(
     if (input.kind !== "source_invite" || typeof input.sourceId !== "string") {
       return json(400, { code: "bad_request", message: "kind" });
     }
+    // 不报 `links.scope` 的旧中继不认 `scope`（严格的请求 schema 答 400）。
+    if (
+      input.scope !== undefined &&
+      !world.cloud.capabilities.includes("links.scope")
+    ) {
+      return json(400, { code: "bad_request", message: "scope" });
+    }
     const linkId = Math.random().toString(16).slice(2, 10).padEnd(8, "0");
     const secret = token("link");
     world.cloud.links.set(linkId, {
@@ -361,6 +372,9 @@ async function cloud(
       maxUses: typeof input.maxUses === "number" ? input.maxUses : null,
       expiresAtMs: Number(input.expiresAtMs),
       createdAtMs: Date.now(),
+      ...(typeof input.scope === "object" && input.scope !== null
+        ? { scope: input.scope as Record<string, unknown> }
+        : {}),
     });
     return json(200, {
       linkId,

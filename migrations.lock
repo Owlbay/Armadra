@@ -43,6 +43,7 @@
     "0041_cloud_relay_cleanup.sql": "15cdc99ac8c12f8b917066fae3e32e0d8f87cf2c13253e28ca52b8a2fdb001d1",
     "0042_local_controllers.sql": "4a63ae68681f04447b2aec97834866f6206887e3f5eca65c7a7adcf648795313",
     "0043_controller_runs.sql": "610530989d8bac7afead0445e918c3a104b22b09c8af7f6bec805b8dbde90064",
-    "0044_client_source_routes.sql": "a36fb8653ff6c4e322696f183c8c53d2d5b07bc93997de0204a70d81d2d7b676"
+    "0044_client_source_routes.sql": "a36fb8653ff6c4e322696f183c8c53d2d5b07bc93997de0204a70d81d2d7b676",
+    "0045_grant_scope.sql": "4a36b73df3af8d39ef7f3d22395929fb2f66a00abbcf39b97ef8d45e471ecc85"
   }
 }
