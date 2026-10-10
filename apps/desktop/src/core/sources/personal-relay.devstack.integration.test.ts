@@ -6,7 +6,8 @@
  * `ARMADRA_PERSONAL_RELAY=1` 才跑；否则 skipped。其余从环境读：
  * `ARMADRA_PERSONAL_RELAY_URL`（缺省 `https://127.0.0.1:8102`）、
  * `ARMADRA_PERSONAL_RELAY_FP`（启动日志或 `personal status` 打印的 CA 指纹）、
- * `ARMADRA_PERSONAL_RELAY_ACCOUNT` / `ARMADRA_PERSONAL_RELAY_PASSWORD`（`dev.env`）。
+ * `ARMADRA_PERSONAL_RELAY_ACCOUNT` / `ARMADRA_PERSONAL_RELAY_PASSWORD`（`dev.env`），
+ * `ARMADRA_PERSONAL_RELAY_NAME`（中转以 `--name` 起时给，核对缺省名，契约 §61）。
  */
 
 import { readFileSync, readdirSync } from "node:fs";
@@ -24,6 +25,7 @@ const issuer =
 const fingerprint = process.env.ARMADRA_PERSONAL_RELAY_FP?.trim() ?? "";
 const account = process.env.ARMADRA_PERSONAL_RELAY_ACCOUNT?.trim() || "dev";
 const password = process.env.ARMADRA_PERSONAL_RELAY_PASSWORD ?? "";
+const relayName = process.env.ARMADRA_PERSONAL_RELAY_NAME?.trim() ?? "";
 
 let core: Fixture;
 let base: string;
@@ -122,6 +124,38 @@ describe.skipIf(!enabled)("个人中转联调（契约 §33）", () => {
     expect(stored.refreshToken.length).toBeGreaterThan(20);
     expect(added.text).not.toContain(stored.refreshToken);
   });
+
+  it.skipIf(relayName === "")(
+    "缺省名取中转 platform.info 的 name；改名、清空恢复（契约 §61）",
+    async () => {
+      const listed = await rpc("sources.list");
+      const remote = (
+        listed.body.json as {
+          remotes: { serviceId: string; label: string; defaultLabel: string }[];
+        }
+      ).remotes.find((one) => one.serviceId === serviceId);
+      expect(remote).toMatchObject({
+        label: relayName,
+        defaultLabel: relayName,
+      });
+      const renamed = await rpc("sources.remoteUpdate", {
+        serviceId,
+        label: "改过的名字",
+      });
+      expect(renamed.status, renamed.text).toBe(200);
+      expect(renamed.body.json).toMatchObject({ label: "改过的名字" });
+      // 重新登录不覆盖改过的名字。
+      const again = await rpc("sources.remoteAdd", personal());
+      expect(again.body.json).toMatchObject({
+        remote: { label: "改过的名字", defaultLabel: relayName },
+      });
+      const restored = await rpc("sources.remoteUpdate", {
+        serviceId,
+        label: "",
+      });
+      expect(restored.body.json).toMatchObject({ label: relayName });
+    },
+  );
 
   it("remoteSession 与 remoteSources：刷新令牌旋转，答案里只有访问令牌", async () => {
     const secrets = join(

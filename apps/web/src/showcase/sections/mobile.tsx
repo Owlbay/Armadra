@@ -134,6 +134,7 @@ function Screen({
             statuses={MOBILE_CONNECTION_STATUSES}
             activeId={MOBILE_CONNECTIONS[0].sourceId}
             initialView="list"
+            onRename={() => undefined}
             onConnect={never}
             onScan={never}
           />
