@@ -1,6 +1,6 @@
 # 服务器壳镜像发布到 GHCR（补全计划 G3-5，docs/guides/server-deployment.md）。
 #
-# 只在推 v* 标签时推送：ghcr.io/owlbay/armadra-server:<版本> 与 :latest（镜像名必须小写），
+# 只在推 v* 标签时推送：ghcr.io/ama-link/armadra-server:<版本> 与 :latest（镜像名必须小写），
 # linux/amd64 + linux/arm64。凭据是工作流自带的 GITHUB_TOKEN（packages: write
 # 只给 publish 作业），不需要任何仓库外的密钥。拉取请求不触发本工作流；手动
 # 触发只构建、不推送（夜间的 server-image 作业另外跑容器端到端）。
@@ -36,7 +36,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/owlbay/armadra-server
+          images: ghcr.io/ama-link/armadra-server
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}

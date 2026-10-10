@@ -6,7 +6,7 @@
 
 Please **do not** describe security problems in public issues, discussions or pull requests. Report them privately through GitHub Security Advisories:
 
-**<https://github.com/Owlbay/Armadra/security/advisories/new>**
+**<https://github.com/AMA-Link/Armadra/security/advisories/new>**
 
 报告里请写明 / Please include:
 

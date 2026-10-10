@@ -239,8 +239,8 @@ export function normalizePlatformPin(platform) {
     fail("platform.tarball.sha256 must be 64 lowercase hex digits");
   const images = platform.images ?? {};
   for (const [name, repo] of [
-    ["cloud", "ghcr.io/owlbay/armadra-cloud"],
-    ["relay", "ghcr.io/owlbay/armadra-relay"],
+    ["cloud", "ghcr.io/ama-link/armadra-cloud"],
+    ["relay", "ghcr.io/ama-link/armadra-relay"],
   ]) {
     if (images[name] !== `${repo}:${version}`)
       fail(`platform.images.${name} must be ${repo}:${version}`);

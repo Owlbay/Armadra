@@ -61,7 +61,7 @@ FROM ${NODE_IMAGE} AS runtime
 
 LABEL org.opencontainers.image.title="armadra-server" \
       org.opencontainers.image.description="Armadra 无窗口服务器壳" \
-      org.opencontainers.image.source="https://github.com/Owlbay/Armadra" \
+      org.opencontainers.image.source="https://github.com/AMA-Link/Armadra" \
       org.opencontainers.image.licenses="NOASSERTION"
 
 # tmux：终端在 core 重启后还活着（契约 §15.1 的缺省后端）；git / bash /

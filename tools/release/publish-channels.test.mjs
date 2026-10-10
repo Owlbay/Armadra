@@ -25,7 +25,7 @@ import {
 import { parseYaml } from "../ci/workflow-yaml.mjs";
 
 const VERSION = "1.2.3";
-const REPO = "Owlbay/Armadra";
+const REPO = "AMA-Link/Armadra";
 
 /** SHA256SUMS listing every bundle the release publishes, with distinct digests. */
 function sums(version = VERSION, drop = []) {
@@ -103,7 +103,7 @@ test("a placeholder without a value fails rather than rendering empty", () => {
 
 test("render writes the cask, the Scoop manifest, three winget manifests and the PKGBUILD", () =>
   withRendered((out, written) => {
-    const wingetDir = `winget/manifests/o/Owlbay/Armadra/${VERSION}`;
+    const wingetDir = `winget/manifests/a/AMA-Link/Armadra/${VERSION}`;
     assert.deepEqual(written.sort(), [
       "aur/PKGBUILD",
       "homebrew/Casks/armadra.rb",
@@ -136,7 +136,7 @@ test("the cask pins both macOS dmgs by SHA256SUMS and downloads from the release
     );
     assert.match(
       cask,
-      /url "https:\/\/github\.com\/Owlbay\/Armadra\/releases\/download\/v#\{version\}\/Armadra_#\{version\}_darwin-#\{arch\}\.dmg"/,
+      /url "https:\/\/github\.com\/AMA-Link\/Armadra\/releases\/download\/v#\{version\}\/Armadra_#\{version\}_darwin-#\{arch\}\.dmg"/,
     );
     assert.match(cask, /app "Armadra\.app"/);
     assert.match(cask, /strategy :github_latest/);
@@ -178,7 +178,7 @@ test("the Scoop manifest uses the portable zips and autoupdates from SHA256SUMS"
 
 test("the winget manifests agree on identity and version and pin both NSIS installers", () =>
   withRendered((out) => {
-    const dir = join(out, `winget/manifests/o/Owlbay/Armadra/${VERSION}`);
+    const dir = join(out, `winget/manifests/a/AMA-Link/Armadra/${VERSION}`);
     const docs = Object.fromEntries(
       readdirSync(dir).map((name) => [
         name,
@@ -223,7 +223,7 @@ test("the winget manifests agree on identity and version and pin both NSIS insta
       ],
     );
     const locale = docs[`${WINGET_ID}.locale.en-US.yaml`];
-    assert.equal(locale.Publisher, "Owlbay");
+    assert.equal(locale.Publisher, "AMA-Link");
     assert.equal(locale.License, "MIT");
     assert.ok(locale.ShortDescription.length <= 256);
   }));

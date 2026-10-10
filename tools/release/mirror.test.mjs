@@ -133,7 +133,7 @@ async function assembled(base) {
   const result = await assemble({
     directory,
     version: VERSION,
-    repo: "Owlbay/Armadra",
+    repo: "AMA-Link/Armadra",
     tag: TAG,
     notes: "- notes",
     secret: secretFromKey(key),

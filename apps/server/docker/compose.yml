@@ -11,7 +11,7 @@ name: armadra
 
 services:
   armadra:
-    image: ghcr.io/owlbay/armadra-server:latest
+    image: ghcr.io/ama-link/armadra-server:latest
     # 从源码构建（仓库根目录是上下文）：
     # build:
     #   context: ../../..

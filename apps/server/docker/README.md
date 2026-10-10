@@ -45,5 +45,5 @@ docker run --rm -p 127.0.0.1:8443:8443 \
 或 `docker run --rm armadra-server:local version`。
 
 发布：推 `v*` 标签时 `.github/workflows/server-image.yml` 把 `linux/amd64` + `linux/arm64` 推到
-`ghcr.io/owlbay/armadra-server:<版本>` 与 `:latest`；拉取请求不推。夜间 `nightly.yml` 的
+`ghcr.io/ama-link/armadra-server:<版本>` 与 `:latest`；拉取请求不推。夜间 `nightly.yml` 的
 `linux` 作业跑 B 档条目 `server-container-e2e`（`tools/ci/e2e.d/server-container-e2e.json`）：构建镜像并对着容器跑 `tools/probes/server-e2e.mjs --container=…`。
