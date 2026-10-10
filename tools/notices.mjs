@@ -215,10 +215,12 @@ export function withResolvedPeers(listing) {
       manifest.peerDependencies,
       manifest.peerDependenciesMeta,
     ].flatMap((field) => Object.keys(field ?? {}));
-    const siblings = path.slice(
-      0,
-      path.lastIndexOf("/node_modules/") + "/node_modules".length,
+    // Windows 上 pnpm 给的是反斜杠路径。
+    const at = Math.max(
+      path.lastIndexOf("/node_modules/"),
+      path.lastIndexOf("\\node_modules\\"),
     );
+    const siblings = path.slice(0, at + "/node_modules".length);
     for (const name of names) {
       const candidate = join(siblings, name);
       if (!existsSync(candidate)) continue;
