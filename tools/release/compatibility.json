@@ -52,15 +52,15 @@
   },
   "platform": {
     "package": "@armadra/platform-protocol",
-    "version": "0.3.0",
+    "version": "0.3.1",
     "protocol": { "major": 1, "minor": 1 },
     "tarball": {
-      "file": "armadra-platform-protocol-0.3.0.tgz",
-      "sha256": "f4544c6acb0a856fcc55862d5b12a4884051c5707c27c2c55ec8380edfbd286b"
+      "file": "armadra-platform-protocol-0.3.1.tgz",
+      "sha256": "897c4d4b50ad080ffeb98ced4c261d67375d77e704a3d0e3718eb482e199451a"
     },
     "images": {
-      "cloud": "ghcr.io/owlbay/armadra-cloud:0.3.0",
-      "relay": "ghcr.io/owlbay/armadra-relay:0.3.0"
+      "cloud": "ghcr.io/owlbay/armadra-cloud:0.3.1",
+      "relay": "ghcr.io/owlbay/armadra-relay:0.3.1"
     }
   },
   "mobile": {
