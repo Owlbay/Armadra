@@ -2,6 +2,24 @@
 
 每个版本一节，按发布倒序。括号里是合入的 PR 编号（github.com/Owlbay/Armadra）。兼容范围以 `tools/release/compatibility.json` 为准，发布说明里的 `armadra-compatibility` 围栏由它渲染。桌面、服务器与手机 / 平板 App 共用一条版本线和一个标签 `vX.Y.Z`（规则见 `docs/guides/ci-release.md`「版本规则」）；有手机端改动的版本，在「手机与平板」小节里写，其余写在「桌面 / 服务器」下。2026-10-10 之前手机端曾单独编号（1.0.0、1.1.0），内容并入对应的 0.2.5、0.2.6。
 
+## 0.4.0（2026-10-10）
+
+功能版本。中转改为部署在 Cloudflare：`https://relay.armadra.com`（armadra-cloud 0.3.9 起）。
+
+### 桌面 / 服务器
+
+- 远程服务登录支持 Turnstile 人机验证：中转要求时先弹出验证再提交口令，令牌带 `action=armadra-login`；`challenge_required` / `challenge_invalid` 有明确提示（契约 §62，#258、#260）。
+- 服务重命名与服务端默认名：选择服务页与远程访问每行可改名（只存本设备），主机名称可在本机服务设置，中转经 `/.well-known` 提供 `name`（迁移 0046，契约 §61，#257）。
+- 协议包 0.3.5（平台协议 1.2），协议 minor 35。
+
+### 手机与平板
+
+- 同上：添加连接时的人机验证与服务改名。
+
+### 工程
+
+- ESLint 堆上限调高，CI 不再在 lint 时内存溢出（#262）。
+
 ## 0.3.0（2026-10-10）
 
 三端统一版本线的第一个版本：桌面、服务器壳与手机 / iPad App 同为 0.3.0（App 此前为独立的 1.1.0）。中转需 armadra-cloud 0.3.0（镜像 `ghcr.io/owlbay/armadra-relay:0.3.0`）。
