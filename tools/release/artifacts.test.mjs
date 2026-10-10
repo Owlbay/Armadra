@@ -11,6 +11,7 @@ import {
   updaterChannel,
   updaterFeedFile,
   mobileAssets,
+  androidReleaseAsset,
   webAsset,
 } from "./artifacts.mjs";
 
@@ -130,6 +131,13 @@ test("the mobile shell's CI builds are named but never placed by the updater", (
     assert.equal(assetComponent(asset.name), "mobile", asset.name);
     assert.equal(assetTarget(asset.name), "", asset.name);
   }
+});
+
+test("the release's signed APK is a mobile asset without a target", () => {
+  const name = androidReleaseAsset("0.5.1");
+  assert.equal(name, "armadra-mobile_0.5.1_android.apk");
+  assert.equal(assetComponent(name), "mobile");
+  assert.equal(assetTarget(name), "");
 });
 
 test("each target's electron-updater feed is a manifest of its own", () => {

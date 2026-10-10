@@ -102,7 +102,7 @@ xcodebuild build -project apps/mobile/ios/App/App.xcodeproj -scheme App \
 
 1. **Apple**：Apple Developer Program 账号（与桌面公证同一个）；App ID `dev.armadra.mobile` 与 `dev.armadra.mobile.NotificationService`，都开 Push Notifications 与 Keychain Sharing（组 `dev.armadra.mobile.shared`）；开发 / 分发证书与两份 provisioning profile；CI secrets `IOS_DISTRIBUTION_P12_BASE64`、`IOS_DISTRIBUTION_PASSWORD`、`IOS_PROVISIONING_PROFILE_BASE64`，上传用桌面公证的同一把 App Store Connect API key。发布构建把 `App.entitlements` 的 `aps-environment` 交给分发 profile 决定（`production`）。
 2. **APNs**：`.p8` + Key ID + Team ID。自建部署填进 core 的 `ARMADRA_PUSH_APNS_*`（`direct`）；商店版填进中继的 `ARMADRA_RELAY_APNS_*`。验证：真机开推送 → `POST /api/push/test` 收到通知，锁屏上显示解密后的标题。
-3. **Android**：Play 开发者账号（个人账户的新 App 要 12 名测试者封闭测试 14 天）；上传密钥 `ANDROID_UPLOAD_KEYSTORE`（构建时的文件路径）、`ANDROID_UPLOAD_KEYSTORE_PASSWORD`、`ANDROID_UPLOAD_KEY_ALIAS`（`app/build.gradle` 只从环境读）；Play 服务账号 JSON（上传用）。
+3. **Android**：Play 开发者账号（个人账户的新 App 要 12 名测试者封闭测试 14 天）；上传密钥 `ANDROID_UPLOAD_KEYSTORE`（构建时的文件路径）、`ANDROID_UPLOAD_KEYSTORE_PASSWORD`、`ANDROID_UPLOAD_KEY_ALIAS`（`app/build.gradle` 只从环境读；用 `apps/mobile/scripts/create-upload-keystore.sh` 生成并写进仓库 secrets，每次发布的 GitHub Release 就带签名 APK，见 CI 与发布 §2.6.3）；Play 服务账号 JSON（上传用）。
 4. **Firebase**：一个 Firebase 项目，下载 `google-services.json` 放到 `apps/mobile/android/app/`（不进仓库；有它构建时才套 google-services 插件，没有时 App 照常、开推送答失败）；服务账号 JSON 给 core 的 `ARMADRA_PUSH_FCM_CREDENTIALS_FILE` 或中继的 `ARMADRA_RELAY_FCM_CREDENTIALS_FILE`。
 5. **推送中继**（商店版）：一台公网主机运行 `apps/push-relay`，构建 App 时设 `ARMADRA_MOBILE_RELAY_URL`。
 6. **商店审核**：一台公网可达的演示服务器壳与审核账号；隐私说明（App 只连用户自己的服务器、不收集数据）；出口合规问卷（只用系统自带的标准算法：TLS、AES-GCM、X25519）。

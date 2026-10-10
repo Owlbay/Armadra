@@ -558,8 +558,99 @@ jobs:
             echo "::warning::未公证/未签名的平台：${missing[*]}；首次安装会有系统提示"
           fi
 
+  # Android 安装包（Issue #279）：页面与手机壳 → assembleRelease → 上传密钥签名 →
+  # apksigner 校验 → 以 armadra-mobile_<版本>_android.apk 进 draft Release。
+  # 密钥只在 secrets 里（apps/mobile/scripts/create-upload-keystore.sh 生成并写入）：
+  # 三个都没有就跳过并告警，桌面发布照常；给了一半就失败。
+  android:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: 签名设置齐不齐
+        id: signing
+        shell: bash
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}
+          PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
+          ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          count=0
+          for value in "${KEYSTORE:-}" "${PASSWORD:-}" "${ALIAS:-}"; do
+            [ -n "$value" ] && count=$((count + 1))
+          done
+          if [ "$count" = 0 ]; then
+            echo "::warning::没有 Android 上传密钥（ANDROID_UPLOAD_KEYSTORE_*），本次发布不带 APK"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          elif [ "$count" != 3 ]; then
+            echo "::error::ANDROID_UPLOAD_KEYSTORE_BASE64、ANDROID_UPLOAD_KEYSTORE_PASSWORD、ANDROID_UPLOAD_KEY_ALIAS 要么都给，要么都不给"
+            exit 1
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+      # 构建号是提交数（apps/mobile/scripts/app-version.mjs），浅克隆数不出来。
+      - uses: actions/checkout@v4
+        if: steps.signing.outputs.enabled == 'true'
+        with:
+          ref: ${{ inputs.tag || github.sha }}
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        if: steps.signing.outputs.enabled == 'true'
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        if: steps.signing.outputs.enabled == 'true'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        if: steps.signing.outputs.enabled == 'true'
+        with:
+          distribution: temurin
+          java-version: "21"
+      - if: steps.signing.outputs.enabled == 'true'
+        run: pnpm install --frozen-lockfile
+      - name: 构建页面、core 与手机壳的 www
+        if: steps.signing.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm libs:build
+          pnpm --filter @armadra/web build
+          pnpm --filter @armadra/desktop build
+          node apps/desktop/scripts/ensure-node-pty.mjs
+          pnpm --filter @armadra/mobile sync
+      - name: 签名的 release APK
+        if: steps.signing.outputs.enabled == 'true'
+        shell: bash
+        working-directory: apps/mobile/android
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}
+          ANDROID_UPLOAD_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
+          ANDROID_UPLOAD_KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          export ANDROID_UPLOAD_KEYSTORE="$RUNNER_TEMP/upload.jks"
+          printf '%s' "$KEYSTORE" | base64 --decode > "$ANDROID_UPLOAD_KEYSTORE"
+          ./gradlew :app:assembleRelease --no-daemon --stacktrace
+          rm -f "$ANDROID_UPLOAD_KEYSTORE"
+          apk=app/build/outputs/apk/release/app-release.apk
+          apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$apksigner" verify --verbose --print-certs "$apk"
+          name=$(node --input-type=module -e "import { androidReleaseAsset } from '../../../tools/release/artifacts.mjs'; console.log(androidReleaseAsset(process.env.VERSION))")
+          mkdir -p ../../../artifacts
+          cp "$apk" "../../../artifacts/$name"
+      - uses: actions/upload-artifact@v4
+        if: steps.signing.outputs.enabled == 'true'
+        with:
+          name: release-android
+          path: artifacts
+          if-no-files-found: error
+
   assemble:
-    needs: [verify, build, web, notarize]
+    needs: [verify, build, web, notarize, android]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
