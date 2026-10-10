@@ -4045,3 +4045,34 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - 页面：`useLocaleMirror`、`modsValue`、`RuntimeSettings.ui.locale`，i18n 键 `integration.row.mods`、`integration.mods.*`。
 - 线上：§58（`GET /node/overlay` 的参数、来源与缓存头，横条规则，`ui.locale`），协议 1.30。
 - 工具：`claude-mod-launch.mjs` 第 6 步，`tools/vendor/claude-mod-api.d.ts` 补了 `$.state`、`clock.every`、`ui.toast`、`ui.resolve`、`h` 与 `ui.render` 的声明。
+
+## 分享三档：整台 / 工作空间 / 会话，断言范围与授予租约（A7-4，契约 §60，迁移 0045，Refs #229，2026-10-10）
+
+做了什么：
+
+- 协议包升到 0.3.0（平台协议 1.1）：vendored tgz、三处 `package.json`、锁文件、`compatibility.json` 的 `platform` 段（版本、协议、sha256、镜像 tag 0.3.0）、dev-stack 镜像 tag；core 的 `hello` 带 1.1。
+- 迁移 0045：`identity_grants` 加 `origin` / `expires_at_ms` / `target_kind` / `target_id`，唯一索引改按目标；`identity_invitations` 加 `target_session_id` / `target_host`。
+- 授权：scope 加可选的资源维度（`ResourceID`，不写进会话快照）；授予按目标编译（整台 = 不带工作空间的角色权限，会话 = `events:read@ws` + `terminal:read@ws#session`），租约到期不编译。路由门只在终端与 ACP 会话的读路径带会话 id 去问，会话查看者只读那一条，其余一切 403——判定点在 core，不依赖中继边缘的 `ro`。
+- 云登录（`identity/cloud/login.ts`、新 `identity/grant-sync.ts`）：断言带 `role` 时把这个人经本签发方的授予整份换成 `scp` 声明的范围（本地授予不动、同目标本地优先）；不带只续租；`ro` / `sess:` 压成只读；带邀请时 `scp` 与邀请终点对不上不兑换；SaaS 登记带 `org` + `role` 免邀请建成员；经云来的授予租约到断言 `exp` + 30 天，每次登录续；审计带 `jti` / `org` / `team` / `role` / `scp`。
+- 分享链接：`shareLinkCreate` 收 `target` / `sessionId` / `readOnly`，邀请按范围签，远程服务报 `links.scope` 才发 `scope`；撤链接连同 `guest:<linkId>:` 的访客停用并撤会话。本机 owner 没有请求身份时签邀请，签发人记成库里的 owner。
+- 页面：新建链接对话框加「范围」（整台 / 工作空间 / 会话）与「只读」开关，会话分享不给角色与开关；列表标出整台与会话。中英文案在 `i18n/sharing.ts`。
+
+实测（macOS arm64）：
+
+- 新单测：迁移 3（旧库升级缺省值与编译不变、按目标唯一索引、租约过期）；授权矩阵 9（资源维度、整台不含本机管理、会话授予只读；路由门四种授予 × 终端 / ACP 读、画布、文件、终端输入 / 附着 / ACP prompt、设置）；云登录 9（`scp` 空旧行为、`ro` 压只读、范围对不上不兑换、会话邀请、整台邀请、SaaS 免邀请与同步、个人中转无邀请仍拒、租约到期与续租、撤链接停用访客）；分享链接 5（只读压 viewer 并交范围、会话与整台、旧中继不发 `scope`、不合规 400、撤链接停用访客）；页面 1（整台只读、会话只读不给角色、列表徽标）。
+- 跨仓：armadra-cloud main（8c921db，0.3.0）源码起个人中转（隔离数据目录、端口 8112），`ARMADRA_PERSONAL_RELAY=1 vitest run src/core/identity/cloud/personal-relay.devstack.integration.test.ts` 8 过：新增的一条经 core `shareLinkCreate`（会话范围）→ 中继 `links.list` 记着 `scope` → 访客 `links.accept` 的断言 `scp = [ws:…, sess:…, ro]`、中继令牌 `ro: true` → core `cloud/login` 授予只读会话 → `shareLinkRevoke` 后访客已停用。联调后按 PID 停了中继。
+- `pnpm check` 过；desktop 单测 5541 过 / 78 跳；`passkey-cdp.live` 一条在本机 Chromium 上 409（main 上同样失败，与本包无关）。
+- `node tools/probes/link-join.mjs`（Docker 里的个人中转来自 armadra-cloud main 源码，协议包 0.3.0，报 `links.scope`；真 Electron，临时 HOME 与数据目录）：第二次全过 22 步（owner 7 次点击生成链接，此时中继收到 `scope.workspaceId`、访客断言带 `ws:`；两个访客各 1 次点击进画布；手机访客另存一槽；撤销后第三个访客被拒；日志无秘密）。第一次手机那一步 `links.accept` 请求被浏览器中止（`ERR_ABORTED`）超时，重跑即过，与范围无关。
+
+没做 / 限制：
+
+- 会话查看者还没有专门的只读页面：链接的落地仍进画布页，画布 403；看终端走现有的 `capture` / ACP 镜像读接口。`/ws` 附着按写判，查看者看不到实时流。
+- 会话授予按设计带 `events:read@ws`，那块工作空间的事件帧对会话查看者可见（不含画布正文接口）；没有按会话过滤事件。
+- 账号页的授予列表只列工作空间授予；整台与会话授予只能经撤链接 / 停用成员收回。
+- `link-join` 探针没有加会话范围那一段（需要页面上的只读查看流）；会话范围的跨仓覆盖在上面的联调用例里。SaaS 的定向邀请（邮箱 / 账号）没有做，等 C8-2。
+
+接口：
+
+- core：`hostRoleScopes` / `sessionViewerScopes` / `grantScopes` / `HOST_WORKSPACE` / `GrantTargetKind`（`roles.ts`）、`resourceOf` 与 `scope(…, resourceId)`（`scopes.ts`）、`compileGrants(accounts, id, nowMs)`、`grant-sync.ts` 的 `applyCloudGrants` / `disableLinkGuests` / `registerExternal` / `putGrantRow` / `GRANT_LEASE_MS`、`assertedGrants`（`cloud/login.ts`）、`shareScopeOf` / `linkScopeOf` / `LINK_SCOPE_CAPABILITY`（`share-links.ts`）；`issueInvitation` 收 `targetSessionId` / `targetHost`。
+- shared：`shareTargetSchema` / `ShareTarget`，`ShareLink` 的 `target` / `sessionId` / `readOnly`，`shareLinkCreate` 入参同名三项。
+- 线上：§60，协议 1.32，协议包 0.3.0。
