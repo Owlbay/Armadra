@@ -53,7 +53,7 @@ const ALL_PROFILES = [...new Set(SERVICES.flatMap(profilesOf))];
 
 /**
  * 云仓本地克隆的位置：`ARMADRA_DEV_STACK_CLOUD_SRC`，没设就看本仓库旁边有没有
- * `../armadra-cloud`（GHCR 镜像发布前这是缺省）。返回绝对路径或 null；`note` 收一行说明。
+ * `../cloud`（GHCR 镜像发布前这是缺省）。返回绝对路径或 null；`note` 收一行说明。
  */
 export function resolveCloudSrc(
   env = process.env,
@@ -68,7 +68,7 @@ export function resolveCloudSrc(
       );
     return dir;
   }
-  const sibling = resolve(repoRoot, "..", "armadra-cloud");
+  const sibling = resolve(repoRoot, "..", "cloud");
   if (existsSync(join(sibling, "apps", "cloud", "Dockerfile"))) {
     note(
       `云仓镜像从本地克隆构建：${sibling}（设 ARMADRA_DEV_STACK_CLOUD_SRC 可改）`,
