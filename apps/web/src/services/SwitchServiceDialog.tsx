@@ -1,12 +1,13 @@
 import * as React from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 
-import { listSources } from "../api/remote-services";
+import { listSources, renameSource } from "../api/remote-services";
 import { RUNTIME_VIA_SERVER_SHELL } from "../api/request";
 import { usePreferencesStore, useT } from "../app/preferences-store";
 import { SOURCES_QUERY_KEY } from "../panels/settings/pages/RemoteAccessPage";
 import { isDesktop } from "../platform";
+import { applySourceTable } from "../sources/bootstrap";
 import type { SourceConnection } from "../sources/connection";
 import {
   useCurrentSource,
@@ -124,21 +125,44 @@ function SwitchBody({ onDone }: { onDone: () => void }) {
       ),
     [table.data],
   );
-  const localLabel =
-    table.data?.sources.find((source) => source.kind === "local")?.label ?? "";
+  const localRow = table.data?.sources.find(
+    (source) => source.kind === "local",
+  );
+  const localLabel = localRow?.label ?? "";
+  const localDefault = localRow?.defaultLabel || localLabel;
   const rows = React.useMemo(
     (): ServiceRow[] =>
       connections.map((connection) => {
         const row = serviceRowOf(connection.descriptor, {
           serviceName: (issuer) => names.get(issuer) ?? "",
         });
-        // 本机行：源表里本机那一行的名字（机器名），没有才写「本机」。
+        // 本机行：源表里本机那一行的名字（主机名称），没有才写「本机」。
         return row.local && row.name === ""
-          ? { ...row, name: localLabel || t("remote.kind.local") }
+          ? {
+              ...row,
+              name: localLabel || t("remote.kind.local"),
+              defaultName: localDefault,
+            }
           : row;
       }),
-    [connections, names, localLabel, t],
+    [connections, names, localLabel, localDefault, t],
   );
+  const client = useQueryClient();
+  // 改名经本机 core 的源表（契约 §61）；本机行在源表里的标识是它的 hostId。
+  const rename = async (sourceId: string, label: string) => {
+    const local = connections.find(
+      (connection) => connection.descriptor.sourceId === sourceId,
+    )?.descriptor.kind;
+    const target = local === "local" ? localRow?.sourceId : sourceId;
+    if (target === undefined) return;
+    await renameSource(target, label);
+    const fresh = await client.fetchQuery({
+      queryKey: SOURCES_QUERY_KEY,
+      queryFn: listSources,
+      staleTime: 0,
+    });
+    await applySourceTable(fresh.sources);
+  };
   const newWindow = canOpenSourceWindow();
 
   const select = (sourceId: string) => {
@@ -161,6 +185,7 @@ function SwitchBody({ onDone }: { onDone: () => void }) {
           currentId={current.descriptor.sourceId}
           statuses={statuses}
           onEnter={select}
+          {...(hasLocalCore() && table.data ? { onRename: rename } : {})}
           {...(newWindow
             ? {
                 onOpenWindow: (sourceId: string) => {

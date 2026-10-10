@@ -17,6 +17,7 @@ export const MOBILE_CONNECTIONS = [
   {
     sourceId: "a1b2c3d4e5f60718293a4b5c6d7e8f90",
     name: "MacBook Pro",
+    defaultName: "MacBook Pro",
     local: false,
     routes: [
       {
@@ -30,6 +31,7 @@ export const MOBILE_CONNECTIONS = [
   {
     sourceId: "0f9e8d7c6b5a49382716f5e4d3c2b1a0",
     name: "Studio",
+    defaultName: "Studio",
     local: false,
     routes: [{ via: "direct", issuer: "", serviceName: "" }],
     lastUsedAt: null,

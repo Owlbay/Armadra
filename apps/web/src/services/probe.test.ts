@@ -12,6 +12,7 @@ function direct(sourceId: string): ServiceRow {
   return {
     sourceId,
     name: sourceId,
+    defaultName: sourceId,
     local: false,
     routes: [{ via: "direct", issuer: "", serviceName: "" }],
     lastUsedAt: null,
@@ -22,6 +23,7 @@ function relayed(sourceId: string, issuer = ISSUER): ServiceRow {
   return {
     sourceId,
     name: sourceId,
+    defaultName: sourceId,
     local: false,
     routes: [{ via: "relayed", issuer, serviceName: "relay" }],
     lastUsedAt: null,

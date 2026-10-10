@@ -23,6 +23,11 @@ export interface ServiceRow {
   readonly sourceId: string;
   /** 名字：源的标签，缺省主机名。 */
   readonly name: string;
+  /**
+   * 服务端报的名字（契约 §61）：改名对话框的占位，清空即恢复成它。没有时是
+   * 兜底的名字（地址的主机部分或源标识前 8 位）。
+   */
+  readonly defaultName: string;
   readonly local: boolean;
   /** 到达方式，首选在前；本机没有。 */
   readonly routes: readonly ServiceRoute[];
@@ -84,15 +89,16 @@ export function serviceRowOf(
   const used = options.recent?.find(
     (entry) => entry.sourceId === descriptor.sourceId,
   );
+  const fallback =
+    descriptor.baseUrl !== ""
+      ? hostOf(descriptor.baseUrl)
+      : descriptor.relayOrigin !== ""
+        ? descriptor.sourceId.slice(0, 8)
+        : "";
   return {
     sourceId: descriptor.sourceId,
-    name:
-      descriptor.label ||
-      (descriptor.baseUrl !== ""
-        ? hostOf(descriptor.baseUrl)
-        : descriptor.relayOrigin !== ""
-          ? descriptor.sourceId.slice(0, 8)
-          : ""),
+    name: descriptor.label || descriptor.defaultLabel || fallback,
+    defaultName: descriptor.defaultLabel || fallback,
     local,
     routes,
     lastUsedAt: used?.at ?? null,

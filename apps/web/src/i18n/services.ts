@@ -26,6 +26,11 @@ export const services: MessageModule = {
     "services.select": "切换",
     "services.empty": "还没有连接",
     "services.pick": "选择服务",
+    "services.rename": "重命名",
+    "services.renameRow": "重命名 {name}",
+    "services.name": "名称",
+    "services.save": "保存",
+    "services.renamed": "已重命名",
     "cmd.app.switchService": "切换服务",
   },
   en: {
@@ -48,6 +53,11 @@ export const services: MessageModule = {
     "services.select": "Switch",
     "services.empty": "No connections yet",
     "services.pick": "Choose a service",
+    "services.rename": "Rename",
+    "services.renameRow": "Rename {name}",
+    "services.name": "Name",
+    "services.save": "Save",
+    "services.renamed": "Renamed",
     "cmd.app.switchService": "Switch service",
   },
 };

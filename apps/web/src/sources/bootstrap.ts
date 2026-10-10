@@ -45,6 +45,10 @@ export function descriptorOf(source: ClientSource): SourceDescriptor {
     sourceId: source.sourceId,
     kind: source.kind,
     label: source.label,
+    // 旧版 core（§61 之前）没有 `defaultLabel`。
+    ...(typeof source.defaultLabel === "string"
+      ? { defaultLabel: source.defaultLabel }
+      : {}),
     baseUrl: source.baseUrl,
     relayOrigin: source.relayOrigin,
     cloudIssuer: source.cloudIssuer,

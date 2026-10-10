@@ -90,6 +90,7 @@ export function RelaySignIn({
       (hosts ?? []).map((source) => ({
         sourceId: source.sourceId,
         name: source.name || source.sourceId.slice(0, 8),
+        defaultName: source.name || source.sourceId.slice(0, 8),
         local: false,
         routes: [{ via: "relayed", issuer: relay.issuer, serviceName: host }],
         lastUsedAt: null,
