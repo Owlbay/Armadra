@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../../../testing/temp-dir";
-import { CLAUDE_HOOK_EVENTS } from "../events";
+import { CLAUDE_HOOK_EVENTS, MOD_REVISION } from "../events";
 import {
   MOD_MODULE_FILE,
   MOD_PLUGIN_NAME,
@@ -13,6 +13,7 @@ import {
   claudeModSource,
 } from "./template";
 import { MOD_CLASSIC_EVENTS } from "./status";
+import { MOD_COMMANDS } from "./commands";
 import { claudeModPluginTest } from "./plugin-test";
 
 /**
@@ -91,7 +92,7 @@ describe("the Claude Code mod", () => {
     expect(source).not.toMatch(/\bimport\s*\(/);
     const imports = source.match(/^import .*$/gm) ?? [];
     expect(imports).toEqual([
-      'import type { EngineInterface, Register, SessionStartInput } from "claude-code";',
+      'import type { CommandRunResult, EngineInterface, Register, SessionStartInput } from "claude-code";',
     ]);
     expect(source).not.toMatch(/\$\.env\.set\b/);
   });
@@ -111,8 +112,11 @@ describe("the Claude Code mod", () => {
     ]) {
       expect(source, forbidden).not.toContain(forbidden);
     }
-    // Every hook passes its event on, unchanged.
-    const hooks = source.match(/on\("[^"]+"/g) ?? [];
+    // Every hook passes its event on, unchanged; a slash command's answers
+    // for itself (commands.test.ts).
+    const hooks = (source.match(/on\("[^"]+"/g) ?? []).filter(
+      (hook) => hook !== 'on("command.run"',
+    );
     expect(hooks.length).toBe(MOD_CLASSIC_EVENTS.length + 1);
     expect(source.match(/return next\(e\);/g)?.length).toBe(hooks.length);
     expect(
@@ -172,12 +176,14 @@ describe("the Claude Code mod", () => {
     const module = (await import(
       `data:text/javascript;base64,${Buffer.from(js).toString("base64")}`
     )) as { register: (on: unknown) => void };
-    const hooks = new Map<string, (...args: unknown[]) => Promise<unknown>>();
-    const on = (
-      event: string,
-      hook: (...args: unknown[]) => Promise<unknown>,
-    ) => {
-      hooks.set(event, hook);
+    type Hook = (...args: unknown[]) => Promise<unknown>;
+    const hooks = new Map<string, Hook[]>();
+    const on = (event: string, ...rest: unknown[]) => {
+      const hook = rest[rest.length - 1] as Hook;
+      const matcher = rest.length > 1 ? (rest[0] as { command?: string }) : {};
+      const key =
+        matcher.command === undefined ? event : `${event}:${matcher.command}`;
+      hooks.set(key, [...(hooks.get(key) ?? []), hook]);
       return { catch: () => {} };
     };
     module.register(on);
@@ -216,12 +222,14 @@ describe("the Claude Code mod", () => {
     };
     const raise = async (event: string, e: unknown) => {
       const passed: unknown[] = [];
-      const hook = hooks.get(event);
-      if (hook === undefined) throw new Error(`no hook on ${event}`);
-      await hook($, e, async (value: unknown) => {
-        passed.push(value);
-        return {};
-      });
+      const chain = hooks.get(event);
+      if (chain === undefined) throw new Error(`no hook on ${event}`);
+      for (const hook of chain) {
+        await hook($, e, async (value: unknown) => {
+          passed.push(value);
+          return {};
+        });
+      }
       await new Promise((done) => setTimeout(done, 20));
       return passed;
     };
@@ -337,7 +345,7 @@ describe("the Claude Code mod", () => {
       surface: "terminal",
       isInteractive: true,
       profile: "terminal",
-      modRevision: 1,
+      modRevision: MOD_REVISION,
       nodeId: "node-1",
       transport: "socket",
     });
@@ -407,8 +415,17 @@ describe("the Claude Code mod", () => {
       new Set([
         "session.start",
         ...MOD_CLASSIC_EVENTS.map((event) => `classic.${event}`),
+        ...MOD_COMMANDS.map(
+          (command) => `command.run{command=${command.name}}`,
+        ),
       ]),
     );
+    // A slash command is answered by its own hook, not a gate.
+    for (const command of MOD_COMMANDS) {
+      expect(output).toContain(
+        `answers its own command: command.run{command=${command.name}}`,
+      );
+    }
     expect(output).not.toMatch(/gating hook without \.catch/);
     const reads =
       /armadra\.ts env reads: (.+)$/m.exec(output)?.[1]?.split(", ") ?? [];

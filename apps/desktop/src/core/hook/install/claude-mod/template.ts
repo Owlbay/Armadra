@@ -4,8 +4,17 @@ import {
   MOD_REVISION,
 } from "../events";
 import { jsString } from "../extension-template";
-import { COMMAND_DECLARATIONS, COMMAND_REGISTRATIONS } from "./commands";
-import { STATUS_DECLARATIONS, STATUS_REGISTRATIONS } from "./status";
+import {
+  COMMAND_REGISTRATIONS,
+  COMMAND_SESSION_START,
+  type ModLocale,
+  commandDeclarations,
+} from "./commands";
+import {
+  STATUS_DECLARATIONS,
+  STATUS_REGISTRATIONS,
+  STATUS_SESSION_START,
+} from "./status";
 import { TRANSPORT_DECLARATIONS } from "./transport";
 import { UI_DECLARATIONS, UI_REGISTRATIONS } from "./ui";
 
@@ -24,6 +33,10 @@ import { UI_DECLARATIONS, UI_REGISTRATIONS } from "./ui";
  * add the band (`ui.ts`) and the slash commands (`commands.ts`) do not edit
  * the same lines: declarations first, then one `register` holding every
  * segment's registrations in order.
+ *
+ * The engine refuses a second `on("session.start")` without a matcher, so
+ * there is exactly one, here, and each segment hands it one call
+ * (`*_SESSION_START`), started without waiting so the session never does.
  */
 
 /** The manifest's name: a second plugin beside the skill plugin `armadra`. */
@@ -37,18 +50,28 @@ const HEADER = `// Armadra — Claude Code mod (${MOD_PLUGIN_NAME}).
 //
 // Reports this session's hook events to the local Armadra core over the same
 // socket, headers and body as the armadra-hook client, and shows the canvas
-// node's name in the status line. Outside a canvas terminal ARMADRA_NODE_ID
-// is unset and every hook only passes its event on.
+// node's name in the status line; the /armadra-* slash commands run the same
+// armadra-hook canvas verbs the model runs. Outside a canvas terminal
+// ARMADRA_NODE_ID is unset and every hook only passes its event on.
 //
 // It never answers a permission prompt, never refuses or rewrites a tool
 // call, never adds to the conversation: every hook calls next(e) with the
 // event it was given. Every path is wrapped; a canvas problem must not become
 // a session problem.
-import type { EngineInterface, Register, SessionStartInput } from "claude-code";
+import type { CommandRunResult, EngineInterface, Register, SessionStartInput } from "claude-code";
 `;
 
+/** What the module is generated for besides the client. */
+export interface ClaudeModOptions {
+  /** The slash commands' descriptions (`ui.locale`); absent, English. */
+  readonly locale?: ModLocale;
+}
+
 /** `hooks/armadra.ts`: the whole module, for the hook client at `clientBin`. */
-export function claudeModSource(clientBin: string): string {
+export function claudeModSource(
+  clientBin: string,
+  options: ClaudeModOptions = {},
+): string {
   return (
     `${HEADER}\n` +
     `const ARMADRA_CLIENT = "${jsString(clientBin)}";\n` +
@@ -57,12 +80,22 @@ export function claudeModSource(clientBin: string): string {
     TRANSPORT_DECLARATIONS +
     STATUS_DECLARATIONS +
     UI_DECLARATIONS +
-    COMMAND_DECLARATIONS +
+    commandDeclarations(options.locale) +
     "\nexport const register: Register = (on) => {" +
+    sessionStart([STATUS_SESSION_START, COMMAND_SESSION_START]) +
     STATUS_REGISTRATIONS +
     UI_REGISTRATIONS +
     COMMAND_REGISTRATIONS +
     "};\n"
+  );
+}
+
+/** The module's one `session.start` hook, starting each segment's work. */
+function sessionStart(calls: readonly string[]): string {
+  return (
+    `\n  on("session.start", async ($, e, next) => {\n` +
+    calls.map((call) => `    void ${call};\n`).join("") +
+    "    return next(e);\n  });"
   );
 }
 

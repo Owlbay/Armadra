@@ -51,6 +51,24 @@ declare module "claude-code" {
     stderr: string;
   };
 
+  export type CommandSpec = {
+    name: string;
+    description: string;
+    argumentHint?: string;
+    immediate?: true;
+  };
+
+  export type CommandRunInput = {
+    command: string;
+    args: string;
+  };
+
+  export type CommandRunResult = {
+    text?: string;
+    context?: readonly string[];
+    exitCode?: number;
+  };
+
   export interface EngineInterface {
     env: { get: (name: string) => Promise<string | undefined> };
     fs: { read: (path: string) => Promise<string> };
@@ -66,6 +84,9 @@ declare module "claude-code" {
     clock: { sleep: (ms: number) => Promise<void> };
     session: { version: () => Promise<SessionVersion> };
     ui: { status: (text: string | undefined) => void };
+    command: {
+      register: (command: CommandSpec) => Promise<{ command: string }>;
+    };
   }
 
   export interface Next<I, R> {
@@ -101,6 +122,11 @@ declare module "claude-code" {
       event: "session.start",
       hook: Hook<SessionStartInput, { cwd: string }>,
     ): Registration<SessionStartInput, { cwd: string }>;
+    (
+      event: "command.run",
+      matcher: { command: string },
+      hook: Hook<CommandRunInput, CommandRunResult>,
+    ): Registration<CommandRunInput, CommandRunResult>;
     (
       event: ClassicEventName,
       hook: Hook<Record<string, unknown>, unknown>,
