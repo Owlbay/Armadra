@@ -11,7 +11,7 @@ import { parsePairingQr } from "../host/qr";
 import { LOCAL_SOURCE_ID } from "../api/source";
 import { openAfterJoin } from "../sources/join-intent";
 import { forgetRecent, setEnterIntent } from "../services/recent";
-import { routesOf } from "../sources/routing";
+import { helloHostName, routesOf } from "../sources/routing";
 import { type SourceDescriptor, SourceError } from "../sources/types";
 import {
   CloudError,
@@ -69,7 +69,11 @@ export interface NativeConnectDeps {
     readonly sourceId: string;
     readonly origin: string;
     readonly fingerprint: string;
+    /** 主机 hello 报的名字（契约 §61）；取不到不带。 */
+    readonly hostName?: string;
   }) => void;
+  /** 问主机 hello 的名字（配对成功之后、钉过信任锚）；不给就不问。 */
+  readonly hostName?: (origin: string) => Promise<string>;
   /** 记下来源后重新加载：本机源的地址在一次加载里只算一次。 */
   readonly reload: () => void;
 }
@@ -79,6 +83,7 @@ const nativeDeps = (): NativeConnectDeps => ({
   pair: pairWithGateway,
   save: saveRuntimeOrigin,
   record: recordDirectConnection,
+  hostName: (origin) => helloHostName(origin),
   reload: () => globalThis.location.reload(),
 });
 
@@ -95,10 +100,13 @@ export function recordDirectConnection(connection: {
   readonly sourceId: string;
   readonly origin: string;
   readonly fingerprint: string;
+  readonly hostName?: string;
 }): void {
   upsertConnection({
     sourceId: connection.sourceId,
     label: "",
+    // 缺省名取主机报的「主机名称」；改过名的行不跟着变（§61）。
+    ...(connection.hostName ? { defaultLabel: connection.hostName } : {}),
     baseUrl: connection.origin,
     relayOrigin: "",
     cloudIssuer: "",
@@ -138,12 +146,15 @@ export async function connectNative(
     return failureOf(error);
   }
   const sourceId = hostIdOf(session);
-  if (deps.record !== undefined && sourceId !== "")
+  if (deps.record !== undefined && sourceId !== "") {
+    const hostName = (await deps.hostName?.(scanned.origin)) ?? "";
     deps.record({
       sourceId,
       origin: scanned.origin,
       fingerprint: scanned.fingerprint,
+      ...(hostName ? { hostName } : {}),
     });
+  }
   deps.save(scanned.origin);
   deps.reload();
   return null;
@@ -217,12 +228,15 @@ export async function connectWithCode(
     return failureOf(error);
   }
   const sourceId = hostIdOf(session);
-  if (native.record !== undefined && sourceId !== "")
+  if (native.record !== undefined && sourceId !== "") {
+    const hostName = (await native.hostName?.(payload.origin)) ?? "";
     native.record({
       sourceId,
       origin: payload.origin,
       fingerprint: payload.fingerprint,
+      ...(hostName ? { hostName } : {}),
     });
+  }
   native.save(payload.origin);
   native.reload();
   return null;
@@ -398,10 +412,12 @@ export function createRelayEnrollment(
     });
   };
 
-  const connectionOf = (sourceId: string, label: string, slot: string) => {
+  // 名字是目录里那台主机登记的「主机名称」：作缺省名，改过名的行不跟着变（§61）。
+  const connectionOf = (sourceId: string, name: string, slot: string) => {
     upsertConnection({
       sourceId,
-      label,
+      label: "",
+      ...(name ? { defaultLabel: name } : {}),
       baseUrl: "",
       relayOrigin: issuer,
       cloudIssuer: issuer,

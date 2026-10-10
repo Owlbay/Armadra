@@ -19,6 +19,7 @@ afterEach(cleanup);
 const RELAYED_ROW: ServiceRow = {
   sourceId: "s1",
   name: "MacBook",
+  defaultName: "MacBook",
   local: false,
   routes: [
     {
@@ -32,6 +33,7 @@ const RELAYED_ROW: ServiceRow = {
 const DIRECT_ROW: ServiceRow = {
   sourceId: "s2",
   name: "192.168.1.8:8443",
+  defaultName: "192.168.1.8:8443",
   local: false,
   routes: [{ via: "direct", issuer: "", serviceName: "" }],
   lastUsedAt: null,

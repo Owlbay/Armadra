@@ -5,6 +5,7 @@ import {
   loadConnections,
   remoteSlotOf,
   removeConnection,
+  renameConnection,
   setActiveConnection,
   setRemoteSlot,
   touchRoute,
@@ -161,7 +162,7 @@ describe("连接表 v2：一源多路（§55）", () => {
     expect(localStorage.getItem("armadra.sources.remoteSlots")).toBe("{}");
   });
 
-  it("v1 的表一次性升到 v2：行拆成路，按源记的槽搬到那条中继上，什么都不丢", () => {
+  it("v1 的表一次性升到最新（v3）：行拆成路，按源记的槽搬到那条中继上，什么都不丢", () => {
     localStorage.setItem(
       "armadra.sources",
       JSON.stringify([
@@ -181,7 +182,7 @@ describe("连接表 v2：一源多路（§55）", () => {
       JSON.stringify({ h1: "personal:relay.example.com:acct-1", gone: "x" }),
     );
     const rows = loadConnections();
-    expect(localStorage.getItem("armadra.sources.version")).toBe("2");
+    expect(localStorage.getItem("armadra.sources.version")).toBe("3");
     expect(rows.map((row) => row.sourceId)).toEqual(["h1", "h2"]);
     expect(rows[0]).toMatchObject({
       kind: "relayed",
@@ -230,5 +231,75 @@ describe("连接表 v2：一源多路（§55）", () => {
       loadConnections()[0]?.routes?.find((route) => route.origin === LAN)
         ?.lastOkAtMs,
     ).toBe(42);
+  });
+});
+
+describe("连接表 v3：名字（§61）", () => {
+  it("v2 的表升到 v3：行上回填 defaultLabel = label，槽不动", () => {
+    localStorage.setItem("armadra.sources.version", "2");
+    localStorage.setItem(
+      "armadra.sources",
+      JSON.stringify([
+        {
+          ...RELAYED,
+          kind: "relayed",
+          orderIndex: 0,
+          routes: [
+            {
+              via: "relayed",
+              origin: RELAYED.relayOrigin,
+              cloudIssuer: RELAYED.cloudIssuer,
+              fingerprint: "",
+              preferred: true,
+              lastOkAtMs: 7,
+            },
+          ],
+        },
+      ]),
+    );
+    const slots = JSON.stringify({ h1: "legacy-slot" });
+    localStorage.setItem("armadra.sources.remoteSlots", slots);
+    const rows = loadConnections();
+    expect(localStorage.getItem("armadra.sources.version")).toBe("3");
+    expect(rows[0]).toMatchObject({
+      label: "MacBook",
+      defaultLabel: "MacBook",
+    });
+    expect(rows[0]?.routes?.[0]?.lastOkAtMs).toBe(7);
+    expect(
+      (
+        JSON.parse(localStorage.getItem("armadra.sources") ?? "[]") as {
+          defaultLabel?: string;
+        }[]
+      )[0]?.defaultLabel,
+    ).toBe("MacBook");
+    expect(localStorage.getItem("armadra.sources.remoteSlots")).toBe(slots);
+  });
+
+  it("缺省名跟着服务端；改过名的留着，清空恢复", () => {
+    upsertConnection({ ...DIRECT, defaultLabel: "laptop" });
+    expect(loadConnections()[0]).toMatchObject({
+      label: "laptop",
+      defaultLabel: "laptop",
+    });
+    upsertConnection({ ...RELAYED, label: "", defaultLabel: "laptop-2" });
+    expect(loadConnections()[0]).toMatchObject({
+      label: "laptop-2",
+      defaultLabel: "laptop-2",
+    });
+    expect(renameConnection("h1", "  工作机  ")).toMatchObject({
+      label: "工作机",
+    });
+    upsertConnection({ ...DIRECT, defaultLabel: "laptop-3" });
+    expect(loadConnections()[0]).toMatchObject({
+      label: "工作机",
+      defaultLabel: "laptop-3",
+    });
+    // 服务端这次没报名字：缺省名不变。
+    upsertConnection({ ...DIRECT });
+    expect(loadConnections()[0]?.defaultLabel).toBe("laptop-3");
+    expect(renameConnection("h1", " ")).toMatchObject({ label: "laptop-3" });
+    expect(loadConnections()[0]?.label).toBe("laptop-3");
+    expect(renameConnection("nope", "x")).toBeNull();
   });
 });

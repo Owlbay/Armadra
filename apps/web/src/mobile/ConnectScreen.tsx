@@ -118,6 +118,8 @@ export interface ConnectScreenProps {
   readonly manage?: boolean;
   readonly onOpen?: (sourceId: string) => void;
   readonly onRemove?: (sourceId: string) => void;
+  /** 改一行的名字（只在这台设备，空串恢复缺省名，契约 §61）；不给就没有重命名。 */
+  readonly onRename?: (sourceId: string, label: string) => void;
   /** 收到的是分享深链：一打开就直接挂载（`initialLink`）。 */
   readonly autoJoin?: boolean;
   /** 进来时就带着的失败（选中的连接连不上）；人一动手就清掉，不像 `failure` 那样钉住。 */
@@ -197,6 +199,7 @@ export function ConnectScreen({
   manage = false,
   onOpen,
   onRemove,
+  onRename,
   autoJoin = false,
   initialFailure,
   initialView,
@@ -432,6 +435,7 @@ export function ConnectScreen({
                   onOpen?.(sourceId);
                 }}
                 onRemove={(sourceId) => onRemove?.(sourceId)}
+                {...(onRename ? { onRename } : {})}
                 onSignIn={signInTo}
               />
               <div className="flex flex-col gap-2">
