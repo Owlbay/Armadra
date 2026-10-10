@@ -4,6 +4,7 @@ const rpc = vi.hoisted(() => ({
   sources: {
     remoteAdd: vi.fn(),
     remoteSession: vi.fn(),
+    remotePasswordChange: vi.fn(),
     addDirect: vi.fn(),
     shareLinks: vi.fn(),
     shareLinkCreate: vi.fn(),
@@ -44,6 +45,7 @@ vi.mock("./client", () => ({
 import { RuntimeRequestError } from "./request";
 import {
   addPersonalRelay,
+  changeRemotePassword,
   createShareLink,
   dismissRelayCleanup,
   renameShareLink,
@@ -55,6 +57,7 @@ import {
   presentedChallenge,
   presentedFingerprint,
   remoteFetch,
+  remotePasswordChangeable,
   revokeShareLink,
   shareLinkUrl,
   retryRelayCleanup,
@@ -192,6 +195,51 @@ describe("人机验证（契约 §62）", () => {
     await expect(
       addPersonalRelay({ issuer: ISSUER, account: "a", password: "b" }),
     ).rejects.toBe(invalid);
+  });
+});
+
+describe("改口令（契约 §63）", () => {
+  it("能力来自 core 代管会话的 capabilities", async () => {
+    rpc.sources.remoteSession.mockResolvedValueOnce({
+      accessToken: "a",
+      accessExpiresAtMs: 1,
+      issuer: ISSUER,
+      capabilities: ["auth.password", "auth.password-change"],
+    });
+    expect(await remotePasswordChangeable("svc")).toBe(true);
+    rpc.sources.remoteSession.mockResolvedValueOnce({
+      accessToken: "a",
+      accessExpiresAtMs: 1,
+      issuer: ISSUER,
+      capabilities: ["auth.password"],
+    });
+    expect(await remotePasswordChangeable("svc")).toBe(false);
+  });
+
+  it("challenge_required → 挑战；带令牌重调；别的失败原样抛", async () => {
+    rpc.sources.remotePasswordChange.mockRejectedValueOnce(
+      new RuntimeRequestError(400, "x", "challenge_required", {
+        code: "challenge_required",
+        details: { provider: "turnstile", siteKey: "0xSITE" },
+      }),
+    );
+    const input = { serviceId: "svc", password: "old", newPassword: "new" };
+    expect(await changeRemotePassword(input)).toEqual({
+      kind: "challenge",
+      siteKey: "0xSITE",
+    });
+    expect(rpc.sources.remotePasswordChange.mock.calls[0]![0]).toEqual(input);
+    rpc.sources.remotePasswordChange.mockResolvedValueOnce({});
+    expect(
+      await changeRemotePassword({ ...input, challengeToken: "tk" }),
+    ).toEqual({ kind: "done" });
+    expect(rpc.sources.remotePasswordChange.mock.calls[1]![0]).toEqual({
+      ...input,
+      challengeToken: "tk",
+    });
+    const wrong = new RuntimeRequestError(401, "x", "credentials_invalid", {});
+    rpc.sources.remotePasswordChange.mockRejectedValueOnce(wrong);
+    await expect(changeRemotePassword(input)).rejects.toBe(wrong);
   });
 });
 

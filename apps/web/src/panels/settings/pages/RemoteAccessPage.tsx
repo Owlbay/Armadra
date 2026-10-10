@@ -19,6 +19,7 @@ import {
   notifyShellSourcesChanged,
   pendingCode,
   relayPending,
+  remotePasswordChangeable,
   remoteSources,
   removeRemote,
   removeSource,
@@ -51,6 +52,10 @@ import {
   relayPendingReason,
 } from "../RemoteShare";
 import { GatewayConfigSection } from "./gateway/GatewaySection";
+import {
+  ChangePasswordDialog,
+  type PasswordTarget,
+} from "./RemotePasswordDialog";
 import { groupFingerprint } from "./gateway/PairingCard";
 import {
   ResponsiveAlertDialog,
@@ -92,6 +97,8 @@ import { sourcePill } from "../source-status";
 import { checkAddress } from "./remote-address";
 
 export const SOURCES_QUERY_KEY = ["sources", "list"] as const;
+/** 中转账号能不能改口令（按 serviceId 分）。 */
+const PASSWORD_CHANGEABLE_KEY = ["sources", "passwordChangeable"] as const;
 
 /** 设置导航里的分区 id（`nav.ts`）。 */
 export const REMOTE_SECTION = "remoteAccess";
@@ -165,6 +172,8 @@ export function RemoteAccessPage() {
   });
   const [removing, setRemoving] = React.useState<Removal | null>(null);
   const [renaming, setRenaming] = React.useState<Renaming | null>(null);
+  const [changingPassword, setChangingPassword] =
+    React.useState<PasswordTarget | null>(null);
   const [dismissing, setDismissing] = React.useState<string | null>(null);
   // 页面正走的隧道与当前源：对它们不给停用、登出、移除——那是自断。
   const access = useRemoteAccess();
@@ -304,6 +313,12 @@ export function RemoteAccessPage() {
               }
               onSignOut={() => logout.mutate(remote.serviceId)}
               onRetryCleanup={() => cleanup.mutate(remote.issuer)}
+              onChangePassword={() =>
+                setChangingPassword({
+                  serviceId: remote.serviceId,
+                  issuer: remote.issuer,
+                })
+              }
               onRename={() =>
                 setRenaming({
                   kind: "remote",
@@ -451,6 +466,10 @@ export function RemoteAccessPage() {
         onClose={() => setMounting(false)}
         onMounted={() => void changed()}
       />
+      <ChangePasswordDialog
+        target={changingPassword}
+        onClose={() => setChangingPassword(null)}
+      />
       <RenameDialog
         target={renaming}
         onClose={() => setRenaming(null)}
@@ -551,7 +570,10 @@ interface Removal {
   readonly issuer?: string;
 }
 
-/** 一行中转账号：登录 / 登出、重试中继侧清理、移除。分享本机在页首。 */
+/**
+ * 一行中转账号：登录 / 登出、改口令（中继报能力才有，§63）、重试中继侧清理、移除。
+ * 分享本机在页首。
+ */
 function RemoteRow({
   remote,
   pending,
@@ -559,6 +581,7 @@ function RemoteRow({
   onSignIn,
   onSignOut,
   onRetryCleanup,
+  onChangePassword,
   onRename,
   onRemove,
 }: {
@@ -569,10 +592,19 @@ function RemoteRow({
   onSignIn(): void;
   onSignOut(): void;
   onRetryCleanup(): void;
+  onChangePassword(): void;
   onRename(): void;
   onRemove(): void;
 }) {
   const t = useT();
+  const signedIn = remote.hasCredentials && remote.kind === "personal";
+  const changeable = useQuery({
+    queryKey: [...PASSWORD_CHANGEABLE_KEY, remote.serviceId],
+    queryFn: () => remotePasswordChangeable(remote.serviceId),
+    enabled: signedIn,
+    retry: false,
+    staleTime: 5 * 60_000,
+  });
   return (
     <SettingsRow
       label={remote.label}
@@ -603,6 +635,11 @@ function RemoteRow({
         <DropdownMenuItem onSelect={onRename}>
           {t("services.rename")}
         </DropdownMenuItem>
+        {signedIn && changeable.data === true && (
+          <DropdownMenuItem onSelect={onChangePassword}>
+            {t("remote.password.change")}
+          </DropdownMenuItem>
+        )}
         {remote.hasCredentials && (
           <DropdownMenuItem disabled={inUse} onSelect={onSignOut}>
             {t("remote.signOut")}

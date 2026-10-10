@@ -37,6 +37,8 @@ const api = vi.hoisted(() => ({
   renameShareLink: vi.fn(),
   renameSource: vi.fn(),
   renameRemote: vi.fn(),
+  remotePasswordChangeable: vi.fn(),
+  changeRemotePassword: vi.fn(),
 }));
 const boot = vi.hoisted(() => ({
   applySourceTable: vi.fn(async () => undefined),
@@ -116,6 +118,7 @@ beforeEach(() => {
   usePreferencesStore.setState({ locale: "en" });
   api.notifyShellSourcesChanged.mockResolvedValue(false);
   api.relayPending.mockResolvedValue([]);
+  api.remotePasswordChangeable.mockResolvedValue(false);
 });
 afterEach(() => {
   Object.assign(access, {
@@ -1114,5 +1117,137 @@ describe("经远端访问时不自断", () => {
     } finally {
       resetHostedRelay(null);
     }
+  });
+});
+
+describe("改口令（§63）", () => {
+  function openMenu(name: string) {
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: `Actions for ${name}` }),
+      { button: 0, ctrlKey: false },
+    );
+  }
+
+  function fill(dialog: HTMLElement, values: [string, string, string]) {
+    const [current, next, confirm] = values;
+    fireEvent.change(within(dialog).getByLabelText("Current password"), {
+      target: { value: current },
+    });
+    fireEvent.change(within(dialog).getByLabelText("New password"), {
+      target: { value: next },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Confirm new password"), {
+      target: { value: confirm },
+    });
+  }
+
+  it("中继报能力才有入口；两次不一致不提交；成功提示并关闭", async () => {
+    api.listSources.mockResolvedValue({ sources: [local], remotes: [relay] });
+    api.remotePasswordChangeable.mockResolvedValue(true);
+    api.changeRemotePassword.mockResolvedValue({ kind: "done" });
+    mount();
+    await screen.findByText(relay.label);
+    await waitFor(() =>
+      expect(api.remotePasswordChangeable).toHaveBeenCalledWith("svc"),
+    );
+    openMenu(relay.label);
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Change password" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    fill(dialog, ["old-pass", "new-passphrase-1", "new-passphrase-2"]);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Change" }));
+    expect(
+      await within(dialog).findByText("The new passwords don't match"),
+    ).toBeTruthy();
+    expect(api.changeRemotePassword).not.toHaveBeenCalled();
+    fill(dialog, ["old-pass", "new-passphrase-1", "new-passphrase-1"]);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Change" }));
+    await waitFor(() =>
+      expect(api.changeRemotePassword).toHaveBeenCalledWith({
+        serviceId: "svc",
+        password: "old-pass",
+        newPassword: "new-passphrase-1",
+      }),
+    );
+    await waitFor(() =>
+      expect(toasts.success).toHaveBeenCalledWith(
+        "Password changed. Other devices need to sign in again",
+      ),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("中继不报能力：菜单里没有「修改口令」", async () => {
+    api.listSources.mockResolvedValue({ sources: [local], remotes: [relay] });
+    mount();
+    await screen.findByText(relay.label);
+    await waitFor(() =>
+      expect(api.remotePasswordChangeable).toHaveBeenCalled(),
+    );
+    openMenu(relay.label);
+    await screen.findByRole("menuitem", { name: "Sign out" });
+    expect(
+      screen.queryByRole("menuitem", { name: "Change password" }),
+    ).toBeNull();
+  });
+
+  it("已登出的一行不问能力、没有入口", async () => {
+    api.listSources.mockResolvedValue({
+      sources: [local],
+      remotes: [{ ...relay, hasCredentials: false }],
+    });
+    mount();
+    await screen.findByText(relay.label);
+    openMenu(relay.label);
+    await screen.findByRole("menuitem", { name: "Rename" });
+    expect(api.remotePasswordChangeable).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("menuitem", { name: "Change password" }),
+    ).toBeNull();
+  });
+
+  it("要求人机验证：挑战面板带 armadra-password，令牌到了带着重提交；错误按码显示", async () => {
+    api.listSources.mockResolvedValue({ sources: [local], remotes: [relay] });
+    api.remotePasswordChangeable.mockResolvedValue(true);
+    api.changeRemotePassword
+      .mockResolvedValueOnce({ kind: "challenge", siteKey: "0xSITE" })
+      .mockRejectedValueOnce(new Error("Wrong account or password"));
+    mount();
+    await screen.findByText(relay.label);
+    await waitFor(() =>
+      expect(api.remotePasswordChangeable).toHaveBeenCalled(),
+    );
+    openMenu(relay.label);
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Change password" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    fill(dialog, ["old-pass", "new-passphrase-1", "new-passphrase-1"]);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Change" }));
+    const frame = await waitFor(() => {
+      const found = document.querySelector("iframe");
+      if (found === null) throw new Error("no frame");
+      return found;
+    });
+    const url = new URL(frame.getAttribute("src")!);
+    expect(url.searchParams.get("siteKey")).toBe("0xSITE");
+    expect(url.searchParams.get("action")).toBe("armadra-password");
+    fireEvent(
+      window,
+      new MessageEvent("message", {
+        data: { type: "armadra-challenge", token: "tk-pw" },
+        origin: new URL(ISSUER).origin,
+      }),
+    );
+    await waitFor(() =>
+      expect(api.changeRemotePassword).toHaveBeenLastCalledWith({
+        serviceId: "svc",
+        password: "old-pass",
+        newPassword: "new-passphrase-1",
+        challengeToken: "tk-pw",
+      }),
+    );
+    expect(await screen.findByText("Wrong account or password")).toBeTruthy();
   });
 });

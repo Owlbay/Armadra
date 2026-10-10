@@ -122,6 +122,45 @@ export function addPersonalRelay(input: {
   );
 }
 
+/** 远程服务报这个能力才有改口令（契约 §63，cloud-api §18）。 */
+export const PASSWORD_CHANGE_CAPABILITY = "auth.password-change";
+
+/**
+ * 这一行远程服务能不能改口令：问 core 代管的会话报的能力（`sources.remoteSession`）。
+ * 只对已登录的个人中转问；连不上当作不能。
+ */
+export async function remotePasswordChangeable(
+  serviceId: string,
+): Promise<boolean> {
+  const session = await localClient().sources.remoteSession({ serviceId });
+  return session.capabilities.includes(PASSWORD_CHANGE_CAPABILITY);
+}
+
+/**
+ * 改远程服务账号的口令（契约 §63）：要求人机验证时答 `challenge`，页面拿到令牌带着
+ * `challengeToken` 重调。
+ */
+export async function changeRemotePassword(input: {
+  serviceId: string;
+  password: string;
+  newPassword: string;
+  challengeToken?: string;
+}): Promise<{ kind: "done" } | { kind: "challenge"; siteKey: string }> {
+  try {
+    await localClient().sources.remotePasswordChange({
+      serviceId: input.serviceId,
+      password: input.password,
+      newPassword: input.newPassword,
+      ...(input.challengeToken ? { challengeToken: input.challengeToken } : {}),
+    });
+    return { kind: "done" };
+  } catch (error) {
+    const siteKey = presentedChallenge(error);
+    if (siteKey === null) throw error;
+    return { kind: "challenge", siteKey };
+  }
+}
+
 export function logoutRemote(serviceId: string) {
   return localClient().sources.remoteLogout({ serviceId });
 }
