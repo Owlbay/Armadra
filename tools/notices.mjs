@@ -441,6 +441,14 @@ function main(argv) {
       console.error(
         `${NOTICES_FILE} is out of date with the installed dependencies; run \`node tools/notices.mjs\` and commit the result.`,
       );
+      // 只在 CI 上不一致时，没有第一处差异就无从查起。
+      const have = actual.split("\n");
+      const want = expected.split("\n");
+      const line = want.findIndex((text, index) => have[index] !== text);
+      const at = line === -1 ? want.length : line;
+      console.error(
+        `first difference at line ${at + 1}:\n  committed: ${have[at] ?? "<end>"}\n  generated: ${want[at] ?? "<end>"}`,
+      );
       return 1;
     }
     console.log(`${NOTICES_FILE} is up to date`);
