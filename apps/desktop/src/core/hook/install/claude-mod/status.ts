@@ -63,14 +63,19 @@ async function armadraForward($: EngineInterface, payload: unknown): Promise<voi
   }
 }
 
-// The node's name, nothing else: a name has no language. No name, no line.
+// The node's name and its board's, nothing else: a name has no language.
+// The name the session started under until the core's overlay says the live
+// one (M2); no name and no board, no line.
 async function armadraStatus($: EngineInterface): Promise<void> {
   try {
     if (!armadraInteractive) return;
     if (!armadraIsId(await $.env.get("ARMADRA_NODE_ID"))) return;
     if ((await armadraProfile($)) === "acp") return;
-    const name = ((await $.env.get("ARMADRA_NODE_NAME")) ?? "").trim();
-    $.ui.status(name === "" ? undefined : name);
+    const overlay = (await $.state.get(ARMADRA_OVERLAY)).value ?? null;
+    const started = ((await $.env.get("ARMADRA_NODE_NAME")) ?? "").trim();
+    const name = overlay === null || overlay.name === "" ? started : overlay.name;
+    const line = [name, overlay?.board ?? ""].filter((part) => part !== "").join(" · ");
+    $.ui.status(line === "" ? undefined : line);
   } catch {
     // A status line is a nicety.
   }
@@ -92,6 +97,8 @@ async function armadraStart($: EngineInterface, e: SessionStartInput): Promise<v
     };
     await armadraStatus($);
     await armadraHello($, undefined);
+    // The band and the toasts (M2): an interactive terminal only, never -p or ACP.
+    if (armadraInteractive && (await armadraProfile($)) !== "acp") armadraWatch($);
   } catch {
     // Without a hello the settings page says this session did not report.
   }

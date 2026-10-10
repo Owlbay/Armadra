@@ -24,7 +24,13 @@
  *      laid beside it (`.claude-plugin/types/`), when that build lays them;
  *   5. the operator's own `~/.claude/settings.json` is byte-for-byte what it
  *      was;
- *   6. the slash commands (contract §59): `claude -p '/armadra-list'` prints
+ *   6. the overlay (M2, contract §57.4 / §58): `GET /node/overlay` over the
+ *      hook socket answers names and counts and no message body, `304` on
+ *      its own revision, `403` without the node token; an interactive
+ *      `claude` in a canvas terminal draws the band above its prompt
+ *      (`↑ lead … ✉ 1`), the board's name in its status line, and a toast
+ *      with the sender's name when another message arrives;
+ *   7. the slash commands (contract §59): `claude -p '/armadra-list'` prints
  *      what `armadra-hook canvas list` prints in the same node, and asks the
  *      model nothing.
  *
@@ -45,6 +51,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -325,6 +332,92 @@ function seedNode(dataDir, title) {
   }
 }
 
+/** Writes the probe's own rows next to the running core (WAL: both may write). */
+function writeRows(dataDir, statements) {
+  const { DatabaseSync } = require("node:sqlite");
+  const database = new DatabaseSync(join(dataDir, "canvas.db"));
+  try {
+    database.exec("PRAGMA busy_timeout = 5000");
+    for (const [sql, ...params] of statements)
+      database.prepare(sql).run(...params);
+  } finally {
+    database.close();
+  }
+}
+
+/** The board a seeded node is on. */
+function boardOf(dataDir, nodeId) {
+  return readRows(
+    dataDir,
+    "SELECT board_id AS id FROM nodes WHERE id = ?",
+    nodeId,
+  )[0]?.id;
+}
+
+/** One peer message from `from` to `to`, as `post` would have stored it. */
+function postMail(dataDir, from, to, body) {
+  const now = Math.floor(Date.now() / 1000);
+  writeRows(dataDir, [
+    [
+      "INSERT INTO agent_mailbox (id, workspace_id, source_node_id, target_node_id, message_key, body, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      randomUUID(),
+      WORKSPACE,
+      from,
+      to,
+      randomUUID(),
+      body,
+      now,
+      now + 3600,
+    ],
+  ]);
+}
+
+/** The hook surface's own GET, over its socket, as the mod makes it. */
+function hookGet(dataDir, path, headers = {}) {
+  const endpoint = Object.fromEntries(
+    readFileSync(join(dataDir, "hook-endpoint.env"), "utf8")
+      .split("\n")
+      .map((line) => /^(?:export )?([A-Z_]+)='(.*)'$/.exec(line.trim()))
+      .filter(Boolean)
+      .map((found) => [found[1], found[2]]),
+  );
+  return new Promise((resolveAnswer, reject) => {
+    const request = http.request(
+      {
+        socketPath: endpoint.ARMADRA_HOOK_SOCK,
+        path,
+        method: "GET",
+        headers: {
+          "x-armadra-hook-token": endpoint.ARMADRA_HOOK_TOKEN,
+          ...headers,
+        },
+      },
+      (response) => {
+        let text = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => (text += chunk));
+        response.on("end", () =>
+          resolveAnswer({
+            status: response.statusCode,
+            headers: response.headers,
+            text,
+          }),
+        );
+      },
+    );
+    request.on("error", reject);
+    request.end();
+  });
+}
+
+/** What a terminal drew, its escape sequences taken out. */
+function plain(screen) {
+  return screen
+    .replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, "")
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1b[@-_]/g, "");
+}
+
 function readRows(dataDir, sql, ...params) {
   const { DatabaseSync } = require("node:sqlite");
   const database = new DatabaseSync(join(dataDir, "canvas.db"), {
@@ -394,6 +487,90 @@ async function runInTerminal(core, dataDir, nodeId, line) {
   }
   socket.close();
   return { session: created, code, screen: frames.text() };
+}
+
+/**
+ * An interactive line in a canvas agent terminal: typed, then the screen
+ * watched until `until` holds for its plain text. Hands back the session, the
+ * socket and the frames so the caller can type more and end it.
+ */
+async function interactiveInTerminal(core, dataDir, nodeId, line) {
+  const created = await json(
+    await fetch(`${core.base}/api/terminals`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        workspaceId: WORKSPACE,
+        cwd: join(dataDir, "work"),
+        shell: "/bin/sh",
+        nodeId,
+        agent: { id: "claude" },
+      }),
+    }),
+  );
+  const socket = openSocket(core.ws, created.id);
+  const frames = collect(socket);
+  await new Promise((done) => socket.once("open", done));
+  await frames.waitFor((frame) => frame.type === "hello");
+  let inputId = 0;
+  const type = async (data) => {
+    inputId += 1;
+    const id = inputId;
+    socket.send(JSON.stringify({ type: "input", data, inputId: id }));
+    await frames.waitFor(
+      (frame) => frame.type === "ack" && frame.inputId === id,
+    );
+  };
+  await type(`${line}\r`);
+  // The screen as written since `from` (a length of the output), escapes
+  // and spaces taken out: a cell renderer moves the cursor over blanks and
+  // rewrites only what changed, so words are compared without their spaces.
+  const mark = () => frames.text().length;
+  const watch = async (what, until, timeout = 60_000, from = 0) => {
+    const deadline = Date.now() + timeout;
+    for (;;) {
+      const text = plain(frames.text().slice(from)).replace(/\s+/g, "");
+      if (until(text)) return text;
+      if (Date.now() > deadline)
+        throw new Error(
+          `timed out waiting for ${what}; screen:\n${text.slice(-3000)}`,
+        );
+      await delay(250);
+    }
+  };
+  return { session: created, socket, frames, type, watch, mark };
+}
+
+/**
+ * A first run that asks nothing: onboarding done, the work folder trusted,
+ * the probe's fake key approved. Written into the probe's own
+ * CLAUDE_CONFIG_DIR (the core's temporary HOME), never the operator's.
+ */
+function seedInteractiveClaude(core, dataDir, key) {
+  const config = join(core.home, ".claude");
+  mkdirSync(config, { recursive: true });
+  const env = `HOME=${quote(core.home)} CLAUDE_CONFIG_DIR=${quote(config)}`;
+  const work = join(dataDir, "work");
+  let real = work;
+  try {
+    real = realpathSync(work);
+  } catch {
+    real = work;
+  }
+  const trusted = {
+    hasTrustDialogAccepted: true,
+    hasCompletedProjectOnboarding: true,
+  };
+  const seeded = JSON.stringify({
+    hasCompletedOnboarding: true,
+    theme: "dark",
+    customApiKeyResponses: { approved: [key.slice(-20)], rejected: [] },
+    projects: { [work]: trusted, [real]: trusted },
+  });
+  // Where this build looks with CLAUDE_CONFIG_DIR set, and without.
+  writeFileSync(join(config, ".claude.json"), seeded);
+  writeFileSync(join(core.home, ".claude.json"), seeded);
+  return env;
 }
 
 async function waitFor(what, read, timeout = 15_000) {
@@ -502,7 +679,8 @@ async function main() {
     assert(launcher, "no run/claude");
     console.log("gate open, run/claude carries the mod");
 
-    const api_env = `ANTHROPIC_API_KEY=sk-ant-api03-armadra-probe-fake ANTHROPIC_BASE_URL=http://127.0.0.1:${api.port}`;
+    const fakeKey = "sk-ant-api03-armadra-probe-fake";
+    const api_env = `ANTHROPIC_API_KEY=${fakeKey} ANTHROPIC_BASE_URL=http://127.0.0.1:${api.port}`;
     const prompt = `-p 'run echo hi' --allowedTools Bash`;
     const viaLauncher = (extra = "") =>
       `${extra}${api_env} ${quote(launcher)} ${quote(found.program)} ${prompt}`;
@@ -640,6 +818,102 @@ async function main() {
       console.log("4. this build lays no types beside the mod (2.1.295+)");
     }
 
+    // 6. The overlay (M2). The mod node gets a named main and an unread
+    // message; first the route itself, then claude -p, then the band.
+    const lead = seedNode(dataDir, "lead terminal");
+    const board = boardOf(dataDir, modNode);
+    writeRows(dataDir, [
+      [
+        "INSERT INTO node_handles (board_id, handle, node_id, updated_at) VALUES (?, 'lead', ?, ?)",
+        board,
+        lead,
+        new Date().toISOString(),
+      ],
+      [
+        "INSERT INTO context_links (node_id, workspace_id, links_json, updated_at) VALUES (?, ?, ?, ?) " +
+          "ON CONFLICT(node_id) DO UPDATE SET links_json = excluded.links_json",
+        modNode,
+        WORKSPACE,
+        JSON.stringify([
+          { id: lead, title: "lead terminal", kind: "terminal", role: "main" },
+        ]),
+        new Date().toISOString(),
+      ],
+    ]);
+    postMail(dataDir, lead, modNode, "PROBE-SECRET-BODY");
+    const nodeToken = readFileSync(
+      join(dataDir, "node-tokens", modNode),
+      "utf8",
+    ).trim();
+    const asked = await hookGet(dataDir, `/node/overlay?nodeId=${modNode}`, {
+      "x-armadra-node-token": nodeToken,
+    });
+    assert(asked.status === 200, `overlay: ${asked.status} ${asked.text}`);
+    const overlay = JSON.parse(asked.text);
+    assert(
+      overlay.links.main[0]?.name === "lead" &&
+        overlay.inbox.pending === 1 &&
+        overlay.inbox.latestFrom === "lead" &&
+        !asked.text.includes("PROBE-SECRET-BODY"),
+      `overlay: ${asked.text}`,
+    );
+    const again = await hookGet(dataDir, `/node/overlay?nodeId=${modNode}`, {
+      "x-armadra-node-token": nodeToken,
+      "if-none-match": `"${overlay.revision}"`,
+    });
+    assert(again.status === 304, `overlay again: ${again.status}`);
+    const refusedOverlay = await hookGet(
+      dataDir,
+      `/node/overlay?nodeId=${modNode}`,
+    );
+    assert(
+      refusedOverlay.status === 403,
+      `overlay without a token: ${refusedOverlay.status}`,
+    );
+    console.log(
+      "6. /node/overlay: names and counts, no body; 304 on its revision; 403 without the node token",
+    );
+
+    const claudeHome = seedInteractiveClaude(core, dataDir, fakeKey);
+    const live = await interactiveInTerminal(
+      core,
+      dataDir,
+      modNode,
+      `${claudeHome} ${api_env} ${quote(launcher)} ${quote(found.program)}`,
+    );
+    try {
+      await live.watch(
+        "the band above the prompt",
+        (text) => text.includes("↑lead") && text.includes("✉1"),
+      );
+      await live.watch("the board in the status line", (text) =>
+        text.includes("·probe"),
+      );
+      const before = live.mark();
+      postMail(dataDir, lead, modNode, "PROBE-SECRET-BODY-2");
+      // Only what is new is drawn again: the toast is, the band's count is a
+      // changed cell (the unit and plugin tests read the band itself).
+      const after = await live.watch(
+        "the toast for the second message",
+        (text) => text.includes("✉lead"),
+        20_000,
+        before,
+      );
+      assert(
+        !plain(live.frames.text()).includes("PROBE-SECRET-BODY") &&
+          !after.includes("PROBE-SECRET"),
+        "a message body reached the terminal",
+      );
+      console.log(
+        "6. interactive: the band draws ↑ lead ✉ 1, the status line names the board, a new message raises a toast ✉ lead; no body on screen",
+      );
+    } finally {
+      await live.type("\x03").catch(() => undefined);
+      await delay(300);
+      await live.type("\x03").catch(() => undefined);
+      live.socket.close();
+    }
+
     // 5. Nothing of the operator's moved.
     assert(
       digest(operatorSettings) === before,
@@ -647,7 +921,7 @@ async function main() {
     );
     console.log("5. ~/.claude/settings.json unchanged");
 
-    // 6. A slash command: the mod runs the client's verb, no model turn.
+    // 7. A slash command: the mod runs the client's verb, no model turn.
     const commandNode = seedNode(dataDir, "commands");
     const direct = await runInTerminal(
       core,
@@ -680,7 +954,7 @@ async function main() {
       `/armadra-list asked the model (${api.turns() - turnsBefore} turns)`,
     );
     console.log(
-      "6. /armadra-list prints what armadra-hook canvas list prints, no model turn",
+      "7. /armadra-list prints what armadra-hook canvas list prints, no model turn",
     );
 
     if (record) recordCompat(found.version);

@@ -1,3 +1,5 @@
+import { DEFAULT_MOD_LOCALE, type ModLocale } from "./i18n";
+
 /**
  * The `/armadra-*` slash commands (contract §59, docs/design/claude-mods.md
  * §5.1, package M3).
@@ -17,11 +19,6 @@
  *
  * Text for `template.ts`; see `transport.ts` for the rules it is written by.
  */
-
-/** The languages the descriptions are written in (the device setting `ui.locale`). */
-export type ModLocale = "zh-CN" | "en";
-
-const DEFAULT_LOCALE: ModLocale = "en";
 
 /**
  * The words, mirrored from `apps/web/src/i18n/mod-commands.ts` (where they
@@ -114,7 +111,9 @@ export function commandMessages(
   locale: ModLocale | undefined,
 ): Readonly<Record<string, string>> {
   return COMMAND_MESSAGES[
-    locale !== undefined && locale in COMMAND_MESSAGES ? locale : DEFAULT_LOCALE
+    locale !== undefined && locale in COMMAND_MESSAGES
+      ? locale
+      : DEFAULT_MOD_LOCALE
   ];
 }
 

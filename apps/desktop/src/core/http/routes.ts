@@ -1268,10 +1268,11 @@ export const ROUTES: readonly RouteEntry[] = [
     implemented: true,
   },
   {
-    // 契约 §57.4（M2）：mod 的横条读的计数。表里有、这一版答 501。
+    // 契约 §57.4 / §58：mod 的横条读的计数。只在本机 hook 通道上，节点 token 必须验过。
     path: "/node/overlay",
     methods: ["GET"],
     surface: "hook",
+    implemented: true,
   },
   {
     // 契约 §20.4：画布启动器兑换节点凭据。只在本机 hook 通道上，带节点 token。

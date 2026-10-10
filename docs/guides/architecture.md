@@ -265,8 +265,10 @@ Agent 节点就是终端节点里跑着一个 CLI，没有中间协议：
    节点终端 `PATH` 最前面的同名垫片 `shims/<cli>` 让手敲的 CLI 也经启动器：Claude / Codex / Copilot 是**命令 Hook**（行是 `armadra-hook`），
    Pi / Oh My Pi 是生成的 **TS 扩展**，OpenCode 是插件；Claude ≥ 2.1.293 时除 `PermissionRequest`
    外的事件改由 core 生成的 **mod**（`integration/claude/mod/`，`core/hook/install/claude-mod/`）进程内转发，
-   启动器在安全模式或关掉非必要网络时退回全套命令 Hook（[Claude Code mods](../design/claude-mods.md)，契约 §57）；
-   mod 还带 `/armadra-*` 斜杠命令（经 `armadra-hook canvas` 执行），ACP 下经 `CLAUDE_CODE_PLUGIN_DIRS` 挂给适配器、只带命令（契约 §59）。core 里拼启动行的只有
+   启动器在安全模式或关掉非必要网络时退回全套命令 Hook；交互式会话里 mod 每 3 秒读一次只读的
+   `GET /node/overlay`（名字与计数），在提示符上方画横条、来消息弹 toast；mod 还带 `/armadra-*` 斜杠命令
+   （经 `armadra-hook canvas` 执行），ACP 下经 `CLAUDE_CODE_PLUGIN_DIRS` 挂给适配器、只带命令
+   （[Claude Code mods](../design/claude-mods.md)，契约 §57、§58、§59）。core 里拼启动行的只有
    `core/agent/canvas-launch.ts`，页面只有 `web/agent/launch.ts`；整行按节点 shell 的方言
    引用（posix、fish、cmd.exe、PowerShell 7 / 5.1），Windows 上绕过 npm 的 `.cmd` 包装直接
    起真正的程序，启动器是 C# 写的 `armadra-launch.exe` 副本加 `.launch` 文件；mise / asdf 的垫片

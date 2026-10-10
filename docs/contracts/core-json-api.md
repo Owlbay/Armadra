@@ -3750,7 +3750,7 @@ hook surface 上，应用 bearer + 节点 token 必须**验过**（与 `/credent
 
 答 `204`；bearer 不对或节点 token 未验过 `403 forbidden`；体不是对象或字段不合规 `400 bad_request`。只存内存、每个节点留最新一条（最多 512 个节点，最旧的先走），core 重启即空；别的字段一律丢弃，不记日志。
 
-### 57.4 `GET /node/overlay`：横条读的计数（M2，这一版答 `501`）
+### 57.4 `GET /node/overlay`：横条读的计数（M2，自 1.30 起实现，细节见 §58）
 
 hook surface 上，节点 token 必须验过，只答调用者自己节点的连线：
 
@@ -3793,11 +3793,39 @@ hook surface 上，节点 token 必须验过，只答调用者自己节点的连
 
 `gate` 是这台机器下一次画布启动的门：`enabled` / `disabled`；`reason` 在关着时给出 `version_below_min` / `version_unknown` / `windows_launcher` / `remote_unprobed`，开着时为 `null`（环境门在节点 shell 里判断，core 不知道，不进 `reason`）；`probedVersion` 是探测缓存里的版本或 `null`；`sessions` 是 §57.3 收到的 hello（只取 `engine` 为 `claude` 的）。共享层 `integrationModsSchema` 同形。
 
-### 57.6 设置 `ui.locale`（M2）
+### 57.6 设置 `ui.locale`（M2，自 1.30 起，见 §58.3）
 
 设备级设置，`zh-CN` | `en`，页面在切换界面语言时写，core 生成 mod 源码时读，只用于终端里需要词的地方（M3 斜杠命令的说明）。M1 的终端文案只有节点名，不依赖它。
 
 - 不写数据库迁移；`HOOK_CLIENT_REVISION` 不动；没有新 procedure。
+
+## 58. Claude Code mods M2：`/node/overlay` 落地、`ui.locale` 与 mod 的状态契约
+
+自协议 1.30 起。§57.4 与 §57.6 在这一版落地；本节只补 §57 没写到的细节，不改 §57 已定的形状。设计见 [Claude Code mods](../design/claude-mods.md) §4。
+
+### 58.1 `GET /node/overlay?nodeId=<id>`
+
+- 节点由查询参数 `nodeId` 指定（GET 没有请求体）；应用 bearer 不对、`nodeId` 不是节点 id、节点 token 对这个节点没验过，一律 `403 forbidden`（与 §57.3 同门）。节点不在任何画板上 `404 not_found`。
+- 答复形状同 §57.4，各字段来源：
+  - `node.name`：节点的名字（`node_handles`），没有名字时用标题；`node.role`：`main` / `sub`，只有对等连线或没有连线时为 `null`；`node.agentId` 可为 `null`。
+  - `board.title`：节点所在画板的名字。
+  - `links`：只读调用者**自己**的链接文档（`context_links`，画布按连线推送的那一份），`shape` 链接不算；链接指向的节点必须在调用者同一个工作空间的画板上，否则不出现。对方相对本节点是主进 `main`、是从进 `subs`，其余进 `peers`，按文档顺序，最多 64 个；`name` 同 `node.name` 的规则。
+  - `inbox.pending`：未确认、未过期、不是投递回执的同级消息条数；`latestSequence` 是其中最大的 `sequence`（没有为 `0`）；`latestFrom` 是那一条的署名（名字，没有名字用标题，节点已删为 `""`）。正文不出此门。
+  - `outbox.queued`：本节点发起、还在排队或投递中的条数；`approvals.pending`：本节点还没人回答的权限请求条数。
+- `revision` 是其余字段的摘要（非负 32 位整数），只用于判断「有没有变」，不保证单调。答复带 `ETag: "<revision>"` 与 `Cache-Control: no-store`；请求的 `If-None-Match` 含同一个值（或 `*`）时答 `304`，没有体。
+- 只读：不写库、不记日志、不发事件。
+
+### 58.2 mod 的轮询、横条与 toast
+
+- 只有交互式终端会话（`session.start` 的 `surface` 为 `terminal` 且 `isInteractive`，profile 不是 `acp`）每 3 秒轮询一次，带上一次的 `If-None-Match`；`-p` 与 ACP 不轮询。
+- 横条（`AbovePrompt`）一行：`↑ <主>`、`↓ <从>`、`↔ <对等>`、`✉ <未读数>`，空的段不画，窄于 40 列不画 `↔`；每段最多两个名字，其余写 `+N`，全都没有名字时只写个数。没有连线也没有未读时不画。没有可翻译的词，也没有按钮。
+- 有比上次见过的更新的消息时弹一次 toast `✉ <署名>`，不带正文；会话里第一次拿到答复只记下当前序号、不弹。状态栏补成 `<节点名> · <画板名>`。
+- mod 的会话状态（`$.state`）由 `mod/hooks/armadra-state.d.ts` 声明（`plugin.json` 的 `types` 指向它），只有 `armadra-mod.overlay`（上面字段的子集）与 `armadra-mod.seen`（序号）两项。`MOD_REVISION` 升为 2，`INTEGRATION_REVISION` 随之为 `50218`。
+
+### 58.3 设置 `ui.locale`
+
+- 设备级（随执行主机，不随账号）：`zh-CN` | `en`。页面在切换界面语言时写，打开时若与 core 不一致也写一次；成员（读不了设置文档的）不写。值不在这两个里时 core 归一化时去掉它；没有这个键时 core 按 `en` 生成。
+- 只用于生成 mod 里需要词的地方（M3 斜杠命令的说明）。模块按语言生成，语言变了，下一次画布启动前 core 把 mod 模块重写。
 
 ## 59. Claude Code mod 的斜杠命令与 ACP 挂载
 
@@ -3820,7 +3848,7 @@ mod 在 `session.start` 用 `$.command.register` 注册七条命令（都是 `im
 - 执行：命令后面的文字按 POSIX shell 的规则切成词（空白分隔，`'…'` 原样，`"…"` 里只认 `\"` `\\` `\$` `` \` ``，引号外的 `\` 取下一个字符，不做任何展开；引号没闭合时不执行），再以 `$.process.run` 起 `armadra-hook canvas <动词> <词…>`。所以旗标规则、`ack` 带的会话绑定、超时与每一句答复、拒绝都是客户端与 core 的，和模型经 Bash 或画布 MCP 调同一个动词完全一样。成功时命令的输出是客户端的 stdout，失败时是它的那一行 stderr；不在画布节点里、引号没闭合、客户端起不来时各答一句短文。
 - 不经模型：命令自己应答，不产生模型回合，不消耗 token。可见名就是 `/armadra-<名>`（2.1.293 与 2.1.296 实测不加插件前缀）。
 - 说明文字按设备设置 `ui.locale`（§57.6）选 `zh-CN` / `en`，缺省英文；文案在 `apps/web/src/i18n/mod-commands.ts`，core 生成源码时用它的镜像。
-- `MOD_REVISION` 升为 2。
+- `MOD_REVISION` 升为 3（M2 升到 2）。
 
 ### 59.2 ACP 下挂 mod
 

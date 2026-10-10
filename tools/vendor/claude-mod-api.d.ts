@@ -69,6 +69,69 @@ declare module "claude-code" {
     exitCode?: number;
   };
 
+  /** Each plugin's session state, declared by its contract (`hooks/armadra-state.d.ts`). */
+  export interface PluginState {}
+
+  export type StateRef<
+    P extends keyof PluginState & string,
+    K extends keyof PluginState[P] & string,
+  > = { readonly plugin: P; readonly key: K };
+
+  export type StateRead<T> = { value: T | undefined; version: number };
+
+  export type StateSetResult = { isSet: boolean; version: number };
+
+  export type Timer = { cancel: () => void };
+
+  export type ToastOptions = { timeoutMs?: number };
+
+  /** A drawn tree: plain data the surface validates. */
+  export type RenderElement = {
+    readonly type: unknown;
+    readonly props: unknown;
+  };
+  export type RenderNode =
+    | RenderElement
+    | string
+    | number
+    | boolean
+    | null
+    | undefined;
+
+  export type TextProps = {
+    color?: string;
+    dimColor?: boolean;
+    bold?: boolean;
+    wrap?:
+      | "wrap"
+      | "end"
+      | "middle"
+      | "truncate"
+      | "truncate-start"
+      | "truncate-middle"
+      | "truncate-end";
+    children?: unknown;
+  };
+
+  export type Elements = {
+    Text: (props: TextProps) => RenderElement;
+    Box: (props: { children?: unknown }) => RenderElement;
+  };
+
+  export type AbovePromptProps = {
+    hasSurvey: boolean;
+    isWorking: boolean;
+    maxRows: number;
+    bodyColumns: number;
+  };
+
+  export type AbovePromptInput = {
+    surface: "terminal" | "desktop";
+    component: "AbovePrompt";
+    requestId: string;
+    props: AbovePromptProps;
+  };
+
   export interface EngineInterface {
     env: { get: (name: string) => Promise<string | undefined> };
     fs: { read: (path: string) => Promise<string> };
@@ -81,9 +144,31 @@ declare module "claude-code" {
         init?: ProcessRunInit,
       ) => Promise<ProcessRunResult>;
     };
-    clock: { sleep: (ms: number) => Promise<void> };
+    clock: {
+      sleep: (ms: number) => Promise<void>;
+      every: (ms: number, fn: () => void) => Timer;
+    };
     session: { version: () => Promise<SessionVersion> };
-    ui: { status: (text: string | undefined) => void };
+    state: {
+      get: <
+        P extends keyof PluginState & string,
+        K extends keyof PluginState[P] & string,
+      >(
+        ref: StateRef<P, K>,
+      ) => Promise<StateRead<PluginState[P][K]>>;
+      set: <
+        P extends keyof PluginState & string,
+        K extends keyof PluginState[P] & string,
+      >(
+        ref: StateRef<P, K>,
+        value: PluginState[P][K],
+      ) => Promise<StateSetResult>;
+    };
+    ui: {
+      status: (text: string | undefined) => void;
+      toast: (text: string, options?: ToastOptions) => void;
+      resolve: (e: { surface: "terminal" | "desktop" }) => Elements;
+    };
     command: {
       register: (command: CommandSpec) => Promise<{ command: string }>;
     };
@@ -131,7 +216,19 @@ declare module "claude-code" {
       event: ClassicEventName,
       hook: Hook<Record<string, unknown>, unknown>,
     ): Registration<Record<string, unknown>, unknown>;
+    (
+      event: "ui.render",
+      matcher: { component: "AbovePrompt" },
+      hook: Hook<AbovePromptInput, RenderElement>,
+    ): Registration<AbovePromptInput, RenderElement>;
   }
 
   export type Register = (on: On, options?: Record<string, unknown>) => void;
 }
+
+// The JSX factory, a global of a hooks module's environment.
+declare const h: (
+  tag: string | ((props: never) => import("claude-code").RenderNode),
+  props: Record<string, unknown> | null | undefined,
+  ...children: unknown[]
+) => import("claude-code").RenderNode;

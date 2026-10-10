@@ -202,6 +202,7 @@ export function normalize(raw: JsonValue): JsonObject {
   normalizeConversations(document);
   normalizeResources(document);
   normalizeBrowser(document);
+  normalizeUi(document);
   // Only the scalars are normalised; `servers` and `probes` are the user's map
   // and the probe cache, and both may hold ids this build has never heard of.
   normalizeLanguage(document);
@@ -685,6 +686,28 @@ function normalizePower(document: JsonObject): void {
   power.keepAwakeWhileWorking =
     asBool(power.keepAwakeWhileWorking) ?? DEFAULT_KEEP_AWAKE_WHILE_WORKING;
   document.power = power;
+}
+
+/** The languages the terminal side of the Claude Code mod has (contract §57.6). */
+export const UI_LOCALES = ["zh-CN", "en"] as const;
+
+/**
+ * `ui.locale`, the page's language as the mod's generator reads it. Not
+ * created when absent — a device whose page never wrote it has no `ui`
+ * section — and dropped when it is not one of {@link UI_LOCALES}, so a
+ * reader only ever sees a language it has words for.
+ */
+function normalizeUi(document: JsonObject): void {
+  const ui = document.ui;
+  if (!isJsonObject(ui)) return;
+  const next = clone(ui);
+  if (
+    next.locale !== undefined &&
+    !(UI_LOCALES as readonly string[]).includes(asString(next.locale) ?? "")
+  ) {
+    delete next.locale;
+  }
+  document.ui = next;
 }
 
 function normalizeConversations(document: JsonObject): void {

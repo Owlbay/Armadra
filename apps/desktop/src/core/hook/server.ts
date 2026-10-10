@@ -31,6 +31,7 @@ import {
   ingest,
 } from "./ingest";
 import { receiveModHello } from "./mod-hello";
+import { answerOverlay } from "./overlay-route";
 import type { HookService } from "./service";
 
 /**
@@ -104,6 +105,17 @@ export class HookServer {
         single(request.headers[NODE_TOKEN_HEADER]),
         this.options.now,
       );
+    });
+
+    // Contract §57.4 / §58: the counts the mod's band draws.
+    this.router.handle("GET", "/node/overlay", (_match, request) => {
+      const refusal = this.requireBearer(request);
+      if (refusal !== undefined) return refusal;
+      return answerOverlay(this.options, {
+        nodeId: request.query.get("nodeId") ?? "",
+        nodeToken: single(request.headers[NODE_TOKEN_HEADER]),
+        ifNoneMatch: single(request.headers["if-none-match"]),
+      });
     });
 
     this.router.handle("POST", "/credential", (_match, request) =>

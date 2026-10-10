@@ -152,18 +152,4 @@ describe("the mod hello", () => {
     expect(sessions).toHaveLength(MAX_MOD_HELLOS);
     expect(sessions[0]?.nodeId).toBe("node-1");
   });
-
-  it("leaves GET /node/overlay to M2: in the table, answered 501", async () => {
-    const it_ = fixture();
-    const answer = (await it_.server.router.dispatch("GET", "/node/overlay", {
-      method: "GET",
-      path: "/node/overlay",
-      query: new URLSearchParams(),
-      headers: { "x-armadra-hook-token": it_.bearer },
-      body: Buffer.alloc(0),
-      raw: undefined as never,
-      json: <T>(): T => null as T,
-    })) as { status: number };
-    expect(answer.status).toBe(501);
-  });
 });

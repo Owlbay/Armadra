@@ -4015,20 +4015,51 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 
 接口：`version.mjs` 导出 `checkMobile({base, mobile})`（不再收 `tag`）、`checkChangelog`；移除 `mobileVersion`、`setMobileVersion`、`MOBILE_CHANGELOG`、`MOBILE_TAG_PREFIX`。
 
+## Claude Code mod M2：横条、toast、状态栏画布名与设置子页（契约 §57.4 / §57.6 / §58，2026-10-10）
+
+做了什么：
+
+- core：`GET /node/overlay?nodeId=` 落地（`core/collab/overlay.ts` 纯查询 + `core/hook/overlay-route.ts`）。和 `/node/mod` 同一道门：bearer 加上验过的节点 token，只答调用者自己的节点。答复只有名字、id 和计数：节点名（没有名字用标题）、角色、画板名；连线按主、从、对等分，只取调用者自己的链接文档里同一工作空间的节点，不含 `shape`；另有未读数、最新序号与署名、自己排队中的发送数、待回答的权限请求数。`revision` 是答复的摘要，答复带 `ETag`，`If-None-Match` 命中答 `304`。没有正文、路径和终端内容。协议 minor 29 → 30。
+- 设置 `ui.locale`：设备级（加进 `LOCAL_PATHS`），`zh-CN` | `en`，不认识的值归一化时去掉，没有这个键时按 `en`。页面 `useLocaleMirror` 在语言和 core 不一致时写一次（成员不写）。生成 mod 时用 `storedModLocale()` 读它；claude 产物在 `current()` 里按语言比较模块字节，语言变了就重写。M2 生成的内容不含词，所以目前字节不随语言变，词留给 M3。
+- mod：交互式终端会话（不是 `-p`，也不是 ACP）每 3 秒轮询一次 overlay，结果写进 `$.state`（`armadra-mod.overlay` / `seen`）。`AbovePrompt` 横条画一行 `↑ 主   ↓ 从   ↔ 对等   ✉ N`：空的段不画，窄于 40 列不画 `↔`，没有连线也没有未读时交给引擎。新消息到达弹 toast `✉ <署名>`，会话第一次拿到答复只记序号、不弹。状态栏补成 `<节点名> · <画板名>`。状态契约是 `mod/hooks/armadra-state.d.ts`，`plugin.json` 的 `types` 指向它。`MOD_REVISION` 1 → 2，`INTEGRATION_REVISION` = 50218。
+- 页面：Agent CLI → Claude Code → 画布注入组多一行「Mods」：门开显示「已启用」或「已启用 · N 个会话」，有会话退回进程时加 `Badge outline`「已回退」；门关显示「未启用」，原因在悬停提示里。中英文案同步，在 `i18n/integration.ts`。
+- 探针 `claude-mod-launch` 加了第 6 步：先经 hook socket 直接验证 overlay 的形状、`304` 和 `403`；再在画布 Agent 终端里起交互式真 Claude（临时 `CLAUDE_CONFIG_DIR` 里预置引导完成、目录信任和假 key 批准），等到横条画出 `↑ lead ✉ 1`、状态栏出现画布名、新消息弹 toast `✉ lead`，并确认屏幕上没有消息正文。
+
+实测（macOS arm64；Claude 2.1.293 与 2.1.295 用的是 M1 装在 `/tmp` 的那两份，没动全局安装）：
+
+- 新单测：overlay 路由 5 条（token 门、空节点零值、方向分组/跨工作空间与 shape 排除/不带正文、`304` 与变更后新 revision、`404`），生成器 +3 条（状态契约键、横条与 toast 的本进程运行、`-p` / ACP 不轮询），注入 +1，`ui.locale` 归一化 1 条，mod 语言 2 条，页面 Mods 行 2 条，语言镜像 2 条。
+- `ARMADRA_CLAUDE_PROBE=1` 下 2.1.293、2.1.295 都通过 `claude plugin validate`：hooks 里多了 `ui.render{component=AbovePrompt}`，state 读写只有 `armadra-mod.overlay` / `seen`。`claude plugin test` 也都通过，共 5 条，新增的两条是横条在 terminal / desktop 两种 surface 上都画出 `↑ lead   ↔ tester   ✉ 2`，以及没有连线时不画。生成的模块对 2.1.293 的真 `.d.ts` 跑 `tsc` 无错。
+- `node tools/probes/claude-mod-launch.mjs`：2.1.293、2.1.295 全过，第 1–6 步都通过。
+- `pnpm libs:build && pnpm -r --if-present test`：desktop 5531 / 69 跳，其中 `parity-terminals`（afterAll 超时）与 `resources/sessions` 的 tmux PATH 用例是负载下的偶发，单独重跑 21 条全过；web 4324、shared 384、server 98 / 4 跳、mobile 31、push-relay 9；`node --test scripts/*.test.mjs` 73 / 2 跳；live 配置的 `passkey-cdp.live.integration.test.ts` 本机失败，与前几节相同。`pnpm --filter @armadra/web typecheck`、`pnpm check` 通过。
+
+没做 / 偏离：
+
+- 真 Claude 的终端是逐格增量重绘，探针只能确认横条首次画出与 toast 出现；计数从 1 变成 2 的那一格由单测和 `claude plugin test` 覆盖。状态行前有没有 `⚠` 前缀没有截图确认。
+- 设计 §7 的「版本不一致」徽标、「SessionStart 到了却没有 hello」的点名、集成页「重新生成」时忘掉探测缓存，都没做。
+- 横条不画空段（设计示例画了 `↓ —`）；`revision` 是摘要，不是单调数；连线名字没有时用标题。
+- Windows 与执行主机仍不挂 mod（同 M1）；CI 没有 Claude，探针在 e2e 里记 skipped。
+
+接口：
+
+- core：`nodeOverlay` / `NodeOverlay` / `overlayTag` / `tagMatches`（`collab/overlay.ts`）、`answerOverlay`（`hook/overlay-route.ts`）、`NOT_RECEIPT`（`collab/mailbox.ts` 导出）；`ClaudeModOptions`、`claudeModSource(clientBin, options)`、`claudeModTypes`、`MOD_TYPES_FILE`、`UI_TYPES`；`ModLocale` / `MOD_LOCALES` / `DEFAULT_MOD_LOCALE` / `modLocaleOf` / `storedModLocale`（`claude-mod/i18n.ts`）；`ArtifactLayout.modTypes`、`ArtifactTarget.locale`；`UI_LOCALES`（`settings/schema.ts`）；`MOD_REVISION = 2`。
+- 页面：`useLocaleMirror`、`modsValue`、`RuntimeSettings.ui.locale`，i18n 键 `integration.row.mods`、`integration.mods.*`。
+- 线上：§58（`GET /node/overlay` 的参数、来源与缓存头，横条规则，`ui.locale`），协议 1.30。
+- 工具：`claude-mod-launch.mjs` 第 6 步，`tools/vendor/claude-mod-api.d.ts` 补了 `$.state`、`clock.every`、`ui.toast`、`ui.resolve`、`h` 与 `ui.render` 的声明。
+
 ## Claude Code mod M3：`/armadra-*` 斜杠命令与 ACP 挂载（契约 §59，2026-10-10）
 
 做了什么：
 
 - 斜杠命令（`core/hook/install/claude-mod/commands.ts`）：`/armadra-post`、`-inbox`、`-ack`、`-send`、`-team`、`-open`（`open-agent`）、`-list` 七条，`session.start` 里逐条字面量 `$.command.register`（`immediate`），各自一个字面 matcher 的 `command.run` hook 自答、不读 `next`。执行就是 `$.process.run` 起 `armadra-hook canvas <动词> <词…>`：mod 只按 POSIX shell 规则切词，旗标、`ack` 的会话绑定、超时与答复全是客户端与 core 的，和模型经 Bash / 画布 MCP 调同一个动词一样；成功显示 stdout，失败显示客户端那一行 stderr。说明按 `ui.locale` 选中英，缺省英文，文案在 `apps/web/src/i18n/mod-commands.ts`，core 镜像由单测逐键比对。
-- 引擎只许一个不带 matcher 的 `session.start`：改为 `template.ts` 生成唯一的那一个，各段交一个调用（`STATUS_SESSION_START`、`COMMAND_SESSION_START`）；`claudeModSource(clientBin, { locale })`。`MOD_REVISION` 1 → 2（`INTEGRATION_REVISION` 50218）。
+- 引擎只许一个不带 matcher 的 `session.start`：改为 `template.ts` 生成唯一的那一个，各段交一个调用（`STATUS_SESSION_START`、`COMMAND_SESSION_START`）；`claudeModSource(clientBin, { locale })`。`MOD_REVISION` 2 → 3（`INTEGRATION_REVISION` 50318）。
 - ACP（`agent/canvas-launch.ts::acpModEnvironment`、`acp/adapters.ts` 的 `injection.mods`、`acp/prestart.ts::bundledClaudeCodeVersion`）：Claude 适配器自带的 Claude Code（SDK 清单 `claudeCodeVersion`）≥ 2.1.293 时，适配器环境加 `CLAUDE_CODE_PLUGIN_DIRS`（接在原值后）与 `ARMADRA_MOD_PROFILE=acp`；只挂 mod 不挂技能。`profile=acp` 下 mod 不转发状态、不画状态栏（M1 已有），只注册命令并发 hello。挂了 mod 的 Claude 适配器不再预启动。
-- 契约 §59，协议 minor 29 → 31（30 留给并行的 M2）。
+- 契约 §59，协议 minor 30 → 31（M2 是 30）。
 
 实测（macOS arm64；Claude Code 2.1.293 / 2.1.296 与 claude-agent-acp 0.89.0 用 `npm install --prefix /tmp/…` 装到临时目录，隔离 HOME、假 Messages API、假 key）：
 
 - 新单测：命令 9（表与动词、中英镜像、按语言生成、字面 matcher 不读 `next`、只在画布节点注册、切词与 `parseFlags` 结果一致、客户端拒绝 / 引号未闭合 / 起不来、经真 `/bin/sh` 替身客户端原样回显）、ACP 注入 1、`bundledClaudeCodeVersion` 1、ACP 挂载集成 2（假适配器按 npm 布局：门开时环境里有 mod 目录、profile 与节点地址且不预启动；门关时不挂、照旧预启动）、e2e 运行器 1。
-- `ARMADRA_CLAUDE_PROBE=1` 下 2.1.293、2.1.296：`claude plugin validate` 通过，七条命令都是「answers its own command」；`claude plugin test` 4 条全过（新增经 `$.command.run` 跑 `/armadra-post` → 客户端 argv）。
-- `claude-mod-launch` 新增场景 6：`claude -p '/armadra-list'` 打印的与同一节点 `armadra-hook canvas list` 的相同、假 API 没有新的主循环请求；2.1.293、2.1.296 全过，2.1.293 上模块对引擎自带类型检查通过。
+- `ARMADRA_CLAUDE_PROBE=1` 下 2.1.293、2.1.296：`claude plugin validate` 通过，七条命令都是「answers its own command」；`claude plugin test` 全过（新增一条经 `$.command.run` 跑 `/armadra-post` → 客户端 argv）；与 M2 合并后重跑仍过。
+- `claude-mod-launch` 新增场景 7（M2 的横条是 6）：`claude -p '/armadra-list'` 打印的与同一节点 `armadra-hook canvas list` 的相同、假 API 没有新的主循环请求；2.1.293、2.1.296 全过，2.1.293 上模块对引擎自带类型检查通过。
 - 新探针 `claude-mod-acp`（`tools/ci/e2e.d/claude-mod-acp.json`，需求 `claude-acp`，CI 没有时记 skipped）：真 core + 真 claude-agent-acp 0.89.0（与本机 0.88.0）：hello 的 `profile` 为 `acp`；会话日志 `availableCommands` 有七条 `armadra-*`；发 `/armadra-list` 由 mod 答出画布列表（引擎在前面加 `armadra-mod:`）、不问模型；节点状态仍是 `acp` 来源；`~/.claude/settings.json` 前后一致。`$.process.run` 在 SDK 宿主下可用。
 - `pnpm libs:build && pnpm -r --if-present test`：desktop 5536 / 69 跳（首轮两条协议版本断言随 minor 31 更新后重跑通过）、web 4320、shared 384、server 98 / 4 跳、mobile 31、push-relay 9，`node --test scripts/*.test.mjs` 73；live 配置的 `passkey-cdp.live.integration.test.ts` 本机失败（同前几节）。`pnpm --filter @armadra/web typecheck`、`pnpm check` 通过。`--record-compat` 把 `claudeMods.verified` 扩到 2.1.293–2.1.296。
 
@@ -4037,7 +4068,6 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - 挂了 mod 的 Claude ACP 会话不再领预启动进程（约省 200 ms 的那段没了）：预启动时还没有节点，mod 拿不到身份。要恢复需要按会话给环境（`_meta.claudeCode.options.env` / `plugins`），`@armadra/agent` 0.6.8 的会话选项没有 `_meta`，留作后续。
 - 门只看适配器自带的 CLI；设了 `CLAUDE_CODE_EXECUTABLE` 一律不挂；Windows、执行主机上的适配器不挂。集成页的 `mods` 不单列 ACP 的门（hello 的 `profile` 能区分）。
 - 交互式 TUI 里 `/help` 与补全的观感没有截图确认（命令名在 `-p` 与 ACP 下实测为 `/armadra-<名>`，不加插件前缀）。
-- `ui.locale` 的读取与写入在 M2；本包不传 locale 时说明是英文。
 - 没有用真实账号跑。
 
 接口：
