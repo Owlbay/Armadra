@@ -47,6 +47,8 @@ export function TurnstileWidget({
           action,
           theme: "auto",
           size: "flexible",
+          retry: "never",
+          "refresh-expired": "manual",
           callback: (token) => handlers.current.onToken(token),
           "error-callback": () => handlers.current.onError?.(),
           "expired-callback": () => handlers.current.onError?.(),

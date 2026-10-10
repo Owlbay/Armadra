@@ -324,6 +324,8 @@ describe("连接页 · 多连接（添加连接）", () => {
       new MessageEvent("message", {
         data: { type: "armadra-challenge", token: "tk-9" },
         origin: "https://relay.example.com",
+        // 面板只认它内嵌的那个挑战页发来的消息。
+        source: (frame as HTMLIFrameElement).contentWindow,
       }),
     );
     await waitFor(() =>

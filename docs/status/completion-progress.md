@@ -4210,3 +4210,29 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - shared：`remotePasswordChangeInputSchema`、`sources.remotePasswordChange`。
 - web：`remotePasswordChangeable`、`changeRemotePassword`、`ChangePasswordDialog`、`TURNSTILE_PASSWORD_ACTION` / `challengeAction`、`challengeFrameUrl(…, action?)`、`ChallengeFrame` / `ChallengeSheet` 的 `action`。
 - 线上：§63，协议 1.36。
+
+## 桌面端人机验证空白与闪烁（契约 §62.2，Closes #266，2026-10-10）
+
+做了什么：
+
+- 根因：桌面窗口的页面来源是 `http://127.0.0.1:<随机端口>`（`main/static-server.ts`），中继 `/app/challenge` 的 `frame-ancestors` 只列了 `localhost` 系列，iframe 被 `ERR_BLOCKED_BY_RESPONSE` 拦成一块白；面板只听令牌消息，分不出被拦，也就一直停在那块白上。cloud 仓同步把 `http://127.0.0.1:*` 加进固定受信来源（只放行回环主机的端口，不通配域名）。桌面页 CSP 的 `frame-src` 本就放行 `http:` / `https:`，不改。
+- 挑战页（`ChallengePage`）挂上发 `status: "ready"`、组件失败发 `status: "error"`；Turnstile 以 `retry: "never"`、`refresh-expired: "manual"` 渲染，失败不自己反复重来。
+- 面板（`ChallengeFrame`）：`ready` 前 iframe 不显示（转圈），10 秒没报到或收到 `error` 换成一次「验证没能加载 / 重试」，不自动重试；只认这个 iframe 的 `contentWindow`、中继来源的消息；`src` 只随中继、站点密钥与页面来源变。
+- 桌面壳的 `Origin` 改写（`shell-core/relay-origin.ts`）跳过中继自己页面的同源请求（内嵌挑战页发往中继的请求不冒充原生来源）。
+- 探针 `tools/probes/relay-challenge-desktop.mjs`（清单 `relay-challenge-desktop`，B 档、依赖 `cloud`）；`workerd-relay.mjs` 多 `vars`、日志写临时目录、起不来时带上 wrangler 输出。
+
+实测（macOS arm64，本地 workerd + 隔离 Electron，Cloudflare 官方测试站点密钥）：
+
+- 修复前复现：面板里 iframe 一块白，Electron 日志 `ERR_BLOCKED_BY_RESPONSE`；同一 Electron 内嵌线上 `https://relay.armadra.com/app/challenge`（只读 GET）同样被拦。闪烁在本地没有复现（10 秒内 iframe 不重挂、截图哈希不变、无属性变动），按「挑战页内 Turnstile 自动重试 + 被拦后无提示」两条可能原因一并收紧。
+- 修复后探针全过：不声明挑战的中继直接登录、不弹面板；声明的中继，挑战页在 `http://127.0.0.1:<端口>` 里载入并报 `ready`，iframe 只挂一次，令牌从中继来源交回、面板关闭；测试密钥的 siteverify 答案没有 `action`，中继判 `challenge_invalid`，页面提示一次。用 cloud main（未修）跑同一探针停在「报 ready」一步。
+- 单测：web 挑战 11（iframe 报到前不显示且重渲染不重载、超时一次失败不自动重试、`error` 换失败、只认本 iframe 的消息、挑战页报 ready / error、`retry: "never"`）；desktop CSP 1、Origin 改写 1。
+
+没做 / 限制：
+
+- 需要重新部署中继（cloud 的 `frame-ancestors` 与随 `/app/` 托管的新挑战页）；旧版托管页不发 `ready`，新桌面端会在 10 秒后显示「加载失败」——部署前线上已关掉 Turnstile，不受影响。
+- 测试密钥无法走通登录成功（答案没有 `action`），探针以 `challenge_invalid` 为终点。
+
+接口：
+
+- 页面消息：`{ type: "armadra-challenge", status: "ready" | "error" }`（`isChallengeStatus`）；`ChallengeFrame` 的 `readyTimeoutMs`、`CHALLENGE_READY_TIMEOUT_MS`。
+- `startWorkerd({ …, vars })`。

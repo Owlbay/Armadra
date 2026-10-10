@@ -45,6 +45,23 @@ describe("服务器壳的 CSP", () => {
 });
 
 describe("桌面壳的 CSP", () => {
+  it("人机验证（契约 §62.2）：能内嵌任一中继的 /app/challenge，自己不被任何页面内嵌", () => {
+    for (const policy of [
+      contentSecurityPolicy(),
+      serverContentSecurityPolicy(),
+      nativeAppContentSecurityPolicy(),
+    ]) {
+      const frame =
+        policy.split("; ").find((entry) => entry.startsWith("frame-src ")) ??
+        "";
+      // 中继地址在添加账号之前不知道：按协议放行（https 中继与本地开发的 http 中继）。
+      expect(frame.split(" ")).toEqual(
+        expect.arrayContaining(["https:", "http:"]),
+      );
+      expect(policy).toContain("frame-ancestors 'none'");
+    }
+  });
+
   it("媒体票地址（§37.4）：图片与音视频可取本机 core 与按源追加的 https 来源，wss 不进", () => {
     const policy = contentSecurityPolicy({
       connect: ["https://relay.example:8443", "wss://relay.example:8443"],
