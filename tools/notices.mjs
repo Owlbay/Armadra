@@ -170,20 +170,85 @@ export function unlistedBundled({ scanned, listing, bundled = [] }) {
   );
 }
 
-/** 跑 `pnpm licenses list --prod --json`，返回解析后的对象。 */
+/** 跑 `pnpm licenses list -r --prod --json`，返回解析后的对象（pnpm 12 起根目录不再缺省递归，要显式 `-r`）。 */
 export function pnpmLicenses(cwd = root) {
-  const result = spawnSync("pnpm", ["licenses", "list", "--prod", "--json"], {
-    cwd,
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-    // Windows 上 pnpm 是 .cmd，不经 shell 起不来。
-    shell: process.platform === "win32",
-  });
+  const result = spawnSync(
+    "pnpm",
+    ["licenses", "list", "-r", "--prod", "--json"],
+    {
+      cwd,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+      // Windows 上 pnpm 是 .cmd，不经 shell 起不来。
+      shell: process.platform === "win32",
+    },
+  );
   if (result.status !== 0)
     throw new Error(
       `pnpm licenses list failed (${result.status}): ${result.stderr || result.error?.message || ""}`,
     );
-  return JSON.parse(result.stdout);
+  return withResolvedPeers(JSON.parse(result.stdout));
+}
+
+/**
+ * pnpm 12 的 `licenses list` 不列已解析的 peer 与可选依赖（例如 `debug` 的
+ * `supports-color`），它们照样装进 node_modules、随应用发出去。这里从已列出的
+ * 每个包出发，按 pnpm 的目录布局（依赖是同一个 `node_modules` 下的兄弟目录）
+ * 补上它实际装到的 peer 与可选依赖，以及它们自己的依赖，按许可证并回原来的分组。
+ */
+export function withResolvedPeers(listing) {
+  const seen = new Set();
+  for (const entries of Object.values(listing))
+    for (const entry of entries)
+      entry.versions.forEach((version) => seen.add(`${entry.name}@${version}`));
+  const queue = Object.values(listing)
+    .flat()
+    .flatMap((entry) => entry.paths ?? []);
+  while (queue.length > 0) {
+    const path = queue.shift();
+    const manifest = readManifest(path);
+    if (manifest === null) continue;
+    // 只有 peerDependenciesMeta 没有 peerDependencies 的写法也算（debug 就是）。
+    const names = [
+      manifest.dependencies,
+      manifest.optionalDependencies,
+      manifest.peerDependencies,
+      manifest.peerDependenciesMeta,
+    ].flatMap((field) => Object.keys(field ?? {}));
+    const siblings = path.slice(
+      0,
+      path.lastIndexOf("/node_modules/") + "/node_modules".length,
+    );
+    for (const name of names) {
+      const candidate = join(siblings, name);
+      if (!existsSync(candidate)) continue;
+      const real = realpathSync(candidate);
+      const pkg = readManifest(real);
+      if (pkg === null || pkg.name.startsWith("@armadra/")) continue;
+      const key = `${pkg.name}@${pkg.version}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const license = typeof pkg.license === "string" ? pkg.license : "Unknown";
+      (listing[license] ??= []).push({
+        name: pkg.name,
+        versions: [pkg.version],
+        paths: [real],
+        license,
+        author: typeof pkg.author === "string" ? pkg.author : pkg.author?.name,
+        homepage: pkg.homepage,
+      });
+      queue.push(real);
+    }
+  }
+  return listing;
+}
+
+function readManifest(directory) {
+  try {
+    return JSON.parse(readFileSync(join(directory, "package.json"), "utf8"));
+  } catch {
+    return null;
+  }
 }
 
 /** 把一段文本统一成 LF、去掉行尾空白与首尾空行。 */
