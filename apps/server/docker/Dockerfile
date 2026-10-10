@@ -16,7 +16,7 @@
 # 可选：--build-arg WITH_CHROMIUM=1 在 runtime 里装 Debian 的 Chromium（服务器壳
 # 上的浏览器节点用它），入口脚本设 ARMADRA_BROWSER_PATH。缺省不装：解压后多约 770 MiB。
 
-ARG NODE_IMAGE=node:22.23.3-bookworm-slim
+ARG NODE_IMAGE=node:24.21.0-bookworm-slim
 
 FROM ${NODE_IMAGE} AS build
 

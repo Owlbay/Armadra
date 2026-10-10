@@ -170,20 +170,123 @@ export function unlistedBundled({ scanned, listing, bundled = [] }) {
   );
 }
 
-/** 跑 `pnpm licenses list --prod --json`，返回解析后的对象。 */
+/** 跑 `pnpm licenses list -r --prod --json`，返回解析后的对象（pnpm 12 起根目录不再缺省递归，要显式 `-r`）。 */
 export function pnpmLicenses(cwd = root) {
-  const result = spawnSync("pnpm", ["licenses", "list", "--prod", "--json"], {
-    cwd,
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-    // Windows 上 pnpm 是 .cmd，不经 shell 起不来。
-    shell: process.platform === "win32",
-  });
+  const result = spawnSync(
+    "pnpm",
+    ["licenses", "list", "-r", "--prod", "--json"],
+    {
+      cwd,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+      // Windows 上 pnpm 是 .cmd，不经 shell 起不来。
+      shell: process.platform === "win32",
+    },
+  );
   if (result.status !== 0)
     throw new Error(
       `pnpm licenses list failed (${result.status}): ${result.stderr || result.error?.message || ""}`,
     );
-  return JSON.parse(result.stdout);
+  return withResolvedPeers(JSON.parse(result.stdout));
+}
+
+/**
+ * pnpm 12 的 `licenses list` 不列已解析的 peer 与可选依赖（例如 `debug` 的
+ * `supports-color`），它们照样装进 node_modules、随应用发出去。这里从已列出的
+ * 每个包出发，按 pnpm 的目录布局（依赖是同一个 `node_modules` 下的兄弟目录）
+ * 补上它实际装到的 peer 与可选依赖，以及它们自己的依赖，按许可证并回原来的分组。
+ */
+export function withResolvedPeers(listing) {
+  const seen = new Set();
+  for (const entries of Object.values(listing))
+    for (const entry of entries)
+      entry.versions.forEach((version) => seen.add(`${entry.name}@${version}`));
+  const queue = Object.values(listing)
+    .flat()
+    .flatMap((entry) => entry.paths ?? []);
+  while (queue.length > 0) {
+    const path = queue.shift();
+    const manifest = readManifest(path);
+    if (manifest === null) continue;
+    // 只有 peerDependenciesMeta 没有 peerDependencies 的写法也算（debug 就是）。
+    const names = [
+      manifest.dependencies,
+      manifest.optionalDependencies,
+      manifest.peerDependencies,
+      manifest.peerDependenciesMeta,
+    ].flatMap((field) => Object.keys(field ?? {}));
+    // Windows 上 pnpm 给的是反斜杠路径。
+    const at = Math.max(
+      path.lastIndexOf("/node_modules/"),
+      path.lastIndexOf("\\node_modules\\"),
+    );
+    const siblings = path.slice(0, at + "/node_modules".length);
+    for (const name of names) {
+      const candidate = join(siblings, name);
+      if (!existsSync(candidate)) continue;
+      const real = realpathSync(candidate);
+      const pkg = readManifest(real);
+      if (pkg === null || pkg.name.startsWith("@armadra/")) continue;
+      const key = `${pkg.name}@${pkg.version}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const license = typeof pkg.license === "string" ? pkg.license : "Unknown";
+      (listing[license] ??= []).push({
+        name: pkg.name,
+        versions: [pkg.version],
+        paths: [real],
+        license,
+        author: typeof pkg.author === "string" ? pkg.author : pkg.author?.name,
+        homepage: pkg.homepage,
+      });
+      queue.push(real);
+    }
+  }
+  return listing;
+}
+
+/**
+ * 包自己 package.json 里声明的许可证；没声明就是 Unknown。pnpm 12 在没声明时
+ * 会去猜 LICENSE 正文，同一个包在不同机器上猜出不同结果（khroma：本机 MIT、
+ * CI Unknown），声明文件就跟着平台变。读不到 package.json（单测里的假路径）时
+ * 返回 null，交回 pnpm 给的值。
+ */
+function declaredLicense(directory) {
+  if (!directory) return null;
+  const manifest = readManifest(directory);
+  if (manifest === null) return null;
+  if (typeof manifest.license === "string") return manifest.license;
+  if (typeof manifest.license?.type === "string") return manifest.license.type;
+  const first = Array.isArray(manifest.licenses) ? manifest.licenses[0] : null;
+  return typeof first?.type === "string" ? first.type : "Unknown";
+}
+
+/**
+ * 包声明的主页；没写 homepage 时按 GitHub 仓库推成 `…#readme`（pnpm 11 的做法，
+ * pnpm 12 不再推导）。读不到 package.json 时返回 null。
+ */
+function declaredHomepage(directory) {
+  if (!directory) return null;
+  const manifest = readManifest(directory);
+  if (manifest === null) return null;
+  if (typeof manifest.homepage === "string") return manifest.homepage;
+  const repository =
+    typeof manifest.repository === "string"
+      ? manifest.repository
+      : manifest.repository?.url;
+  if (typeof repository !== "string") return "";
+  const match =
+    /^(?:github:)?([\w.-]+\/[\w.-]+?)(?:\.git)?$/.exec(repository) ??
+    /github\.com[/:]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(repository);
+  return match ? `https://github.com/${match[1]}#readme` : "";
+}
+
+function readManifest(directory) {
+  try {
+    return JSON.parse(readFileSync(join(directory, "package.json"), "utf8"));
+  } catch {
+    return null;
+  }
 }
 
 /** 把一段文本统一成 LF、去掉行尾空白与首尾空行。 */
@@ -223,13 +326,14 @@ export function packagesFrom(listing) {
     for (const entry of entries) {
       if (entry.name.startsWith("@armadra/")) continue;
       entry.versions.forEach((version, index) => {
+        const path = entry.paths?.[index] ?? entry.paths?.[0] ?? "";
         packages.push({
           name: entry.name,
           version,
-          license: entry.license ?? license,
+          license: declaredLicense(path) ?? entry.license ?? license,
           author: typeof entry.author === "string" ? entry.author : "",
-          homepage: entry.homepage ?? "",
-          path: entry.paths?.[index] ?? entry.paths?.[0] ?? "",
+          homepage: entry.homepage || declaredHomepage(path) || "",
+          path,
         });
       });
     }
@@ -375,6 +479,14 @@ function main(argv) {
     if (actual !== expected) {
       console.error(
         `${NOTICES_FILE} is out of date with the installed dependencies; run \`node tools/notices.mjs\` and commit the result.`,
+      );
+      // 只在 CI 上不一致时，没有第一处差异就无从查起。
+      const have = actual.split("\n");
+      const want = expected.split("\n");
+      const line = want.findIndex((text, index) => have[index] !== text);
+      const at = line === -1 ? want.length : line;
+      console.error(
+        `first difference at line ${at + 1}:\n  committed: ${have[at] ?? "<end>"}\n  generated: ${want[at] ?? "<end>"}`,
       );
       return 1;
     }

@@ -102,8 +102,11 @@ export function Splash({ onDismiss }: SplashProps) {
     let timer = 0;
     let started: number | null = null;
     let lastFrame = -1;
+    // 兜底定时器可能在宿主环境拆掉之后才到（测试里 jsdom 先于定时器销毁），
+    // 那时 rAF 已不存在：缺了就跳过，不让收尾抛错。
     const cancel = () => {
-      cancelAnimationFrame(animation);
+      if (typeof cancelAnimationFrame === "function")
+        cancelAnimationFrame(animation);
       window.clearTimeout(timer);
     };
     const tick = (now: number) => {
@@ -119,7 +122,8 @@ export function Splash({ onDismiss }: SplashProps) {
       else finish();
     };
     const schedule = () => {
-      animation = requestAnimationFrame(tick);
+      if (typeof requestAnimationFrame === "function")
+        animation = requestAnimationFrame(tick);
       timer = window.setTimeout(
         () => tick(performance.now()),
         frameInterval * 2,

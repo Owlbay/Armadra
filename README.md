@@ -164,7 +164,7 @@ AI Coding 画布覆盖软件开发、算法开发、数据分析与科研编程�
 
 ## 快速开始
 
-需要 Node.js ≥ 22 与项目锁定的 pnpm，没有别的工具链。建议安装 tmux（缺失时退回直连 PTY）；
+需要 Node.js ≥ 24 与项目锁定的 pnpm，没有别的工具链。建议安装 tmux（缺失时退回直连 PTY）；
 macOS 桌面目标 ≥ 13.3，并需 Xcode Command Line Tools。
 
 ```sh
