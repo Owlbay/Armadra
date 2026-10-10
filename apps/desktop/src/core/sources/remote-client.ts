@@ -35,6 +35,26 @@ export interface PlatformInfo {
   readonly name: string;
   readonly issuer: string;
   readonly capabilities: readonly string[];
+  /** 服务端要求的挑战（cloud-api §16，协议包 0.3.5 起）；不要求就没有。 */
+  readonly challenge?: PlatformChallenge;
+}
+
+/** `platform.info.challenge`：`scope` 里的 procedure 登录 / 加入时必须带挑战令牌。 */
+export interface PlatformChallenge {
+  readonly provider: "turnstile";
+  readonly siteKey: string;
+  readonly scope: readonly string[];
+}
+
+/** 解出 `platform.info.challenge`；形状不对当作没有（不要求）。 */
+function challengeOf(value: unknown): PlatformChallenge | undefined {
+  const raw = record(value);
+  const siteKey = str(raw.siteKey).trim();
+  if (raw.provider !== "turnstile" || siteKey === "") return undefined;
+  const scope = Array.isArray(raw.scope)
+    ? raw.scope.filter((one): one is string => typeof one === "string")
+    : [];
+  return { provider: "turnstile", siteKey, scope };
 }
 
 export interface RemoteSourceRow {
@@ -165,6 +185,11 @@ function rejected(status: number, body: unknown, during: string): never {
       );
     case "rate_limited":
       throw fail("rate_limited", "远程服务限流，请稍后重试");
+    // 挑战（cloud-api §16）：缺失与无效分开，页面按码取文案。
+    case "challenge_required":
+      throw fail("challenge_required", "远程服务要求先完成人机验证");
+    case "challenge_invalid":
+      throw fail("challenge_invalid", "人机验证没有通过");
     case "session_expired":
     case "session_revoked":
     case "unauthenticated":
@@ -276,6 +301,7 @@ export class RemoteClient {
     if (mode !== "saas" && mode !== "personal") {
       throw fail("source_unreachable", "这个地址不是一个远程服务");
     }
+    const challenge = challengeOf(body.challenge);
     return {
       mode,
       name: str(body.name).trim().slice(0, 128),
@@ -285,6 +311,7 @@ export class RemoteClient {
             (one): one is string => typeof one === "string",
           )
         : [],
+      ...(challenge === undefined ? {} : { challenge }),
     };
   }
 
@@ -292,11 +319,15 @@ export class RemoteClient {
     endpoint: RemoteEndpoint,
     account: string,
     password: string,
+    challengeToken?: string,
   ): Promise<CloudSession> {
     const body = await this.call(endpoint, "POST", "/v1/auth/login", "登录", {
       account,
       password,
       device: this.device,
+      ...(challengeToken === undefined || challengeToken === ""
+        ? {}
+        : { challenge: { provider: "turnstile", token: challengeToken } }),
     });
     if ("mfa" in record(body)) {
       // 个人中转没有二次验证；SaaS 的 MFA 随 SaaS 登录一起再做。

@@ -8,6 +8,7 @@ import { tempDir } from "../testing/temp-dir";
 import { migrationsDir } from "../workspaces/fixture";
 import {
   ACCOUNT,
+  CHALLENGE_TOKEN,
   GATEWAY,
   GATEWAY_FP,
   ISSUER,
@@ -313,6 +314,67 @@ describe("远程服务（个人中转）", () => {
     world.down.add(ISSUER);
     expect(await code(addRemote())).toBe("source_unreachable");
     expect((await service.list()).remotes).toEqual([]);
+  });
+
+  describe("挑战令牌（契约 §62）", () => {
+    const base = {
+      kind: "personal" as const,
+      issuer: ISSUER,
+      account: ACCOUNT,
+      password: PASSWORD,
+      fingerprint: RELAY_FP,
+    };
+
+    it("中继不要求挑战：不带令牌照常登录，请求里也没有 challenge", async () => {
+      await addRemote();
+      const login = world.requests.find((one) =>
+        one.url.endsWith("/v1/auth/login"),
+      );
+      expect(JSON.stringify(login)).not.toContain("challenge");
+    });
+
+    it("要求而没带：不发口令，challenge_required 带 siteKey", async () => {
+      world.cloud.challenge = { siteKey: "0xSITE", scope: ["auth.login"] };
+      const failure = await service
+        .remoteAdd(base)
+        .catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(CoreFailure);
+      expect((failure as CoreFailure).code).toBe("challenge_required");
+      expect((failure as CoreFailure).details).toEqual({
+        provider: "turnstile",
+        siteKey: "0xSITE",
+      });
+      expect(
+        world.requests.some((one) => one.url.endsWith("/v1/auth/login")),
+      ).toBe(false);
+      expect((await service.list()).remotes).toEqual([]);
+    });
+
+    it("带令牌：放进 auth.login 的 challenge，登录成功", async () => {
+      world.cloud.challenge = { siteKey: "0xSITE", scope: ["auth.login"] };
+      const added = await service.remoteAdd({
+        ...base,
+        challengeToken: CHALLENGE_TOKEN,
+      });
+      expect(added.next).toBe("ready");
+      const login = world.requests.find((one) =>
+        one.url.endsWith("/v1/auth/login"),
+      );
+      expect(JSON.stringify(login)).toContain(CHALLENGE_TOKEN);
+      expect(logs.join("\n")).not.toContain(CHALLENGE_TOKEN);
+    });
+
+    it("令牌无效：对端的 challenge_invalid 原样映射", async () => {
+      world.cloud.challenge = { siteKey: "0xSITE", scope: ["auth.login"] };
+      expect(
+        await code(service.remoteAdd({ ...base, challengeToken: "stale" })),
+      ).toBe("challenge_invalid");
+    });
+
+    it("scope 不含 auth.login：不挑战", async () => {
+      world.cloud.challenge = { siteKey: "0xSITE", scope: ["links.accept"] };
+      expect((await service.remoteAdd(base)).next).toBe("ready");
+    });
   });
 
   it("SaaS 只预留：加入与轮询答 not_implemented", async () => {

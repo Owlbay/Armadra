@@ -32,6 +32,8 @@ export const errors: MessageModule = {
     "error.credentialsInvalid": "账号或口令不正确",
     "error.accountLocked": "尝试次数过多，账号已暂时锁定",
     "error.fingerprintMismatch": "证书指纹不一致，已拒绝连接",
+    "error.challengeRequired": "需要先完成人机验证",
+    "error.challengeInvalid": "人机验证没有通过，请重试",
     "error.addressInvalid": "地址格式不对",
     "error.addressHttpsOnly": "地址需要以 https:// 开头",
     "error.addressPlaintextLoopbackOnly": "需要 https://，http:// 只能用于本机",
@@ -100,6 +102,8 @@ export const errors: MessageModule = {
     "error.accountLocked": "Too many attempts — the account is locked for now",
     "error.fingerprintMismatch":
       "The certificate fingerprint does not match — connection refused",
+    "error.challengeRequired": "Complete the human check first",
+    "error.challengeInvalid": "The human check didn't pass. Try again",
     "error.addressInvalid": "That address isn't valid",
     "error.addressHttpsOnly": "The address must start with https://",
     "error.addressPlaintextLoopbackOnly":
