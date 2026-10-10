@@ -1,0 +1,39 @@
+# 长期无活动的 issue：60 天标 stale，再 14 天仍无活动则关闭。
+#
+# 只处理 issue，PR 一律不碰（days-before-pr-* 为 -1）。已定稿待实现（ready）、
+# 待设计（needs-design）与安全相关（security）的 issue 不会过期——它们没人回复
+# 不代表没人要做。任何新评论都会摘掉 stale 标签并重新计时。
+name: stale
+
+on:
+  schedule:
+    - cron: "30 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  stale:
+    name: stale
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/stale@v10
+        with:
+          days-before-issue-stale: 60
+          days-before-issue-close: 14
+          days-before-pr-stale: -1
+          days-before-pr-close: -1
+          stale-issue-label: stale
+          exempt-issue-labels: security,ready,needs-design
+          close-issue-reason: not_planned
+          stale-issue-message: >-
+            这个 issue 已经 60 天没有动静，标记为 stale；再过 14 天仍无活动会自动关闭。
+            如果问题仍然存在，回复一下即可保持打开。
+            / This issue has had no activity for 60 days and is now marked stale.
+            It will be closed in 14 days unless there is new activity; reply to keep it open.
+          close-issue-message: >-
+            标记 stale 后 14 天仍无活动，自动关闭。问题仍在的话可以重新打开或新建 issue。
+            / Closed after 14 more days without activity.
+            Reopen it or open a new issue if the problem persists.
