@@ -256,11 +256,11 @@ export function normalizePlatformPin(platform) {
 
 /**
  * The `mobile` key: what the phone / tablet app needs from the host it talks
- * to. The app has its own version line (`apps/mobile/package.json`), so its
+ * to. The app shares the suite version, but its
  * compatibility with a desktop or server core is decided by protocol, never by
- * the two version numbers being equal. `minimumHostProtocol` is the oldest
+ * version numbers. `minimumHostProtocol` is the oldest
  * core protocol the bundled page works against; the page's copy is
- * `apps/web/src/mobile/host-compatibility.ts`, and `version.mjs mobile check`
+ * `apps/web/src/mobile/host-compatibility.ts`, and `version.mjs check`
  * keeps the two and the core's own protocol in step. Not part of the fence.
  */
 export function readMobileCompatibility(path = COMPATIBILITY_FILE) {

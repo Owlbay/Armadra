@@ -37,6 +37,15 @@ docs(status): completion-progress 记包 D 的重跑结果
 - 范围 / Scopes：模块或目录名，例如 `core`、`web`、`canvas`、`terminal`、`mobile`、`probes`、`status`；跨两处用逗号，例如 `test(web,probes)`。 / A module or directory name; join two with a comma.
 - 一个模块连同它的测试一个提交；不要在提交信息里加生成说明或自动署名。 / One commit per module together with its tests; no generated notes or automatic trailers.
 
+## 版本规则 / Versioning
+
+桌面、服务器与手机 / 平板共用一条版本线和标签 `vX.Y.Z`；改版本只用 `node tools/release/version.mjs set X.Y.Z`，不要手改单个文件。 / Desktop, server and mobile share one version line and the `vX.Y.Z` tag; change it only with `version.mjs set`.
+
+- Z：缺陷修复；Y：功能更新；X：特大更新（如 1.0）。 / Z: bug fixes; Y: feature releases; X: very large releases (e.g. 1.0).
+- 任一端升级时，其他端下次发版对齐；构建号单调递增，用来区分同版本的不同构建。 / When one client bumps, the others align at their next release; build numbers increase monotonically to tell builds of one version apart.
+- armadra-cloud 与协议包 lockstep，单独编号。 / armadra-cloud follows the protocol package in lockstep and is numbered separately.
+- 细则见 [CI 与发布](../docs/guides/ci-release.md)「版本规则」。 / Details in the [CI and release guide](../docs/guides/ci-release.md).
+
 ## 提交 PR / Opening pull requests
 
 - 从 `main` 拉出按用途命名的分支，例如 `fix/terminal-exit`、`docs/github-templates`。 / Branch from `main` with a purpose-based name.

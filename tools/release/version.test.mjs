@@ -12,18 +12,16 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
-  MOBILE_CHANGELOG,
   MOBILE_MANIFEST,
   MOBILE_PAGE_PROTOCOL,
   VERSION_SITES,
   checkAgentPin,
+  checkChangelog,
   checkMobile,
   checkDesktopServe,
   checkPlatformPin,
   checkVersions,
-  mobileVersion,
   readVersions,
-  setMobileVersion,
   setVersion,
   workspaceVersion,
 } from "./version.mjs";
@@ -388,7 +386,6 @@ test("the desktop package carries the server shell behind the serve gate", () =>
 /** The files the mobile check reads, copied out of the repository. */
 const MOBILE_FILES = [
   MOBILE_MANIFEST,
-  MOBILE_CHANGELOG,
   MOBILE_PAGE_PROTOCOL,
   "apps/mobile/ios/App/App.xcodeproj/project.pbxproj",
   "apps/mobile/ios/version.xcconfig",
@@ -418,68 +415,41 @@ function edit(base, path, from, to) {
 const mobileRange = (minor = 14) =>
   normalizeMobile({ minimumHostProtocol: { major: 1, minor } });
 
-test("the mobile app is not in the desktop suite's version sites", () => {
-  assert.ok(
-    !VERSION_SITES.some((site) => site.path.startsWith("apps/mobile/")),
-  );
-  assert.notEqual(mobileVersion(), workspaceVersion());
-  // The desktop check stays green whatever the mobile version is.
+test("the mobile app shares the suite version line", () => {
+  assert.ok(VERSION_SITES.some((site) => site.path === MOBILE_MANIFEST));
+  const mobile = readVersions().find((s) => s.path === MOBILE_MANIFEST);
+  assert.equal(mobile.version, workspaceVersion());
   assert.deepEqual(checkVersions({}).problems, []);
 });
 
-test("the repository's own mobile version line checks out", () => {
-  const { version, problems } = checkMobile({});
+test("a mobile manifest left behind fails the check, and set moves it too", () => {
+  const base = workspace("0.2.0");
+  try {
+    edit(base, MOBILE_MANIFEST, /"version": "0\.2\.0"/, '"version": "1.1.0"');
+    assert.match(
+      checkVersions({ base }).problems.join("\n"),
+      /apps\/mobile\/package\.json says 1\.1\.0, the root manifest says 0\.2\.0/,
+    );
+    const { changed } = setVersion("0.3.0", base);
+    assert.ok(changed.some((l) => l.startsWith("apps/mobile/package.json:")));
+    assert.deepEqual(checkVersions({ base }).problems, []);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("the repository's own mobile projects and protocol check out", () => {
+  const { problems } = checkMobile({});
   assert.deepEqual(problems, []);
-  assert.equal(version, mobileVersion());
   assert.deepEqual(readMobileCompatibility().minimumHostProtocol, {
     major: 1,
     minor: 14,
   });
 });
 
-test("mobile set writes only the mobile manifest and refuses a pre-release", () => {
-  const base = mobileWorkspace();
-  try {
-    const { changed } = setMobileVersion("1.4.2", base);
-    assert.equal(mobileVersion(base), "1.4.2");
-    assert.match(changed[0], /apps\/mobile\/package\.json: .* -> 1\.4\.2/);
-    assert.throws(
-      () => setMobileVersion("1.5.0-beta.1", base),
-      /plain X\.Y\.Z/,
-    );
-    assert.throws(() => setMobileVersion("1.5", base), /plain X\.Y\.Z/);
-    // 1.4.2 has no changelog section yet.
-    assert.match(
-      checkMobile({ base, mobile: mobileRange() }).problems.join("\n"),
-      /CHANGELOG\.md has no "## 1\.4\.2" section/,
-    );
-  } finally {
-    rmSync(base, { recursive: true, force: true });
-  }
-});
-
-test("a mobile tag must be mobile-v plus the mobile version", () => {
-  const base = mobileWorkspace();
-  const version = mobileVersion(base);
-  try {
-    assert.deepEqual(
-      checkMobile({ base, tag: `mobile-v${version}`, mobile: mobileRange() })
-        .problems,
-      [],
-    );
-    assert.match(
-      checkMobile({ base, tag: "mobile-v9.9.9", mobile: mobileRange() })
-        .problems[0],
-      /does not name the mobile version/,
-    );
-    assert.match(
-      checkMobile({ base, tag: `v${version}`, mobile: mobileRange() })
-        .problems[0],
-      /does not start with "mobile-v"/,
-    );
-  } finally {
-    rmSync(base, { recursive: true, force: true });
-  }
+test("the changelog needs a section for the version", () => {
+  assert.deepEqual(checkChangelog(workspaceVersion()), []);
+  assert.match(checkChangelog("9.9.9")[0], /no "## 9\.9\.9" section/);
 });
 
 test("a hard-coded iOS version or an Android derivation from semver fails", () => {

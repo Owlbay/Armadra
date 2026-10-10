@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   resetMfa: vi.fn(),
   mailConfigured: vi.fn(async () => false),
   mailReset: vi.fn(),
+  relay: vi.fn((): string | null => null),
   extraMembers: vi.fn(
     (): { principalId: string; role: string; joinedAtMs: number }[] => [],
   ),
@@ -90,6 +91,15 @@ vi.mock("../../../api/accounts", async (original) => {
         ],
       },
     ],
+    listOrigins: async (ids: string[]) =>
+      Object.fromEntries(
+        ids.map((id) => [
+          id,
+          id === MEMBER && mocks.relay() !== null
+            ? { kind: "relay", label: mocks.relay() }
+            : { kind: "local" },
+        ]),
+      ),
     listInvitations: async () => [],
     listGrants: async () => [
       {
@@ -248,6 +258,20 @@ describe("设置 → 账号与共享", () => {
     // owner 没有显示名时叫「管理员」，同事按名字。
     expect(screen.getByText("管理员")).toBeTruthy();
     expect((await screen.findAllByText("同事")).length).toBeGreaterThan(0);
+  });
+
+  it("成员带签发方：有中转来源时标出中转名与本机，全是本机时不出现", async () => {
+    mocks.resume.mockResolvedValue(
+      session(OWNER, "owner", ["identity:manage", "identity:read"]),
+    );
+    const { unmount } = mount();
+    expect((await screen.findAllByText("同事")).length).toBeGreaterThan(0);
+    expect(screen.queryByText("本机")).toBeNull();
+    unmount();
+    mocks.relay.mockReturnValue("LAN 中转");
+    mount();
+    expect(await screen.findByText("LAN 中转")).toBeTruthy();
+    expect(screen.getByText("本机")).toBeTruthy();
   });
 
   it("生成邀请之后给出落在页面根片段上的链接", async () => {

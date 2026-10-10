@@ -47,6 +47,7 @@ import {
 import { SettingsGroup } from "../SettingsGroup";
 import { SettingsRow } from "../SettingsRow";
 import { CONTROL_WIDTH } from "./GeneralPage";
+import { useOrigins } from "./origins";
 import { Alert, AlertTitle } from "@/ui/alert";
 import { Card } from "@/ui/card";
 import { Button } from "@/ui/button";
@@ -248,6 +249,11 @@ function usePasswordAct() {
     },
     [client, t, warn],
   );
+}
+
+function OriginText({ label }: { label: string | null }) {
+  if (label === null) return null;
+  return <span className="text-[12px] text-muted-foreground">{label}</span>;
 }
 
 function usePrincipals() {
@@ -481,6 +487,9 @@ function Members({ self, selfOwner }: { self: string; selfOwner: boolean }) {
   const act = useAct();
   const passwordAct = usePasswordAct();
   const principals = usePrincipals();
+  const origins = useOrigins(
+    (principals.data ?? []).map((principal) => principal.principalId),
+  );
   const [adding, setAdding] = React.useState(false);
   const [confirm, setConfirm] = React.useState<Principal | null>(null);
   const [resetting, setResetting] = React.useState<ResetTarget | null>(null);
@@ -492,6 +501,7 @@ function Members({ self, selfOwner }: { self: string; selfOwner: boolean }) {
           key={principal.principalId}
           label={principalName(principal, t)}
         >
+          <OriginText label={origins.label(principal.principalId)} />
           {principal.disabledAtMs > 0 ? (
             <span className="text-[12px] text-muted-foreground">
               {t("sharing.members.disabled")}
@@ -910,6 +920,9 @@ function Invitations({ groupsOnly }: { groupsOnly?: Group[] }) {
     queryKey: ["accounts", "invitations"],
     queryFn: listInvitations,
   });
+  const origins = useOrigins(
+    (invitations.data ?? []).map((invitation) => invitation.issuedBy),
+  );
   const [open, setOpen] = React.useState(false);
   const [workspaceId, setWorkspaceId] = React.useState("");
   const [groupId, setGroupId] = React.useState("");
@@ -943,6 +956,7 @@ function Invitations({ groupsOnly }: { groupsOnly?: Group[] }) {
     <SettingsGroup title={t("sharing.invites")}>
       {pending.map((invitation) => (
         <SettingsRow key={invitation.invitationId} label={labelOf(invitation)}>
+          <OriginText label={origins.label(invitation.issuedBy)} />
           <span className="text-[12px] text-muted-foreground">
             {t("sharing.invites.expires", {
               time: format.format(invitation.expiresAtMs),
