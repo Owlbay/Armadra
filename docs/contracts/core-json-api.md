@@ -3933,8 +3933,8 @@ mod 在 `session.start` 用 `$.command.register` 注册七条命令（都是 `im
 ### 62.2 页面
 
 - **三处登录**：中继托管页面（`/app/`，`RelaySignIn`）、手机连接页（个人中转）、设置 → 远程访问的中转账号登录框。提交后得知需要挑战（core 的 `challenge_required`，或页面直接调远程服务时对端的 `challenge_required` 随后读 `platform.info`），弹出挑战面板（`ChallengeSheet`），拿到令牌自动带着重提交一次；`challenge_invalid` 提示重试，下一次提交重新挑战。
-- **挑战面板**：页面自己的来源就是中继来源（托管页面）时直接渲染 Turnstile 组件（脚本 `https://challenges.cloudflare.com/turnstile/v0/api.js`，显式渲染）；否则（桌面窗口、服务器壳网页、手机 App）内嵌中继托管的 `<issuer>/app/challenge?siteKey=…&parent=<页面来源>` 同源页，该页只渲染组件，用 `postMessage({ type: "armadra-challenge", token }, parent)` 把令牌交回，面板只认来自中继来源的消息。`/app/challenge` 由 `apps/web` 随 `/app/` 一起托管。
-- 页面 CSP：桌面与 Gateway 的 `frame-src` 已放行 `https:`，不为此改；中继给 `/app/*` 的 CSP 需放行 `https://challenges.cloudflare.com` 的 `script-src`、`frame-src`、`connect-src`，并允许 `/app/challenge` 被嵌入（cloud 仓的防护包）。
+- **挑战面板**：页面自己的来源就是中继来源（托管页面）时直接渲染 Turnstile 组件（脚本 `https://challenges.cloudflare.com/turnstile/v0/api.js`，显式渲染）；否则（桌面窗口、服务器壳网页、手机 App）内嵌中继托管的 `<issuer>/app/challenge?siteKey=…&parent=<页面来源>` 同源页，该页只渲染组件，用 `postMessage({ type: "armadra-challenge", token }, parent)` 把令牌交回，面板只认来自这个 iframe、中继来源的消息。挑战页挂上即发 `{ type: "armadra-challenge", status: "ready" }`，组件载不进来或判定失败发 `status: "error"`；面板在 `ready` 之前不显示 iframe（被 `frame-ancestors` 拦下时 iframe 照样触发 `load`，只能靠报到区分），10 秒内没报到或收到 `error` 换成一次「加载失败 / 重试」，不自动重试；Turnstile 以 `retry: "never"` 渲染，失败不自己反复重来。`/app/challenge` 由 `apps/web` 随 `/app/` 一起托管。
+- 页面 CSP：桌面与 Gateway 的 `frame-src` 已放行 `https:`，不为此改；中继给 `/app/*` 的 CSP 需放行 `https://challenges.cloudflare.com` 的 `script-src`、`frame-src`、`connect-src`，并允许 `/app/challenge` 被嵌入（cloud 仓的防护包）：`frame-ancestors` 至少含桌面窗口的来源 `http://127.0.0.1:*`（页面由本机回环上随机端口的静态服务给出）与移动壳的 `https://localhost`、`capacitor://localhost`。桌面壳改写发往中继的 `Origin` 时跳过中继自己页面的同源请求。中继不声明挑战（`platform.info` 没有 `challenge`）时不弹面板。
 - 界面文案在 `apps/web/src/i18n/`（`challenge.*`、`error.challengeRequired`、`error.challengeInvalid`），中英同步。
 
 ## 63. 改远程服务账号的口令
