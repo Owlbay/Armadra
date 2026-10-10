@@ -156,14 +156,14 @@
 
 ### 4.1 Homebrew cask（macOS）
 
-官方 `homebrew/cask` 要求签名 + 公证（§2.1），且有「知名度」门槛（社区口径约 ≥ 225 stars / 90 forks，官方不公布数字）。**先建自家 tap** `Owlbay/homebrew-tap`：`release.yml` 的 `assemble` 之后加 `publish-tap` 作业，用 `HOMEBREW_TAP_TOKEN`（细粒度 PAT，只对 tap 仓库 `contents: write`）推一条 `Casks/armadra.rb`（`sha256` 来自 `SHA256SUMS`，`livecheck` 指向 GitHub Releases）。达到门槛后向官方提 PR。（[Homebrew Acceptable Casks](https://docs.brew.sh/Acceptable-Casks)、[ksail #5150](https://github.com/devantler-tech/ksail/issues/5150)）
+官方 `homebrew/cask` 要求签名 + 公证（§2.1），且有「知名度」门槛（社区口径约 ≥ 225 stars / 90 forks，官方不公布数字）。**先建自家 tap** `AMA-Link/homebrew-tap`：`release.yml` 的 `assemble` 之后加 `publish-tap` 作业，用 `HOMEBREW_TAP_TOKEN`（细粒度 PAT，只对 tap 仓库 `contents: write`）推一条 `Casks/armadra.rb`（`sha256` 来自 `SHA256SUMS`，`livecheck` 指向 GitHub Releases）。达到门槛后向官方提 PR。（[Homebrew Acceptable Casks](https://docs.brew.sh/Acceptable-Casks)、[ksail #5150](https://github.com/devantler-tech/ksail/issues/5150)）
 **本地可验**：`brew install --cask ./Casks/armadra.rb` + `brew audit --cask`。
 **未配置时**：作业跳过。
 
 ### 4.2 winget 与 Scoop（Windows）
 
 - **winget**：社区仓库 `microsoft/winget-pkgs` **不要求代码签名**，靠 schema 校验 + URL 安全 + Defender 扫描；首次提交人工审（数天），之后 `wingetcreate update` 自动 PR。安装器必须支持静默安装（NSIS 的 `/S` 已满足）。secret `WINGET_TOKEN`（对 fork 仓库 `contents: write` + `pull_requests: write` 的细粒度 PAT）。（[winget-pkgs 文档](https://github.com/microsoft/winget-pkgs/blob/master/doc/README.md)、[wingetcreate](https://github.com/microsoft/winget-create)）
-- **Scoop**：自家 bucket `Owlbay/scoop-bucket`，manifest 用便携 zip（本仓已有 Windows zip 产物）、`checkver: github`、`autoupdate` 从 `SHA256SUMS` 取哈希；官方 `Extras` 门槛约 100 stars。（[Scoop Autoupdate wiki](https://github.com/ScoopInstaller/Scoop/wiki/App-Manifest-Autoupdate)）
+- **Scoop**：自家 bucket `AMA-Link/scoop-bucket`，manifest 用便携 zip（本仓已有 Windows zip 产物）、`checkver: github`、`autoupdate` 从 `SHA256SUMS` 取哈希；官方 `Extras` 门槛约 100 stars。（[Scoop Autoupdate wiki](https://github.com/ScoopInstaller/Scoop/wiki/App-Manifest-Autoupdate)）
   **本地可验**：`winget validate --manifest`、`scoop install ./bucket/armadra.json`。
 
 ### 4.3 Linux：AUR、apt / rpm 仓库、Flathub、Snap
@@ -180,7 +180,7 @@
 ### 4.4 服务器壳容器镜像（GHCR）
 
 **事实**。GHCR 公共镜像存储与带宽「目前免费」，GitHub 承诺改政策前至少提前一个月通知；无拉取限额。（[GitHub Packages billing](https://docs.github.com/en/billing/concepts/product-billing/github-packages)）
-**方案**。新增 `apps/server/Dockerfile`（`node:22-bookworm-slim`，安装 `tmux`、`git`、`openssh-client`；headless 浏览器节点用 `chromedp/headless-shell:stable` 作第二阶段的 `COPY --from`，或文档化 `ARMADRA_BROWSER_PATH` 指向宿主 Chromium），`release.yml` 加 `image` 作业用 `docker/build-push-action` 推 `ghcr.io/owlbay/armadra-server:<version>` 与 `:latest`，凭据是 `GITHUB_TOKEN`（`packages: write`），**不需要新 secret**。`tools/dev-stack/` 的 compose 直接 `build: ../../apps/server`。
+**方案**。新增 `apps/server/Dockerfile`（`node:22-bookworm-slim`，安装 `tmux`、`git`、`openssh-client`；headless 浏览器节点用 `chromedp/headless-shell:stable` 作第二阶段的 `COPY --from`，或文档化 `ARMADRA_BROWSER_PATH` 指向宿主 Chromium），`release.yml` 加 `image` 作业用 `docker/build-push-action` 推 `ghcr.io/ama-link/armadra-server:<version>` 与 `:latest`，凭据是 `GITHUB_TOKEN`（`packages: write`），**不需要新 secret**。`tools/dev-stack/` 的 compose 直接 `build: ../../apps/server`。
 **未配置时**：无；镜像作业只在非 dry-run 的发布里跑。
 
 ### 4.5 手机商店

@@ -1,7 +1,7 @@
 # 用户待办清单
 
 > 状态：2026-10-05 汇总。补全与 G5（G5-00…G5-30）已全部合入，代码侧没有挂着的工作包；下面每一项都要维护者提供账号、证书、设备或域名，或在 GitHub 上动手。来源：[G5 剩余事项计划](../design/g5-remaining-plan.md) §4 B 档、[补全进度](completion-progress.md) G4-1「需用户提供」与 G5 各节的「没做 / 需用户提供」，合并去重。
-> 每条写：**提供**什么、**填在**哪里（secret / 变量 / 设置项 / 环境变量）、**验证**用什么命令或探针。不写真实值；步骤细节见各条链接的指南。secret 与变量都指 GitHub 仓库 Owlbay/Armadra 的 Actions 设置。
+> 每条写：**提供**什么、**填在**哪里（secret / 变量 / 设置项 / 环境变量）、**验证**用什么命令或探针。不写真实值；步骤细节见各条链接的指南。secret 与变量都指 GitHub 仓库 AMA-Link/Armadra 的 Actions 设置。
 
 ## 1. 证书与签名
 
@@ -121,7 +121,7 @@
 - [ ] **nightly 首跑与观察项**
   - 提供：无（看 CI）。
   - 填在：无。
-  - 验证：`gh run list --repo Owlbay/Armadra --workflow nightly.yml` 里 main 的夜间运行：`linux-arm64` 作业的 `deb-install`（arm64 deb 与 AppImage）通过；`server-caddy-e2e` 通过；日志里统计「配对重试后完成」出现的次数（R-89 的修复是推断的）。
+  - 验证：`gh run list --repo AMA-Link/Armadra --workflow nightly.yml` 里 main 的夜间运行：`linux-arm64` 作业的 `deb-install`（arm64 deb 与 AppImage）通过；`server-caddy-e2e` 通过；日志里统计「配对重试后完成」出现的次数（R-89 的修复是推断的）。
 
 ## 5. CLI 安装与登录
 
@@ -155,4 +155,4 @@
 - [ ] **Dependabot 警报 #49、#50**
   - 提供：无。
   - 填在：GitHub → Security → Dependabot，#49 `braces`、#50 `http-cache-semantics` 选「代码路径不可达 / 仅构建期」dismiss，理由见 [CI 与发布](../guides/ci-release.md) §3.2。
-  - 验证：`gh api 'repos/Owlbay/Armadra/dependabot/alerts?state=open'` 答空。
+  - 验证：`gh api 'repos/AMA-Link/Armadra/dependabot/alerts?state=open'` 答空。

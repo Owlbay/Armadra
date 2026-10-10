@@ -1,7 +1,7 @@
 # 控制面 `apps/cloud`：详细设计
 
 > 状态：目标设计（2026-10-06）。本文是[落地总计划](../platform-implementation-plan.md)工作包 **C2-1（账号与会话）**、**C2-2（源目录与断言）**、**C2-3（passkey / TOTP / OAuth）**、**C3-3（中继令牌、`me/stream`）**、**C4-2（组织与链接）**、**C6-1 / C6-2（托管与计费预留）** 的实现规格。上位设计：[平台设计](../platform-saas-architecture.md) §4–§6、§9、§11、§16；契约：[协议包](protocol-package.md) §5。
-> 代码在 `Owlbay/armadra-cloud` 仓 `apps/cloud/`；只依赖 `packages/platform-protocol`、`packages/cloud-shared`。
+> 代码在 `AMA-Link/armadra-cloud` 仓 `apps/cloud/`；只依赖 `packages/platform-protocol`、`packages/cloud-shared`。
 
 ## §1 技术选择（轻量，给出理由）
 
@@ -363,7 +363,7 @@ pending ──approve(账号会话)──▶ approved ──poll──▶ consum
 
 ## §8 托管页面与落地页（`http/static.ts`）
 
-`ARMADRA_CLOUD_WEB_ROOT`（镜像内 `/app/web`，`Dockerfile` 从 `ghcr.io/owlbay/armadra-server:<deploy/compat.json 的 web>` `COPY --from`）：`/app/*`、`/j/<linkId>`、`/device` 都答 `index.html`；`/health` 与 `/v1/*` 优先。没有 web root 时 `/j/*` 答最小 HTML（深链 `armadra://join?link=<id>&s=<片段由脚本原样转交>`——片段不发往服务器，HTML 里一段内联脚本把 `location.hash` 拼进深链）。
+`ARMADRA_CLOUD_WEB_ROOT`（镜像内 `/app/web`，`Dockerfile` 从 `ghcr.io/ama-link/armadra-server:<deploy/compat.json 的 web>` `COPY --from`）：`/app/*`、`/j/<linkId>`、`/device` 都答 `index.html`；`/health` 与 `/v1/*` 优先。没有 web root 时 `/j/*` 答最小 HTML（深链 `armadra://join?link=<id>&s=<片段由脚本原样转交>`——片段不发往服务器，HTML 里一段内联脚本把 `location.hash` 拼进深链）。
 
 ## §9 配置
 

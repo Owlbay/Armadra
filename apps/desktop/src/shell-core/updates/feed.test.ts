@@ -472,11 +472,11 @@ describe("the release index", () => {
       releaseSourceFor(
         "",
         [
-          "https://github.com/Owlbay/Armadra/releases/latest/download/latest.json",
+          "https://github.com/AMA-Link/Armadra/releases/latest/download/latest.json",
         ],
         false,
       ),
-    ).toBe("https://api.github.com/repos/Owlbay/Armadra");
+    ).toBe("https://api.github.com/repos/AMA-Link/Armadra");
     expect(
       releaseSourceFor(
         "http://127.0.0.1:8090/repos/armadra/armadra/",

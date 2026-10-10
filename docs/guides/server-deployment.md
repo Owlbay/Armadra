@@ -24,13 +24,13 @@
 
 ### 2.1 容器（推荐）
 
-镜像 `ghcr.io/owlbay/armadra-server:<版本>`（推 `v*` 标签时发布，`linux/amd64` 与 `linux/arm64`），也可以从源码构建：
+镜像 `ghcr.io/ama-link/armadra-server:<版本>`（推 `v*` 标签时发布，`linux/amd64` 与 `linux/arm64`），也可以从源码构建：
 `docker build -f apps/server/docker/Dockerfile -t armadra-server .`。镜像以 uid 10001 运行，数据只在 `/data` 卷里，
 环境变量表见 [apps/server/docker/README.md](../../apps/server/docker/README.md)。
 
 ```sh
 mkdir -p /srv/armadra && cd /srv/armadra
-curl -fsSLO https://raw.githubusercontent.com/Owlbay/Armadra/main/apps/server/docker/compose.yml
+curl -fsSLO https://raw.githubusercontent.com/AMA-Link/Armadra/main/apps/server/docker/compose.yml
 # 改 compose.yml 里的 ARMADRA_PUBLIC_ORIGIN 与 ARMADRA_ACME_EMAIL
 docker compose up -d
 docker compose logs armadra | grep "armadra-server pairing"

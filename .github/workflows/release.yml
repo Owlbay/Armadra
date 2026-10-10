@@ -805,7 +805,7 @@ jobs:
             Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery | Out-Null
             Repair-WinGetPackageManager -AllUsers -Latest
           }
-          $dir = Get-ChildItem -Directory -Recurse rendered/channels/winget/manifests | Where-Object { Test-Path (Join-Path $_.FullName 'Owlbay.Armadra.yaml') } | Select-Object -First 1
+          $dir = Get-ChildItem -Directory -Recurse rendered/channels/winget/manifests | Where-Object { Test-Path (Join-Path $_.FullName 'AMA-Link.Armadra.yaml') } | Select-Object -First 1
           winget validate --manifest $dir.FullName --disable-interactivity
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: scoop install
