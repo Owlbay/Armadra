@@ -1,0 +1,9 @@
+{
+  "id": "relay-challenge-desktop",
+  "tier": "b",
+  "script": "tools/probes/relay-challenge-desktop.mjs",
+  "args": ["{out}"],
+  "requires": ["cloud"],
+  "platforms": ["darwin", "linux"],
+  "timeoutMinutes": 10
+}

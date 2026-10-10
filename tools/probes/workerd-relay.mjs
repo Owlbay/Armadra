@@ -24,6 +24,8 @@ export async function startWorkerd({
   cloudHome,
   webRoot,
   onSecret = (_name, value) => value,
+  // 额外的 `--var NAME:value`（如 Turnstile 的官方测试站点密钥与 secret）。
+  vars = {},
 }) {
   const project = findWorkersProject(cloudHome);
   if (!project)
@@ -72,10 +74,20 @@ export async function startWorkerd({
       `RELAY_PERSONAL_ACCOUNT:${account}`,
       "--var",
       `RELAY_PERSONAL_PASSWORD:${password}`,
+      ...Object.entries(vars).flatMap(([name, value]) => [
+        "--var",
+        `${name}:${value}`,
+      ]),
     ],
     {
       cwd: project.cwd,
-      env: { ...process.env, WRANGLER_SEND_METRICS: "false", CI: "1" },
+      env: {
+        ...process.env,
+        WRANGLER_SEND_METRICS: "false",
+        // 日志写进这一次的临时目录，不落到用户目录下的 .wrangler。
+        WRANGLER_LOG_PATH: join(work, "logs"),
+        CI: "1",
+      },
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -109,7 +121,9 @@ export async function startWorkerd({
     );
   } catch (error) {
     await stop();
-    throw error;
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}\n${text.slice(-1200)}`,
+    );
   }
   return { issuer, account, password, log: () => text, stop };
 }

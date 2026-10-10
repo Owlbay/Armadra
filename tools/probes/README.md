@@ -282,6 +282,8 @@ node tools/ci/e2e.mjs --tier a --only personal-roundtrip
 
 指向别的中继（平台计划 V4，Workers 中继探针）：`personal-roundtrip.mjs --workerd` 用 armadra-cloud 检出里的 `apps/relay-workers` 起本地 workerd（`wrangler dev --local`，不连 Cloudflare 账号，页面产物取 `apps/web/dist`，`tools/probes/workerd-relay.mjs`），`--issuer <地址>` 对已经在跑的中继跑（账号与口令取环境变量 `ARMADRA_PROBE_RELAY_ACCOUNT` / `ARMADRA_PROBE_RELAY_PASSWORD`）。这两种模式没有 init/serve、自签 CA、Electron 与手机，core 以 `ARMADRA_RELAY_ALLOW_INSECURE=1` 放行明文 `ws://`；多出「只读分享」（只读工作空间链接与会话链接，访客会话是 viewer：看得到、建终端 403）与「媒体票 Range」（206、Content-Range、不认识的票 404）。清单 `personal-roundtrip-workers`（B 档，依赖 `cloud`，没有检出时 skipped）。
 
+人机验证（契约 §62.2）：`relay-challenge-desktop.mjs` 起两台本地 workerd 中继（一台不配 Turnstile、一台配 Cloudflare 官方测试站点密钥）与隔离的开发构建 Electron，在设置 → 远程访问里真实添加中转账号：不声明挑战的中继不弹验证面板；声明了的，挑战页在桌面窗口（`http://127.0.0.1:<端口>`）里载入并报 `ready`、iframe 只挂一次、令牌从中继来源交回后面板关掉（测试密钥的答案没有 `action`，中继判 `challenge_invalid`，页面提示一次）。清单 `relay-challenge-desktop`（B 档，依赖 `cloud`）。
+
 线上只读探针 `relay-live-readonly.mjs`：部署后对 `https://relay.armadra.com` 只发 GET `/health` 与 `/.well-known/*`（平台信息、公钥集无私钥分量、不种 Cookie），不登录、不登记；默认不在 CI 跑，没有清单条目：`node tools/probes/relay-live-readonly.mjs [--issuer 地址] [--json]`。
 
 ## 多源并存与 WebKit 跑法（经中继的数据流）
