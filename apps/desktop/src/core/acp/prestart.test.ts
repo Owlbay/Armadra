@@ -23,6 +23,7 @@ import {
   AcpWarmer,
   adapterPhases,
   bundledCli,
+  bundledClaudeCodeVersion,
   launchSignature,
   programFingerprint,
 } from "./prestart";
@@ -164,6 +165,49 @@ describe("bundledCli", () => {
     ).toMatch(/codex-linux-x64[/\\]vendor[/\\].+[/\\]codex$/);
 
     expect(bundledCli([join(root, "nothing")], "darwin", "arm64")).toBe(
+      undefined,
+    );
+  });
+});
+
+describe("bundledClaudeCodeVersion", () => {
+  it("reads the Claude Code version the adapter's SDK ships, and nothing it cannot trust", () => {
+    const root = temp("armadra-acp-claude-version-");
+    const pkg = join(root, "node_modules", "@agentclientprotocol", "claude");
+    mkdirSync(join(pkg, "dist"), { recursive: true });
+    const entry = join(pkg, "dist", "index.js");
+    writeFileSync(entry, "");
+    const scope = join(pkg, "node_modules", "@anthropic-ai");
+    mkdirSync(join(scope, "claude-agent-sdk-darwin-arm64"), {
+      recursive: true,
+    });
+    writeFileSync(join(scope, "claude-agent-sdk-darwin-arm64", "claude"), "");
+    // 没有 SDK 的清单：未知。
+    expect(bundledClaudeCodeVersion([entry], {}, "darwin", "arm64")).toBe(
+      undefined,
+    );
+    mkdirSync(join(scope, "claude-agent-sdk"));
+    writeFileSync(
+      join(scope, "claude-agent-sdk", "package.json"),
+      JSON.stringify({ version: "0.3.293", claudeCodeVersion: "2.1.293" }),
+    );
+    expect(bundledClaudeCodeVersion([entry], {}, "darwin", "arm64")).toBe(
+      "2.1.293",
+    );
+    // 适配器改用别的 CLI：自带的那份不作数。
+    expect(
+      bundledClaudeCodeVersion(
+        [entry],
+        { CLAUDE_CODE_EXECUTABLE: "/usr/local/bin/claude" },
+        "darwin",
+        "arm64",
+      ),
+    ).toBe(undefined);
+    writeFileSync(
+      join(scope, "claude-agent-sdk", "package.json"),
+      JSON.stringify({ claudeCodeVersion: 2 }),
+    );
+    expect(bundledClaudeCodeVersion([entry], {}, "darwin", "arm64")).toBe(
       undefined,
     );
   });

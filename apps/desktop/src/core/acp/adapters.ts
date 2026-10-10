@@ -70,12 +70,19 @@ export interface AcpAdapter {
    *   * `mcp`：`session/new.mcpServers` 带 `armadra-hook mcp`；ama 走 profile
    *     的 host 适配器，不加，免得两套工具表；
    *   * `reuse`：终端启动器给的环境变量 / argv 照用；
-   *   * `passthrough`：注入 argv 前面要隔一个 `--`（pi-acp 透传给 pi）。
+   *   * `passthrough`：注入 argv 前面要隔一个 `--`（pi-acp 透传给 pi）；
+   *   * `mods`：Claude Code mod 经 `CLAUDE_CODE_PLUGIN_DIRS` 挂给适配器起的 CLI。
    */
   readonly injection: {
     readonly mcp: boolean;
     readonly reuse: readonly ("env" | "args")[];
     readonly passthrough?: "--";
+    /**
+     * 挂 Claude Code mod（契约 §59）：`CLAUDE_CODE_PLUGIN_DIRS` 指向 mod 目录、
+     * `ARMADRA_MOD_PROFILE=acp`，门是适配器自带 CLI 的版本。mod 要靠节点身份
+     * 找端点，所以这一家不预启动。
+     */
+    readonly mods?: boolean;
   };
   /** 前台进程门认的 argv[0] basename（会话 pid 就是适配器 pid）。 */
   readonly expectedProcess: readonly string[];
@@ -108,8 +115,10 @@ export const ACP_ADAPTERS: readonly AcpAdapter[] = [
       plan: { modeId: "plan" },
     },
     // `--settings` / `--plugin-dir` / `--append-system-prompt-file` 在 ACP
-    // 下没有对应参数（D6）；`CLAUDE_CONFIG_DIR` 不设，沿用用户登录。
-    injection: { mcp: true, reuse: [] },
+    // 下没有对应参数（D6）：画布工具走 MCP；mod 经 SDK 宿主认的
+    // `CLAUDE_CODE_PLUGIN_DIRS` 挂（只挂 mod，不挂技能插件），只带斜杠命令与
+    // hello，状态仍由 ACP 会话写。`CLAUDE_CONFIG_DIR` 不设，沿用用户登录。
+    injection: { mcp: true, reuse: [], mods: true },
     expectedProcess: ["claude-agent-acp"],
     canvasTools: "mcp",
   },

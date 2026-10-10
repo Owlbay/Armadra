@@ -41,7 +41,12 @@ import {
 } from "../agent/credentials";
 import { expectedProcesses } from "../agent/launch";
 import { configDirFor, launchGate } from "../agent/launch-gate";
-import { type AgentSettings, baseAgent, customAgent } from "../agent/registry";
+import {
+  type AgentSettings,
+  baseAgent,
+  customAgent,
+  resolveCommand,
+} from "../agent/registry";
 import { acpInjection } from "../agent/canvas-launch";
 import { getAgentStatus } from "../agent/status";
 import { nodeRole } from "../canvas/context-links";
@@ -83,6 +88,7 @@ import {
   IDLE_WARM_DELAY_MS,
   type WarmTarget,
   adapterPhases,
+  bundledClaudeCodeVersion,
   setAcpWarmer,
 } from "./prestart";
 import { AcpMirror, mirrorPath } from "./mirror";
@@ -253,6 +259,11 @@ class AcpRuntime {
     const adapter = adapterFor(settings, agentId);
     if (adapter === undefined) return undefined;
     const custom = customAgent(settings, agentId);
+    const customEnv = custom?.env ?? {};
+    const baseEnv: NodeJS.ProcessEnv = { ...process.env };
+    for (const [name, value] of Object.entries(customEnv)) {
+      baseEnv[name] = value;
+    }
     // 预热只为把程序跑一遍：不准备注入产物。
     const injection =
       options.inject === false
@@ -263,12 +274,13 @@ class AcpRuntime {
             agentId,
             adapter,
             (message, fields) => this.context.log.warn(message, fields),
+            adapter.injection.mods === true
+              ? {
+                  claudeVersion: bundledClaudeVersion(adapter.program, baseEnv),
+                  ambient: baseEnv,
+                }
+              : {},
           );
-    const customEnv = custom?.env ?? {};
-    const baseEnv: NodeJS.ProcessEnv = { ...process.env };
-    for (const [name, value] of Object.entries(customEnv)) {
-      baseEnv[name] = value;
-    }
     for (const [name, value] of injection.env) baseEnv[name] = value;
     return {
       adapter,
@@ -301,13 +313,13 @@ class AcpRuntime {
   }
 
   /**
-   * 契约 §51 的预启动：只给注入不靠节点身份的那几家（`injection.reuse` 为空），
-   * 没装、不是 ACP 入口时什么都不做。
+   * 契约 §51 的预启动：只给注入不靠节点身份的那几家（`injection.reuse` 为空、
+   * 也没挂 mod：mod 靠节点身份找端点，§59），没装、不是 ACP 入口时什么都不做。
    */
   prestart(workspaceId: string, agentId: string, cwd: string): void {
     const launch = this.localLaunch(agentId);
     if (launch === undefined) return;
-    if (launch.adapter.injection.reuse.length > 0) return;
+    if (!prestartable(launch)) return;
     const plan = this.prestartPlan(launch, cwd);
     if (plan instanceof AcpError) return;
     this.pool.prestart(AcpPrestartPool.key(agentId, workspaceId), plan);
@@ -628,7 +640,7 @@ class AcpRuntime {
       // 菜单打开时预启动的那一个（契约 §51）：节点没带凭据、注入不靠节点身份、
       // 启动签名相同才领。
       const reference =
-        secrets.length === 0 && adapter.injection.reuse.length === 0
+        secrets.length === 0 && prestartable(launch)
           ? this.prestartPlan(launch, spec.cwd)
           : undefined;
       const prestarted =
@@ -689,6 +701,29 @@ class AcpRuntime {
       agentNames: expectedProcesses(baseAgent(settings, agentId)),
     };
   }
+}
+
+/**
+ * 这一家的注入不靠节点身份、可以先起好进程等节点来领（契约 §51）：终端注入的
+ * 环境或 argv 在 CLI 里按节点身份生效（`injection.reuse`），mod 也是（它读
+ * 进程环境里的 `ARMADRA_NODE_ID` 找端点，预启动的进程还没有节点，§59）。
+ */
+function prestartable(launch: LocalLaunch): boolean {
+  return (
+    launch.adapter.injection.reuse.length === 0 &&
+    launch.injection.env.length === 0
+  );
+}
+
+/** 适配器 `program` 自带的 Claude Code 版本；装不上、找不到时 `undefined`。 */
+function bundledClaudeVersion(
+  program: string,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  const resolved = resolveCommand(program, env);
+  return resolved === undefined
+    ? undefined
+    : bundledClaudeCodeVersion([resolved], env);
 }
 
 /**

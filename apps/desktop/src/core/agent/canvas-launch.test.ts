@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -22,7 +23,9 @@ import { resumeLine } from "../terminal/hibernator";
 import { tempDir } from "../testing/temp-dir";
 import { acpAdapter } from "../acp/adapters";
 import {
+  ACP_MOD_PROFILE,
   acpInjection,
+  acpModEnvironment,
   canvasEnvironment,
   canvasLaunch,
   canvasLaunchLine,
@@ -390,6 +393,48 @@ describe.runIf(POSIX)("the ACP driver's half of the injection", () => {
     );
     expect(opencode.args).toEqual([]);
     expect(opencode.env.map(([name]) => name)).toContain("OPENCODE_CONFIG_DIR");
+  });
+
+  it("mounts the Claude mod for the adapter's own Claude Code at or above the gate", () => {
+    const modDir = artifactLayout(dataDir, "claude").modDir as string;
+    const claude = acpAdapter("claude")!;
+    expect(claude.injection.mods).toBe(true);
+    // 门开：mod 目录与 profile，只这两条；argv 不动。
+    expect(
+      acpInjection(settings, dataDir, "claude", claude, undefined, {
+        claudeVersion: "2.1.293",
+        ambient: {},
+      }),
+    ).toEqual({
+      env: [
+        ["CLAUDE_CODE_PLUGIN_DIRS", modDir],
+        ["ARMADRA_MOD_PROFILE", ACP_MOD_PROFILE],
+      ],
+      args: [],
+    });
+    // 模块真的生成了：适配器起的 CLI 读得到。
+    expect(existsSync(join(modDir, "hooks", "armadra.ts"))).toBe(true);
+    // 门关：版本未知、低于门槛。
+    for (const claudeVersion of [undefined, null, "2.1.292", "garbage"]) {
+      expect(
+        acpInjection(settings, dataDir, "claude", claude, undefined, {
+          claudeVersion,
+        }).env,
+      ).toEqual([]);
+    }
+    // 用户自己的插件目录保留，mod 接在后面且不重复。
+    const own = join(dataDir, "own plugin");
+    expect(
+      acpModEnvironment(dataDir, "claude", {
+        claudeVersion: "2.1.296",
+        ambient: { CLAUDE_CODE_PLUGIN_DIRS: [own, modDir].join(delimiter) },
+      })[0],
+    ).toEqual(["CLAUDE_CODE_PLUGIN_DIRS", [own, modDir].join(delimiter)]);
+    // 只有 Claude 有 mod；别家的表行没有 `mods`。
+    expect(
+      acpModEnvironment(dataDir, "codex", { claudeVersion: "2.1.296" }),
+    ).toEqual([]);
+    expect(acpAdapter("codex")!.injection.mods).toBeUndefined();
   });
 });
 
