@@ -1,7 +1,7 @@
 # 正规化平台落地总计划
 
 > 状态：目标计划（2026-10-06）。把[工程规范化](engineering-standardization.md)的 E0–E6 与[平台设计](platform-saas-architecture.md)的阶段 0–6（含 §17 个人中转与桌面零配置）合成一张有依赖关系的波次图，每个工作包写明仓库、目录、预分配编号、交付物、验收命令、推荐模型与规模；逐包的实现规格在 `docs/design/platform/` 下（§11）。E0 已派出、正在实现，列为第 0 波。现状以源码为准；本文不改代码。
-> 用户已定：按推荐全部执行；接口层 oRPC 1.15.4 精确锁；中继首版终止 TLS 零日志；SaaS 后端在独立私有仓库 `Owlbay/armadra-cloud`（MIT）；本地 PostgreSQL / Redis 只用 Docker；两种模式（SaaS 多租户 / 单人中转）；桌面端零配置可用；个人中转先于 SaaS 控制面交付。
+> 用户已定：按推荐全部执行；接口层 oRPC 1.15.4 精确锁；中继首版终止 TLS 零日志；SaaS 后端在独立私有仓库 `AMA-Link/armadra-cloud`（MIT）；本地 PostgreSQL / Redis 只用 Docker；两种模式（SaaS 多租户 / 单人中转）；桌面端零配置可用；个人中转先于 SaaS 控制面交付。
 > 不出现任何第三方参考项目的名字；不建云资源、不发布包、不改用户系统配置。
 
 ## §0 结论
@@ -245,7 +245,7 @@ W2 里一旦 E1 合入即可派：A1-1、A1-3、E2（需 A3-0）、A0-5（需 C0
 
 ## §8 用户需要动手的对外操作（本计划不执行）
 
-1. `Owlbay/armadra-cloud` 已建（私有、MIT）；设 branch protection、secret scanning。
+1. `AMA-Link/armadra-cloud` 已建（私有、MIT）；设 branch protection、secret scanning。
 2. npm：为 `@armadra/platform-protocol` 与 `@armadra/relay` 配 trusted publishing（与 `@armadra/agent` 同一做法）；首个 `v0.1.0` 标签由用户打。
 3. GHCR：允许新仓工作流推 `armadra-cloud` / `armadra-relay` 镜像；或先只用本地构建（dev-stack 缺省）。
 4. SaaS 上线前（W4 后）：签名密钥文件、托管 PostgreSQL / Redis、`api.` / `app.` 域名、`*.src.<域>` 通配证书、SMTP。
@@ -266,7 +266,7 @@ W2 里一旦 E1 合入即可派：A1-1、A1-3、E2（需 A3-0）、A0-5（需 C0
 | Q9  | SaaS 域名                                    | 占位 `api.armadra.app`、`app.armadra.app`、`*.src.relay.armadra.app`（只进配置样例）                          | 配置与文档                      |
 | Q10 | 迁移编号对调（0039 源表、0040 云登录）       | 按本计划（合入顺序）                                                                                          | 已改平台设计 §4.3               |
 | Q11 | `@armadra/relay` 是否发 npm                  | 发（`npx @armadra/relay personal`）                                                                           | release.yml                     |
-| Q12 | cloud / relay 镜像里的页面来源               | 构建时从 `ghcr.io/owlbay/armadra-server:<compat>` 复制同版本 `/app/web`                                       | Dockerfile                      |
+| Q12 | cloud / relay 镜像里的页面来源               | 构建时从 `ghcr.io/ama-link/armadra-server:<compat>` 复制同版本 `/app/web`                                     | Dockerfile                      |
 | Q13 | E3 的并行度                                  | 同时最多 2 个域在飞（避免 `route-scopes.ts` 与契约文档冲突）                                                  | 派发节奏                        |
 | Q14 | 页面刷新令牌在浏览器（云页面）是否持久化     | 内存（D15）                                                                                                   | A3-4 浏览器路径                 |
 

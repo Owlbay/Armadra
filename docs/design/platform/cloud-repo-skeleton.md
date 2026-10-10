@@ -1,4 +1,4 @@
-# `Owlbay/armadra-cloud` 仓库骨架：详细设计
+# `AMA-Link/armadra-cloud` 仓库骨架：详细设计
 
 > 状态：目标设计（2026-10-06）。本文是[落地总计划](../platform-implementation-plan.md)工作包 **C0-1** 的实现规格：目录、workspace、TypeScript / ESLint / Prettier / Vitest 配置、AGENTS.md、repo-check、migrations.lock、CI、Dockerfile、compose、一键脚本与版本选择。上位设计：[平台设计](../platform-saas-architecture.md) §16.2、§16.4、§17.8。
 > 仓库现状：只有 `LICENSE`（MIT），私有。建仓、分支保护、npm trusted publishing、GHCR 权限是用户的对外操作；本文只写进仓库的东西。
@@ -174,12 +174,12 @@ armadra-cloud/
 1. 校验标签 = 根 `package.json`、协议包、`@armadra/relay`、两 app 的版本一致（`tools/release-check.mjs`）。
 2. `pnpm check && pnpm test`。
 3. `pnpm --filter @armadra/platform-protocol publish --provenance --access public --no-git-checks`；`pnpm --filter @armadra/relay publish …`（trusted publishing，不用 token）。
-4. `docker/login-action`（GHCR，`GITHUB_TOKEN`）→ `docker/build-push-action` 推 `ghcr.io/owlbay/armadra-cloud:<v>` 与 `armadra-relay:<v>`（`linux/amd64,linux/arm64`），`latest` 只在非预发布标签。
+4. `docker/login-action`（GHCR，`GITHUB_TOKEN`）→ `docker/build-push-action` 推 `ghcr.io/ama-link/armadra-cloud:<v>` 与 `armadra-relay:<v>`（`linux/amd64,linux/arm64`），`latest` 只在非预发布标签。
 5. GitHub Release 草稿，正文从 CHANGELOG 截取。
 
 ### 6.3 `nightly.yml`（cron 每日 + 手动）
 
-1. `pnpm e2e --server-image ghcr.io/owlbay/armadra-server:<compat.min>` 与 `:latest`（两次）——跨仓端到端（[验证](dev-stack-and-verification.md) §4）。
+1. `pnpm e2e --server-image ghcr.io/ama-link/armadra-server:<compat.min>` 与 `:latest`（两次）——跨仓端到端（[验证](dev-stack-and-verification.md) §4）。
 2. `knip`、`pnpm audit --prod --audit-level=high`（失败开 issue，同 Armadra B 档规则）。
 
 `tools/ci/validate-workflows.mjs` 从 Armadra 拷贝（校验 action 钉 SHA、`permissions` 最小、`timeout-minutes` 必填）。
@@ -241,7 +241,7 @@ volumes: { pg: {} }
 
 ### 7.2 `deploy/compose.yml`（参考部署）
 
-`cloud`（`ghcr.io/owlbay/armadra-cloud:${ARMADRA_CLOUD_VERSION}`，env 来自 `.env`，挂 `signing-keys.json`，`depends_on` postgres / redis 健康）、`relay`（同版本，`saas serve`，`RELAY_CLOUD_ISSUER=http://cloud:8100`，`443:8443`，证书挂载）、`postgres`、`redis`；注释写明：生产应换托管 PG / Redis、证书由运维办、先升 relay 后升 cloud。
+`cloud`（`ghcr.io/ama-link/armadra-cloud:${ARMADRA_CLOUD_VERSION}`，env 来自 `.env`，挂 `signing-keys.json`，`depends_on` postgres / redis 健康）、`relay`（同版本，`saas serve`，`RELAY_CLOUD_ISSUER=http://cloud:8100`，`443:8443`，证书挂载）、`postgres`、`redis`；注释写明：生产应换托管 PG / Redis、证书由运维办、先升 relay 后升 cloud。
 
 ### 7.3 `deploy/personal/compose.yml`
 
@@ -249,7 +249,7 @@ volumes: { pg: {} }
 name: armadra-relay-personal
 services:
   relay:
-    image: ghcr.io/owlbay/armadra-relay:${ARMADRA_RELAY_VERSION:-latest}
+    image: ghcr.io/ama-link/armadra-relay:${ARMADRA_RELAY_VERSION:-latest}
     command:
       [
         "personal",
@@ -278,7 +278,7 @@ volumes: { relay-data: {} }
 
 ```dockerfile
 ARG NODE_IMAGE=node:22.23.3-bookworm-slim
-ARG WEB_IMAGE=ghcr.io/owlbay/armadra-server:0.2.0     # deploy/compat.json 的 web；页面产物来源
+ARG WEB_IMAGE=ghcr.io/ama-link/armadra-server:0.2.0     # deploy/compat.json 的 web；页面产物来源
 FROM ${WEB_IMAGE} AS web
 FROM ${NODE_IMAGE} AS build
 RUN corepack enable

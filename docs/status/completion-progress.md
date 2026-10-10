@@ -205,7 +205,7 @@
 
 - `cli/armadra-hook/mcp.ts`：`armadra-hook mcp` 在 stdio 上讲 MCP（逐行 JSON-RPC，手写，不引 SDK）。`initialize` 回 `tools` 能力、`serverInfo` 与 `instructions`（`collab/skill.ts::mcpInstructions`：画布规则按工具名写，信任规则逐字相同）；`tools/list` 就是 `hook-client/verbs.ts::VERB_TOOLS`；`tools/call` = 一次 `POST <tool.path>`，请求由 `loadSession` / `headersFor` / `controlBody` / `send` 组成，与 `armadra-hook canvas|context|browser` 逐字节相同；`binding: "session"` 的工具从环境补 `sessionId` / `generation`，`handoff-read` 无绑定时与 CLI 同样拒绝；浏览器工具用长预算。另答 `ping`，通知一律不回。错误分两类：非 JSON-RPC、未知方法、未知工具是 JSON-RPC 错误（-32700 / -32600 / -32601 / -32602）；参数不对、没有端点、运行时 4xx 是 `isError: true` 的工具结果。`main.ts` 加子命令、`usage.ts` 加一行用法。
 - `core/acp/mcp.ts`：`canvasMcpServer`（命令 = `hookClient()`，参数 `["mcp"]`，环境 = `agentEnvironment` 同一份地址，不带令牌，有会话绑定就加）、`acpMcpServers(adapter, input)`（按适配器表 `injection.mcp`，ama 不加；本机没有客户端时为空）、`clientAcceptsMcpServers`（读 `AcpClient.features.mcpServers`）、`sessionOpener`。`host.ts` 的 `startAcp` 收 `mcpServers`，开会话（new / load / resume）经 opener 带上，结果多一个 `mcpInjected`（只在要求带时出现）；`startAdapter` 收 `canvasMcp`。客户端不支持时调用与原来一模一样。
-- `@armadra/agent` 侧：Owlbay/armadra-agent PR #97 给 `AcpClient` 开会话加可选的 `{ mcpServers }` 与 `AcpClient.features`，随 0.6.5 发布；本仓库已升到 0.6.5，`mcpInjected` 为 true（`core/acp/mcp.test.ts` 对假 ACP Agent 实测）。
+- `@armadra/agent` 侧：AMA-Link/armadra-agent PR #97 给 `AcpClient` 开会话加可选的 `{ mcpServers }` 与 `AcpClient.features`，随 0.6.5 发布；本仓库已升到 0.6.5，`mcpInjected` 为 true（`core/acp/mcp.test.ts` 对假 ACP Agent 实测）。
 
 实测：`cli/armadra-hook/mcp.test.ts`（14：三个方法的线路、工具表与三份 `VERBS` 一致、`tools/call` 与 `armadra-hook canvas` 请求逐字节相同、会话绑定、错误形状、流式乱序与 EOF 排空）、`core/acp/mcp.test.ts`（10：服务器形状、适配器表、特性检测两路、对假 ACP Agent 起会话）；打包后的 `armadra-hook.js mcp` 手动跑通 `initialize` / `tools/list` / `tools/call`。
 
@@ -2932,7 +2932,7 @@ iPad（WebKit）经个人中转给 ACP Agent 发 prompt 偶发「这一轮没有
 做了什么：
 
 - **core**：`core/http/timeouts.ts` 的 `HTTP_TIMEOUTS`（空闲 keep-alive 75 秒、请求头 76 秒、整条请求 300 秒）与 `applyHttpTimeouts(server)`；`CoreServer.createListener` 建的每台监听（回环、服务器壳、Gateway 交接点、中继隧道交接点）和 Gateway 的 HTTPS 监听都套上。服务器壳没有自己的监听，走同一个 `createListener`。隧道流是 `TunnelDuplex`，`setTimeout` 不落到 TCP，空闲上限实际由中继那一侧决定。
-- **armadra-cloud**（Owlbay/armadra-cloud，分支 `fix/relay-keepalive-limits`）：`cloud-shared` 的 `listen()` 同样套 75 / 76 / 300 秒（中继与 cloud 共用，HTTP 与 HTTPS）；边缘缺省额度放宽——预检每 IP 1200/分（原 300）、有效令牌 1200/分（原 600）、账号 3600/分（原 1800）、账号并发 WebSocket 256（原 64，与隧道单源流数上限对齐）；中继预检与控制面的 `Access-Control-Max-Age` 600 → 7200（WebKit 自己封顶 600，Chromium 2 小时）。cloud 契约 §7、部署说明、CLI 帮助、CHANGELOG Unreleased 同步。
+- **armadra-cloud**（AMA-Link/armadra-cloud，分支 `fix/relay-keepalive-limits`）：`cloud-shared` 的 `listen()` 同样套 75 / 76 / 300 秒（中继与 cloud 共用，HTTP 与 HTTPS）；边缘缺省额度放宽——预检每 IP 1200/分（原 300）、有效令牌 1200/分（原 600）、账号 3600/分（原 1800）、账号并发 WebSocket 256（原 64，与隧道单源流数上限对齐）；中继预检与控制面的 `Access-Control-Max-Age` 600 → 7200（WebKit 自己封顶 600，Chromium 2 小时）。cloud 契约 §7、部署说明、CLI 帮助、CHANGELOG Unreleased 同步。
 - **探针**：`personal-roundtrip` 第 2 步加一项——照 iOS App 的路子（`Origin: capacitor://localhost`）在同一条 keep-alive 连接上经中继 `POST /api/identity/cloud/login` 换会话，空闲 6.5 秒后再 `POST system.hello`；连接不许被服务端先关、不许换连接、两次都 200。共用件 `platform-lib.mjs` 的 `idleKeepAlivePost`。
 
 实测（macOS arm64，基于 main 9f33e3df；中继用 cloud 分支 `fix/relay-keepalive-limits`）：

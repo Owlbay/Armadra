@@ -1,6 +1,6 @@
 # 协议包 `@armadra/platform-protocol`：详细设计
 
-> 状态：目标设计（2026-10-06）。本文是[落地总计划](../platform-implementation-plan.md)工作包 **C0-2** 的实现规格；真相源在 `Owlbay/armadra-cloud` 仓 `packages/platform-protocol/`，Armadra 钉精确版本。上位设计：[平台设计](../platform-saas-architecture.md) §8.2、§16.2、§16.3、§17。
+> 状态：目标设计（2026-10-06）。本文是[落地总计划](../platform-implementation-plan.md)工作包 **C0-2** 的实现规格；真相源在 `AMA-Link/armadra-cloud` 仓 `packages/platform-protocol/`，Armadra 钉精确版本。上位设计：[平台设计](../platform-saas-architecture.md) §8.2、§16.2、§16.3、§17。
 > 规则：包只含 zod schema、类型、纯编解码与常量；不 import `node:*`（`fixtures` 子路径除外，它只在测试里用）；页面、手机、core、cloud、relay 都能直接用。
 
 ## §1 目录与入口

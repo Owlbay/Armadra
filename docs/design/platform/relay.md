@@ -1,7 +1,7 @@
 # 中继 `apps/relay`：详细设计（saas 与 personal 两种模式）
 
 > 状态：目标设计（2026-10-06）。本文是[落地总计划](../platform-implementation-plan.md)工作包 **R1（中继内核）**、**R2（personal 控制面）**、**R3（saas 控制面适配）** 的实现规格。上位设计：[平台设计](../platform-saas-architecture.md) §8、§11、§17；协议：[协议包](protocol-package.md)。
-> 代码在 `Owlbay/armadra-cloud` 仓；不 import `apps/cloud`，只依赖 `packages/platform-protocol` 与 `packages/cloud-shared`。
+> 代码在 `AMA-Link/armadra-cloud` 仓；不 import `apps/cloud`，只依赖 `packages/platform-protocol` 与 `packages/cloud-shared`。
 
 ## §1 进程与模块
 
@@ -325,4 +325,4 @@ pnpm dev:up && pnpm dev        # saas：起 PG + Redis，再起 cloud(8100) + re
 armadra-relay personal status  # 读 state.json：账号、源、链接、证书与指纹
 ```
 
-Docker：`docker run -v relay:/data -p 8443:8443 ghcr.io/owlbay/armadra-relay personal serve --host <公网 IP>`；首次用 `… personal init --account me` 交互设口令（或 `-e RELAY_PERSONAL_PASSWORD_FILE=/run/secrets/pw`）。`deploy/personal/compose.yml` 是同一条命令的 compose 写法。
+Docker：`docker run -v relay:/data -p 8443:8443 ghcr.io/ama-link/armadra-relay personal serve --host <公网 IP>`；首次用 `… personal init --account me` 交互设口令（或 `-e RELAY_PERSONAL_PASSWORD_FILE=/run/secrets/pw`）。`deploy/personal/compose.yml` 是同一条命令的 compose 写法。

@@ -471,7 +471,7 @@ updater 包排除在外。
 | `HOMEBREW_TAP_TOKEN`                                              | `distribute.yml` 推 Homebrew tap（细粒度 PAT，只对 tap 仓库 `contents: write`）                                  | 跳过 tap，告警                               |
 | `SCOOP_BUCKET_TOKEN`                                              | `distribute.yml` 推 Scoop bucket（同上，只对 bucket 仓库）                                                       | 跳过 Scoop，告警                             |
 | `WINGET_TOKEN`                                                    | `distribute.yml` 用 wingetcreate 向 `microsoft/winget-pkgs` 提 PR（对 fork `contents` + `pull_requests: write`） | 跳过 winget，告警                            |
-| 变量 `ARMADRA_HOMEBREW_TAP` / `ARMADRA_SCOOP_BUCKET`              | tap / bucket 仓库名，缺省 `Owlbay/homebrew-tap` / `Owlbay/scoop-bucket`                                          | 用缺省                                       |
+| 变量 `ARMADRA_HOMEBREW_TAP` / `ARMADRA_SCOOP_BUCKET`              | tap / bucket 仓库名，缺省 `AMA-Link/homebrew-tap` / `AMA-Link/scoop-bucket`                                      | 用缺省                                       |
 | `CLOUDFLARE_R2_ACCESS_KEY_ID` / `CLOUDFLARE_R2_SECRET_ACCESS_KEY` | 更新镜像（§3.3）：R2 的 S3 API 令牌，只授权镜像那个桶的读写                                                      | 与下面两个变量一起：全缺跳过，缺一半失败     |
 | 变量 `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_R2_BUCKET`             | 镜像：端点 `https://<账户>.r2.cloudflarestorage.com` 与桶名                                                      | 同上                                         |
 | 变量 `ARMADRA_MIRROR_PUBLIC_URL`                                  | 镜像桶的公开地址（例如 `https://updates.armadra.dev`），`assemble` 据此另签一份链接指向镜像的 `latest.json`      | 镜像里的 `latest.json` 仍指向 GitHub 下载    |
@@ -510,7 +510,7 @@ electron-vite 的入口——Windows 上包管理器是 `.cmd`，`execFileSync` 
 渠道清单不手写：`tools/release/publish-channels.mjs render` 从版本、仓库名与发布里的
 `SHA256SUMS` 渲染 `tools/release/templates/` 下的模板——Homebrew cask（`armadra.rb`，
 dmg）、Scoop（`armadra.json`，便携 zip，`checkver: github`，`autoupdate` 从
-`$baseurl/SHA256SUMS` 取哈希）、winget 三件套（`Owlbay.Armadra`，NSIS 安装包）、AUR
+`$baseurl/SHA256SUMS` 取哈希）、winget 三件套（`AMA-Link.Armadra`，NSIS 安装包）、AUR
 `armadra-bin` 的 `PKGBUILD`（基于 `.deb`）。文件名取 `artifacts.mjs` 的 `desktopAssets()`，
 `SHA256SUMS` 缺哪个就拒绝渲染；只渲染稳定版。
 
