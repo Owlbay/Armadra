@@ -37,7 +37,9 @@
  * it the entry is skipped with that command as the reason. An entry that
  * `requires` "claude" needs a Claude Code at or above the mod gate
  * (ARMADRA_CLAUDE_BIN, or `claude` on PATH); CI has none and records it as
- * skipped. Entries marked `devStack` only run when ARMADRA_DEV_STACK=1 and
+ * skipped. An entry that `requires` "claude-acp" needs a `claude-agent-acp`
+ * whose bundled Claude Code is at or above the gate (ARMADRA_CLAUDE_ACP_BIN,
+ * or on PATH), skipped the same way. Entries marked `devStack` only run when ARMADRA_DEV_STACK=1 and
  * Docker answers; otherwise they are recorded as skipped, not failed.
  */
 import { execFileSync, spawn, spawnSync } from "node:child_process";
@@ -55,6 +57,7 @@ import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { findAdapter as findClaudeAcp } from "../probes/claude-mod-acp.mjs";
 import { findClaude } from "../probes/claude-mod-launch.mjs";
 import { findCloudSource } from "../probes/cloud-source.mjs";
 
@@ -70,6 +73,7 @@ export const REQUIREMENTS = [
   "cloud",
   "webkit",
   "claude",
+  "claude-acp",
 ];
 /** `process.platform` values an entry may restrict itself to. */
 export const PLATFORMS = ["darwin", "linux", "win32"];
@@ -303,6 +307,7 @@ export async function runTier({
     cloud: () => findCloudSource(env, root),
     webkit: () => hasWebkit(root),
     claude: () => findClaude(env),
+    claudeAcp: () => findClaudeAcp(env),
   },
   devStack = {
     up: () => pnpm(root, ["dev-stack", "up"]),
@@ -339,9 +344,15 @@ export async function runTier({
   const claude = needs("claude")
     ? (probe.claude?.() ?? { reason: "no Claude Code probe" })
     : undefined;
+  const claudeAcp = needs("claude-acp")
+    ? (probe.claudeAcp?.() ?? { reason: "no claude-agent-acp probe" })
+    : undefined;
   const childEnv = {
     ...env,
     ...(claude?.program ? { ARMADRA_CLAUDE_BIN: claude.program } : {}),
+    ...(claudeAcp?.program
+      ? { ARMADRA_CLAUDE_ACP_BIN: claudeAcp.program }
+      : {}),
     ...(chrome ? { CHROME_PATH: chrome } : {}),
     ...(cloud ? { ARMADRA_DEV_STACK_CLOUD_SRC: cloud } : {}),
   };
@@ -412,6 +423,15 @@ export async function runTier({
           id: entry.id,
           status: "skipped",
           reason: claude?.reason ?? "needs Claude Code",
+        };
+      } else if (
+        entry.requires?.includes("claude-acp") &&
+        claudeAcp?.program === undefined
+      ) {
+        record = {
+          id: entry.id,
+          status: "skipped",
+          reason: claudeAcp?.reason ?? "needs claude-agent-acp",
         };
       } else if (entry.requires?.includes("cloud") && !cloud) {
         record = {

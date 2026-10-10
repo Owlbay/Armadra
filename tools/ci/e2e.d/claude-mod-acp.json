@@ -1,0 +1,8 @@
+{
+  "id": "claude-mod-acp",
+  "tier": "a",
+  "script": "tools/probes/claude-mod-acp.mjs",
+  "args": [],
+  "requires": ["claude-acp"],
+  "timeoutMinutes": 10
+}

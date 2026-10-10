@@ -23,7 +23,10 @@
  *   4. the generated module type-checks against the declarations the engine
  *      laid beside it (`.claude-plugin/types/`), when that build lays them;
  *   5. the operator's own `~/.claude/settings.json` is byte-for-byte what it
- *      was.
+ *      was;
+ *   6. the slash commands (contract §59): `claude -p '/armadra-list'` prints
+ *      what `armadra-hook canvas list` prints in the same node, and asks the
+ *      model nothing.
  *
  * Needs a Claude Code at or above the gate: `ARMADRA_CLAUDE_BIN`, else
  * `claude` on PATH. Without one it says so and exits 0 (the e2e runner
@@ -139,8 +142,11 @@ export function findClaude(env = process.env) {
  * and everything after with "done", so a run carries PreToolUse and
  * PostToolUse between UserPromptSubmit and Stop.
  */
-function fakeApi() {
+export function fakeApi() {
   let n = 0;
+  // Requests of the main loop (the ones that carry the Bash tool): a slash
+  // command the mod answers must not add one.
+  let turns = 0;
   const sse = (response, events) => {
     response.writeHead(200, { "content-type": "text/event-stream" });
     for (const [event, data] of events)
@@ -169,6 +175,7 @@ function fakeApi() {
         "tool_result",
       );
       const main = (body.tools ?? []).some((tool) => tool.name === "Bash");
+      if (main) turns += 1;
       n += 1;
       const message = {
         id: `msg_${n}`,
@@ -275,7 +282,7 @@ function fakeApi() {
   });
   return new Promise((done) =>
     server.listen(0, "127.0.0.1", () =>
-      done({ server, port: server.address().port }),
+      done({ server, port: server.address().port, turns: () => turns }),
     ),
   );
 }
@@ -639,6 +646,42 @@ async function main() {
       "~/.claude/settings.json changed",
     );
     console.log("5. ~/.claude/settings.json unchanged");
+
+    // 6. A slash command: the mod runs the client's verb, no model turn.
+    const commandNode = seedNode(dataDir, "commands");
+    const direct = await runInTerminal(
+      core,
+      dataDir,
+      commandNode,
+      `"$ARMADRA_HOOK_BIN" canvas list > list.out`,
+    );
+    assert(direct.code === 0, `canvas list exited ${direct.code}`);
+    const expected = readFileSync(
+      join(dataDir, "work", "list.out"),
+      "utf8",
+    ).trim();
+    const turnsBefore = api.turns();
+    const command = await runInTerminal(
+      core,
+      dataDir,
+      commandNode,
+      `${api_env} ${quote(launcher)} ${quote(found.program)} -p '/armadra-list' > command.out`,
+    );
+    const printed = readFileSync(
+      join(dataDir, "work", "command.out"),
+      "utf8",
+    ).trim();
+    assert(
+      command.code === 0 && expected !== "" && printed.includes(expected),
+      `/armadra-list exited ${command.code}, printed:\n${printed}\nexpected:\n${expected}`,
+    );
+    assert(
+      api.turns() === turnsBefore,
+      `/armadra-list asked the model (${api.turns() - turnsBefore} turns)`,
+    );
+    console.log(
+      "6. /armadra-list prints what armadra-hook canvas list prints, no model turn",
+    );
 
     if (record) recordCompat(found.version);
     console.log("\nOK");
