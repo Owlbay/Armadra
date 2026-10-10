@@ -18,7 +18,26 @@ const ENDPOINT =
   "ARMADRA_HOOK_TOKEN='bearer'\\n" +
   "ARMADRA_NODE_TOKEN_DIR='/tmp/armadra-mod-test/node-tokens'\\n";
 
-function world(on: any, refuse: boolean) {
+const OVERLAY = {
+  revision: 7,
+  node: { id: "node-1", name: "reviewer", role: "sub", agentId: "claude" },
+  board: { id: "b1", title: "Release" },
+  links: {
+    main: [{ id: "n-lead", name: "lead" }],
+    subs: [],
+    peers: [{ id: "n-t", name: "tester" }],
+  },
+  inbox: { pending: 2, latestSequence: 40, latestFrom: "lead" },
+  outbox: { queued: 0 },
+  approvals: { pending: 0 },
+};
+
+const BAND = {
+  component: "AbovePrompt" as const,
+  props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 80 },
+};
+
+function world(on: any, refuse: boolean, overlay: any = undefined) {
   mock.env(on, {
     ARMADRA_NODE_ID: "node-1",
     ARMADRA_ENDPOINT_FILE: "/tmp/armadra-mod-test/hook-endpoint.env",
@@ -35,6 +54,9 @@ function world(on: any, refuse: boolean) {
   on("http.fetch", async ($: any, e: any) => {
     fetched.push(e);
     if (refuse) return { deny: "nonessential network traffic is disabled" };
+    if (e.init?.method === "GET" && overlay !== undefined) {
+      return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify(overlay) } };
+    }
     return { value: { status: 204, ok: true, headers: {}, text: "" } };
   });
   on("process.run", async ($: any, e: any) => {
@@ -50,8 +72,12 @@ function world(on: any, refuse: boolean) {
   on("session.version", async () => ({
     value: { version: "2.1.293", base: "2.1.293" },
   }));
-  on("ui.status", async () => ({ value: undefined }));
-  return { fetched, ran };
+  const statuses: any[] = [];
+  on("ui.status", async ($: any, e: any) => {
+    statuses.push(e.text);
+    return { value: undefined };
+  });
+  return { fetched, ran, statuses };
 }
 
 async function settle($: any, done: () => boolean) {
@@ -107,6 +133,51 @@ describe("armadra-mod", () => {
     expect(body.modRevision).toBeGreaterThan(0);
     expect(JSON.stringify(body)).not.toContain("node-token");
     expect(JSON.stringify(body)).not.toContain("bearer");
+  });
+
+  test("draws the band from the overlay, names and numbers only", async ($: any, on: any) => {
+    const clock = mock.clock(on);
+    const w = world(on, false, OVERLAY);
+    await $.session.start({ cwd: "/tmp", surface: "terminal", isInteractive: true });
+    await clock.settle();
+    await settle($, () => w.fetched.some((call) => call.url.includes("/node/overlay")));
+    await clock.settle();
+    const asked = w.fetched.find((call) => call.url.includes("/node/overlay"));
+    expect(asked.url).toBe("http://armadra/node/overlay?nodeId=node-1");
+    for (const surface of ["terminal", "desktop"] as const) {
+      const ui = await $.ui.mount({ plugin: "armadra-mod", surface, ...BAND });
+      const text = await ui.find({ type: "Text", text: /✉ 2/ });
+      expect(text).toBeDefined();
+      expect(text.text).toBe("↑ lead   ↔ tester   ✉ 2");
+      await ui.unmount();
+    }
+    expect(w.statuses.at(-1)).toBe("reviewer · Release");
+  });
+
+  test("draws no band with nothing linked and nothing unread", async ($: any, on: any) => {
+    const clock = mock.clock(on);
+    const w = world(on, false, {
+      ...OVERLAY,
+      links: { main: [], subs: [], peers: [] },
+      inbox: { pending: 0, latestSequence: 0, latestFrom: "" },
+    });
+    // The engine's own band beneath: empty, so what is drawn is the mod's.
+    let handedOn = 0;
+    on("ui.render", async ($: any, e: any) => {
+      handedOn += 1;
+      const { Box } = $.ui.resolve(e);
+      return h(Box, {});
+    });
+    await $.session.start({ cwd: "/tmp", surface: "terminal", isInteractive: true });
+    await clock.settle();
+    await settle($, () => w.fetched.some((call) => call.url.includes("/node/overlay")));
+    await clock.settle();
+    for (const surface of ["terminal", "desktop"] as const) {
+      const ui = await $.ui.mount({ plugin: "armadra-mod", surface, ...BAND });
+      expect(await ui.find({ type: "Text", text: /✉|↑|↔/ })).toBeUndefined();
+      await ui.unmount();
+    }
+    expect(handedOn).toBeGreaterThan(0);
   });
 });
 `;

@@ -31,6 +31,7 @@ import { useCommandDispatch } from "./commands";
 import { useAgentNotifications } from "./notifications";
 import { syncDocumentPreferences } from "./preferences-store";
 import { useAppKeybindings } from "./use-app-keybindings";
+import { useLocaleMirror } from "./use-locale-mirror";
 import { useBoardSync } from "./use-board-sync";
 import { useWorkspaceAccessLost } from "./use-access-lost";
 import { useControlNotices } from "./use-control-notices";
@@ -111,6 +112,7 @@ function AppShell() {
   useBoardSync();
   const dispatch = useCommandDispatch();
   useAppKeybindings(dispatch);
+  useLocaleMirror();
 
   return (
     // 根容器让开顶、左、右三边的安全区（`--safe-*`，设计系统 §3.1）：侧栏、画布

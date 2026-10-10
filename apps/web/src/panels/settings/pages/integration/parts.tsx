@@ -84,6 +84,48 @@ export function canvasAgentsValue(
   return "none";
 }
 
+/**
+ * 「Mods」一行（契约 §57.5，设计 claude-mods.md §4.4）：门开着就是「已启用」，
+ * 有会话报到时带个数；关着说「未启用」，原因放进 `title`。`fallback` 是有会话
+ * 的上报退回了 `armadra-hook` 进程（宿主拒绝了 mod 的请求）。只说本产品自己的
+ * mod，不列别的插件，也不列 MCP 工具名。旧 core 不带 `mods` 时答 `null`。
+ */
+export function modsValue(
+  t: Translate,
+  mods: AgentIntegration["mods"],
+): { value: string; reason?: string; fallback: boolean } | null {
+  if (!mods) return null;
+  const sessions = mods.sessions.length;
+  if (mods.gate === "enabled") {
+    return {
+      value:
+        sessions === 0
+          ? t("integration.mods.on")
+          : t(
+              sessions === 1
+                ? "integration.mods.onSession"
+                : "integration.mods.onSessions",
+              { n: sessions },
+            ),
+      fallback: mods.sessions.some(
+        (session) => session.transport === "process",
+      ),
+    };
+  }
+  return {
+    value: t("integration.mods.off"),
+    ...(mods.reason
+      ? {
+          reason: t(`integration.mods.reason.${mods.reason}`, {
+            version: mods.probedVersion ?? "",
+            min: mods.minVersion,
+          }),
+        }
+      : {}),
+    fallback: false,
+  };
+}
+
 /** 画布注入哪里不对；没问题答 `null`。只看数据目录里的产物。 */
 export function injectionProblem(
   t: Translate,

@@ -22,9 +22,11 @@ import {
   canvasAgentsValue,
   historyValue,
   injectionProblem,
+  modsValue,
   useIntegrationActions,
   useMigrationNotice,
 } from "./integration/parts";
+import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import { Input } from "@/ui/input";
 import {
@@ -114,6 +116,7 @@ export function AgentDetailPage({ agent }: { agent: AgentInfo }) {
   const spawn = canvasAgentsValue(integration?.canvasAgents);
   const reasons = integration?.canvasAgents?.reasons ?? [];
   const history = historyValue(t, agent.history);
+  const mods = modsValue(t, integration?.mods);
 
   return (
     <>
@@ -158,7 +161,7 @@ export function AgentDetailPage({ agent }: { agent: AgentInfo }) {
         <InstallFailure agent={agent} jobs={[cli, adapter]} />
       </SettingsGroup>
 
-      {(hooked || spawn !== null || history !== null) && (
+      {(hooked || mods !== null || spawn !== null || history !== null) && (
         <SettingsGroup title={t("agents.group.injection")}>
           {hooked && (
             <SettingsRow label={t("agents.row.artifacts")}>
@@ -196,6 +199,16 @@ export function AgentDetailPage({ agent }: { agent: AgentInfo }) {
                 {regenerate.isPending && <Spinner aria-hidden />}
                 {t("integration.regenerate")}
               </Button>
+            </SettingsRow>
+          )}
+          {mods !== null && (
+            <SettingsRow label={t("integration.row.mods")}>
+              <RowValue title={mods.reason}>{mods.value}</RowValue>
+              {mods.fallback && (
+                <Badge variant="outline">
+                  {t("integration.mods.fallback")}
+                </Badge>
+              )}
             </SettingsRow>
           )}
           {spawn !== null && (

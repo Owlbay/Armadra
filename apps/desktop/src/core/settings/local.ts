@@ -70,6 +70,8 @@ export const LOCAL_PATHS: readonly (readonly string[])[] = [
   ["push", "apns", "keyFile"],
   ["push", "fcm", "serviceAccountFile"],
   ["cloud", "relay"],
+  // 终端里 Claude Code mod 的文案语言（契约 §57.6）：跟着这台机器的页面走。
+  ["ui", "locale"],
 ];
 
 /** The same paths as dotted strings, for the settings page and for tests. */

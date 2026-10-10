@@ -67,6 +67,17 @@ export const integration: MessageModule = {
     "integration.reason.mcp_not_wired": "适配器不接画布工具",
     "integration.reason.client_without_mcp": "客户端不带画布工具",
     "integration.revision": "第 {n} 版",
+    "integration.row.mods": "Mods", // i18n-exempt
+    "integration.mods.on": "已启用",
+    "integration.mods.onSession": "已启用 · {n} 个会话",
+    "integration.mods.onSessions": "已启用 · {n} 个会话",
+    "integration.mods.off": "未启用",
+    "integration.mods.fallback": "已回退",
+    "integration.mods.reason.version_below_min":
+      "Claude Code {version} 低于 {min}", // i18n-exempt
+    "integration.mods.reason.version_unknown": "等待版本探测",
+    "integration.mods.reason.windows_launcher": "Windows 启动器暂不支持", // i18n-exempt
+    "integration.mods.reason.remote_unprobed": "远程机器暂不支持",
     "integration.migrated.notice": "已清理 {name} 的旧全局安装",
     "integration.regenerate": "重新生成",
     "integration.regenerated": "注入产物已重新生成",
@@ -138,6 +149,18 @@ export const integration: MessageModule = {
     "integration.reason.mcp_not_wired": "The adapter has no canvas tools",
     "integration.reason.client_without_mcp": "The client has no canvas tools",
     "integration.revision": "Revision {n}",
+    "integration.row.mods": "Mods",
+    "integration.mods.on": "On",
+    "integration.mods.onSession": "On · {n} session",
+    "integration.mods.onSessions": "On · {n} sessions",
+    "integration.mods.off": "Off",
+    "integration.mods.fallback": "Fallback",
+    "integration.mods.reason.version_below_min":
+      "Claude Code {version} is below {min}",
+    "integration.mods.reason.version_unknown": "Waiting for version probe",
+    "integration.mods.reason.windows_launcher":
+      "Not on the Windows launcher yet",
+    "integration.mods.reason.remote_unprobed": "Not on remote hosts yet",
     "integration.migrated.notice": "Removed the old global install for {name}",
     "integration.regenerate": "Regenerate",
     "integration.regenerated": "Injection regenerated",

@@ -309,6 +309,65 @@ describe("Agent CLI 子页", () => {
     );
   });
 
+  /** Mods 一行：门开着说「已启用 · N 个会话」，有会话退回进程时带「已回退」。 */
+  it("shows whether the Claude Code mod is on and how many sessions reported", async () => {
+    mock.integration.mockResolvedValue({
+      ...healthy,
+      mods: {
+        gate: "enabled",
+        reason: null,
+        minVersion: "2.1.293",
+        probedVersion: "2.1.295",
+        sessions: [
+          {
+            nodeId: "n1",
+            version: "2.1.295",
+            profile: "terminal",
+            transport: "socket",
+            reportedAt: "2026-10-10T00:00:00.000Z",
+          },
+          {
+            nodeId: "n2",
+            version: "2.1.295",
+            profile: "terminal",
+            transport: "process",
+            reportedAt: "2026-10-10T00:00:00.000Z",
+          },
+        ],
+      },
+    });
+    view();
+    expect(
+      await screen.findByText(
+        zh("integration.mods.onSessions").replace("{n}", "2"),
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText(zh("integration.row.mods"))).toBeTruthy();
+    expect(screen.getByText(zh("integration.mods.fallback"))).toBeTruthy();
+  });
+
+  /** 门关着：值「未启用」，原因（含版本号）只在悬停提示里，不写说明段。 */
+  it("says the mod is off and why, in the hover text only", async () => {
+    mock.integration.mockResolvedValue({
+      ...healthy,
+      mods: {
+        gate: "disabled",
+        reason: "version_below_min",
+        minVersion: "2.1.293",
+        probedVersion: "2.1.280",
+        sessions: [],
+      },
+    });
+    view();
+    const off = await screen.findByText(zh("integration.mods.off"));
+    expect(off.getAttribute("title")).toBe(
+      zh("integration.mods.reason.version_below_min")
+        .replace("{version}", "2.1.280")
+        .replace("{min}", "2.1.293"),
+    );
+    expect(screen.queryByText(zh("integration.mods.fallback"))).toBeNull();
+  });
+
   /** 版本过旧：值「待更新」，「重新生成」变 secondary；ACP 未装是值不是徽标。 */
   it("marks an out-of-date install and a missing ACP adapter", async () => {
     mock.agents.mockReset().mockResolvedValue([

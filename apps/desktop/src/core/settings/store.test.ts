@@ -127,7 +127,9 @@ describe("the local split", () => {
     // 出站隧道开不开、连哪个节点只对这台机器成立；组织默认角色跟着账号走。
     expect(isLocal("cloud.relay.enabled")).toBe(true);
     expect(isLocal("cloud.orgDefaultRole")).toBe(false);
-    expect(localPaths()).toHaveLength(11);
+    // 终端里 mod 文案的语言是这台机器的页面写的（契约 §57.6）。
+    expect(isLocal("ui.locale")).toBe(true);
+    expect(localPaths()).toHaveLength(12);
   });
 
   it("recognises a document written before the split", () => {

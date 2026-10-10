@@ -193,6 +193,15 @@ export const runtimeSettingsSchema = z.looseObject({
       keepAwakeWhileWorking: z.boolean().optional(),
     })
     .optional(),
+  /**
+   * 页面的界面语言，存一份给 core（契约 §57.6）：终端里 Claude Code mod 的
+   * 文案按它生成。以本机 localStorage 为准，这里只是它的副本。
+   */
+  ui: z
+    .looseObject({
+      locale: z.enum(["zh-CN", "en"]).optional().catch(undefined),
+    })
+    .optional(),
   /** 命令面板的会话索引扫多大一片。 */
   conversations: z
     .looseObject({ scope: conversationScopeSchema.optional() })
@@ -280,6 +289,8 @@ export interface RuntimeSettingsPatch {
   power?: { policy?: PowerPolicy; keepAwakeWhileWorking?: boolean };
   /** 会话索引的范围。 */
   conversations?: { scope?: ConversationScope };
+  /** 界面语言的副本（契约 §57.6），给 core 生成终端侧文案。 */
+  ui?: { locale?: "zh-CN" | "en" };
   /** 实时协同（契约 §16.2）：关掉就回到租约 + CAS。 */
   collab?: { realtime?: boolean };
   /** 资源面板采样间隔；Runtime 侧会夹回 500ms–60s。 */

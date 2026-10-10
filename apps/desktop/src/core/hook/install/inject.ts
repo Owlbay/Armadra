@@ -24,10 +24,13 @@ import {
 import { opencodePluginSource, piExtensionSource } from "./extension-template";
 import {
   MOD_MODULE_FILE,
+  MOD_TYPES_FILE,
   claudeModHooks,
   claudeModManifest,
   claudeModSource,
+  claudeModTypes,
 } from "./claude-mod/template";
+import { type ModLocale, storedModLocale } from "./claude-mod/i18n";
 import {
   type LauncherSpec,
   launcherFiles,
@@ -134,6 +137,8 @@ export interface ArtifactLayout {
   readonly modHooks?: string;
   /** The mod's hooks module, `hooks/armadra.ts`. */
   readonly modModule?: string;
+  /** The mod's state contract, `hooks/armadra-state.d.ts` (the manifest's `types`). */
+  readonly modTypes?: string;
   /** Claude's and Copilot's `--plugin-dir`. */
   readonly pluginDir?: string;
   /** The plugin manifest inside {@link pluginDir}. */
@@ -189,6 +194,7 @@ export function artifactLayout(
         modManifest: join(modDir, ".claude-plugin", "plugin.json"),
         modHooks: join(modDir, "hooks", "hooks.json"),
         modModule: join(modDir, "hooks", MOD_MODULE_FILE),
+        modTypes: join(modDir, ...MOD_TYPES_FILE.split("/")),
       };
     }
     case "codex":
@@ -308,6 +314,11 @@ export interface ArtifactTarget {
    * starts without the canvas tools rather than failing on a missing file.
    */
   readonly amaHost?: string | null;
+  /**
+   * The language of the Claude mod's words (`ui.locale`, contract §57.6);
+   * this device's setting when absent.
+   */
+  readonly locale?: ModLocale;
 }
 
 /**
@@ -408,7 +419,13 @@ export function artifactFiles(
       files.set(layout.manifest as string, json(manifest));
       files.set(layout.modManifest as string, json(claudeModManifest()));
       files.set(layout.modHooks as string, json(claudeModHooks()));
-      files.set(layout.modModule as string, claudeModSource(clientBin));
+      files.set(
+        layout.modModule as string,
+        claudeModSource(clientBin, {
+          locale: target.locale ?? storedModLocale(),
+        }),
+      );
+      files.set(layout.modTypes as string, claudeModTypes());
       break;
     }
     case "codex":
@@ -1065,12 +1082,22 @@ function current(
   ) {
     return undefined;
   }
+  // The Claude mod's words follow `ui.locale`: a module generated in another
+  // language is stale whatever the marker says (contract §57.6).
+  if (
+    layout.modModule !== undefined &&
+    readOrEmpty(layout.modModule) !==
+      claudeModSource(marker.clientBin, { locale: storedModLocale() })
+  ) {
+    return undefined;
+  }
   const expected = [
     layout.settings,
     layout.settingsPermission,
     layout.modManifest,
     layout.modHooks,
     layout.modModule,
+    layout.modTypes,
     layout.module,
     layout.pluginHooks,
     layout.manifest,
@@ -1317,7 +1344,8 @@ export function injectionFromLayout(
         isFile(layout.settingsPermission) &&
         isFile(layout.modManifest) &&
         isFile(layout.modHooks) &&
-        isFile(layout.modModule);
+        isFile(layout.modModule) &&
+        isFile(layout.modTypes);
       if (!mods) return { args: plain, env: [] };
       return {
         args: [

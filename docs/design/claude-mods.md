@@ -1,8 +1,10 @@
 # Claude Code mods 注入设计（M1–M3）
 
-日期：2026-10-10 · 状态：目标设计；M1（§2、§3、§6 的契约、§7、§10.1、§10.3）已实施，M2、M3 未实施 · 输入：可行性调研（隔离 HOME 下的原型实测）、Claude Code 2.1.293 的 `plugin-authoring/types/claude-code.d.ts` 与 `reference.md`。基线 `main` 9cd38293；下表的行号是那个基线的。契约是 [core JSON API](../contracts/core-json-api.md) §57，实测进度见 [补全进度](../status/completion-progress.md)。
+日期：2026-10-10 · 状态：目标设计；M1（§2、§3、§6 的契约、§7、§10.1、§10.3）与 M2（§4，契约 §58）已实施，M3 未实施 · 输入：可行性调研（隔离 HOME 下的原型实测）、Claude Code 2.1.293 的 `plugin-authoring/types/claude-code.d.ts` 与 `reference.md`。基线 `main` 9cd38293；下表的行号是那个基线的。契约是 [core JSON API](../contracts/core-json-api.md) §57，实测进度见 [补全进度](../status/completion-progress.md)。
 
 M1 落地时与本文不同的几处（以代码与契约为准）：契约节号与协议版本因与同期的包撞号，改为 §57、协议 1.29（下文已同步）；hello 在宿主拒绝 fetch 时经 `armadra-hook mod-hello` 送达（本文 §2.5 只说「再发一次 process」，没说走哪条路）；core 分配 `sourceRevision` 时计数器文件不存在就不创建（与 hook 客户端同一条规矩），报告不带绑定照常归约；2.1.293 上 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 不再拒绝插件不带 `auth` 的 fetch，`CLAUDE_CODE_SAFE_MODE` 连设置 hook 也不跑——启动器的两条环境回退照旧保留；mod 的 `PreToolUse` 等九个事件都带 `.catch`，`claude plugin validate` 不再报「gating hook without .catch」。
+
+M2 落地时与本文不同的几处：`/node/overlay` 的细节另起 §58（协议 1.30），节点经查询参数 `nodeId` 指定；`revision` 是答复的摘要而不是单调数；连线名字没有时用标题；横条空的段不画（本文 §4.2 的示例画了 `↓ —`）；会话第一次拿到答复只记序号、不弹 toast；mod 的会话状态由 `mod/hooks/armadra-state.d.ts` 声明（文件名带 armadra 前缀，不放进 `types/`，与 Claude 自己写的 `.claude-plugin/types/` 分开）；`ui.locale` 缺省按 `en` 生成，页面打开时与 core 不一致也写一次；「版本不一致」徽标与「SessionStart 到了却没有 hello」的点名没有做。
 
 ## 0. 结论
 
