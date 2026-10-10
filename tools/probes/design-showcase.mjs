@@ -176,6 +176,36 @@ export function pixelDifference(left, right) {
   return changed / (a.width * a.height);
 }
 
+/** 两张同尺寸图里不同像素的外接矩形；没有差异或尺寸不同返回 null。 */
+export function differenceBox(left, right) {
+  const a = decodePng(left);
+  const b = decodePng(right);
+  if (a.width !== b.width || a.height !== b.height) return null;
+  let x0 = a.width;
+  let y0 = a.height;
+  let x1 = -1;
+  let y1 = -1;
+  for (let index = 0; index < a.pixels.length; index += 4) {
+    if (
+      a.pixels[index] === b.pixels[index] &&
+      a.pixels[index + 1] === b.pixels[index + 1] &&
+      a.pixels[index + 2] === b.pixels[index + 2] &&
+      a.pixels[index + 3] === b.pixels[index + 3]
+    )
+      continue;
+    const pixel = index / 4;
+    const x = pixel % a.width;
+    const y = Math.floor(pixel / a.width);
+    x0 = Math.min(x0, x);
+    y0 = Math.min(y0, y);
+    x1 = Math.max(x1, x);
+    y1 = Math.max(y1, y);
+  }
+  return x1 < 0
+    ? null
+    : { x: x0, y: y0, width: x1 - x0 + 1, height: y1 - y0 + 1 };
+}
+
 /* ------------------------------ 产物检查 --------------------------------- */
 
 /** 只在展示页源码里出现的串，与 `src/showcase/production.test.ts` 同一张表。 */
@@ -525,10 +555,40 @@ await h.run(async () => {
         .filter((animation) => animation.playState === "running")
         .map((animation) => animation.animationName ?? animation.constructor.name);
     `);
+    // 先等画布稳定。整页截图（captureBeyondViewport）会临时改视口尺寸，触发
+    // 画布的 ResizeObserver 与句柄重排，截图结束后才落定——紧挨着的下一张图会
+    // 拿到半成品。所以：字体就绪、两帧渲染之后，每隔 300ms 截一张，连续两张
+    // 相同才算稳定（首帧测量、小地图 60ms 节流重算同样在这里落定），最多等
+    // 15 秒；稳定之后再停 300ms 才取正式的第一张。后面「隔 700ms 逐字节相同」的
+    // 检查原样保留，永远在动的画面照样失败。
+    await page.evaluate(`
+      await document.fonts.ready;
+      await new Promise((done) =>
+        requestAnimationFrame(() => requestAnimationFrame(done)));
+      return true;
+    `);
+    let settled = (await capture(null, 1440)).bytes;
+    let stable = 0;
+    for (let waited = 0; waited < 15_000 && stable < 2; waited += 300) {
+      await sleep(300);
+      const next = (await capture(null, 1440)).bytes;
+      stable = next.equals(settled) ? stable + 1 : 0;
+      settled = next;
+    }
+    await sleep(300);
     const first = await capture(`canvas-${theme}-1440-reduced-motion`, 1440);
     await sleep(700);
     const second = await capture(null, 1440);
+    const still = first.bytes.equals(second.bytes);
+    // 失败时留下第二张图和差异外接矩形，方便定位还在变的元素。
+    if (!still) {
+      writeFileSync(
+        join(output, `canvas-${theme}-1440-reduced-motion-second.png`),
+        second.bytes,
+      );
+    }
     report.reducedMotion = {
+      box: still ? null : differenceBox(first.bytes, second.bytes),
       running,
       still: first.bytes.equals(second.bytes),
       animatedWithoutReduce: !movingA.equals(movingB),
