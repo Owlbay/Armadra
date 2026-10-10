@@ -39,7 +39,7 @@ export const TTL_SECONDS = 86_400;
 export const RECEIPT_KEY_PREFIX = "receipt:";
 
 /** 拼进 SQL 的那一句：这一行不是回执。 */
-const NOT_RECEIPT = `message_key NOT LIKE '${RECEIPT_KEY_PREFIX}%'`;
+export const NOT_RECEIPT = `message_key NOT LIKE '${RECEIPT_KEY_PREFIX}%'`;
 
 export const HELP_LINES = [
   "Armadra collaboration (pull-only, no automatic input):",
