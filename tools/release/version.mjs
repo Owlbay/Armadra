@@ -1,24 +1,25 @@
 /**
- * One version, three manifests, one tag — for the desktop suite.
+ * One version, five manifests and constants, one tag — for desktop, server and
+ * the phone / tablet app.
  *
- * The root `package.json` is the only source; the two shells are checked
- * against it. A release built from files that disagree would ship a desktop
- * shell and a server shell that report different versions, and the update
- * check compares versions — so this runs first in CI and refuses the tag
- * rather than producing that release.
+ * The root `package.json` is the only source; the shells and the mobile app are
+ * checked against it. A release built from files that disagree would ship
+ * clients that report different versions, and the update check compares
+ * versions — so this runs first in CI and refuses the tag rather than
+ * producing that release.
  *
- * The phone / tablet app is not part of that suite: it has its own version
- * line in `apps/mobile/package.json` (plain X.Y.Z, its own `mobile-vX.Y.Z`
- * tag, its own `apps/mobile/CHANGELOG.md`), and whether it works with a host
- * is decided by protocol (compatibility.json `mobile`), not by the numbers
- * being equal. The `mobile` subcommands look after it.
+ * Rules (docs/guides/ci-release.md「版本规则」): Z = bug fixes only, Y =
+ * features, X = very large releases. When one client bumps, the others align at
+ * their next release. The mobile native versions (iOS MARKETING_VERSION,
+ * Android versionName) are derived from this version by
+ * `apps/mobile/scripts/app-version.mjs`; the build number stays a separate,
+ * monotonically increasing counter. Whether the app works with a host is
+ * decided by protocol (compatibility.json `mobile`), not by version numbers.
+ * armadra-cloud follows the protocol package, not this line.
  *
  *   node tools/release/version.mjs check [--tag vX.Y.Z]
  *   node tools/release/version.mjs set X.Y.Z
  *   node tools/release/version.mjs print
- *   node tools/release/version.mjs mobile check [--tag mobile-vX.Y.Z]
- *   node tools/release/version.mjs mobile set X.Y.Z
- *   node tools/release/version.mjs mobile print
  */
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -43,12 +44,14 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
  *
  * Both shells are here because both are published: electron-builder reads the
  * version out of the desktop manifest, and the server shell reports its own.
+ * The mobile manifest is here so the app ships under the same version.
  */
 export const VERSION_SITES = [
   { path: "package.json", kind: "json" },
   { path: "apps/desktop/package.json", kind: "json" },
   { path: "apps/server/package.json", kind: "json" },
-  // 手机壳不在这里：它有自己的版本线，见下面的 MOBILE_* 与 `mobile` 子命令。
+  // 手机 / 平板 App 与桌面套件同一条版本线；原生版本名由 app-version.mjs 从它派生。
+  { path: "apps/mobile/package.json", kind: "json" },
   // core 与 armadra-hook 各把版本写成常量（运行时不读 manifest）；漏改时
   // instance.test / hook.test 才会在单测里红，这里让 set 一起改、check 一起看。
   { path: "apps/desktop/src/core/instance.ts", kind: "ts", name: "VERSION" },
@@ -170,6 +173,19 @@ export function checkAgentPin({ base = root, agent } = {}) {
   return problems;
 }
 
+/** The root changelog has a section for the version (and its tag if given). */
+export function checkChangelog(version, { base = root } = {}) {
+  let text;
+  try {
+    text = readFileSync(base + "CHANGELOG.md", "utf8");
+  } catch {
+    return ["CHANGELOG.md is missing"];
+  }
+  return changelogSection(text, version) === null
+    ? [`CHANGELOG.md has no "## ${version}" section`]
+    : [];
+}
+
 /** Workspaces that depend on the protocol package (platform-protocol §1.3). */
 const PLATFORM_CONSUMERS = ["packages/shared", "apps/desktop", "apps/web"];
 
@@ -289,10 +305,8 @@ export function checkDesktopServe({ base = root } = {}) {
   return problems;
 }
 
-/** The phone / tablet app's own version line. */
+/** The phone / tablet app: native projects, changelog and host protocol. */
 export const MOBILE_MANIFEST = "apps/mobile/package.json";
-export const MOBILE_CHANGELOG = "apps/mobile/CHANGELOG.md";
-export const MOBILE_TAG_PREFIX = "mobile-v";
 /** Where the bundled page keeps its copy of compatibility.json `mobile`. */
 export const MOBILE_PAGE_PROTOCOL = "apps/web/src/mobile/host-compatibility.ts";
 const CORE_PROTOCOL = "apps/desktop/src/core/identity/protocol.ts";
@@ -300,40 +314,6 @@ const IOS_PROJECT = "apps/mobile/ios/App/App.xcodeproj/project.pbxproj";
 const IOS_VERSION_XCCONFIG = "apps/mobile/ios/version.xcconfig";
 const IOS_DEBUG_XCCONFIG = "apps/mobile/ios/debug.xcconfig";
 const ANDROID_GRADLE = "apps/mobile/android/app/build.gradle";
-
-/** Store version names take no pre-release suffix (CFBundleShortVersionString). */
-const PLAIN_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
-
-/** The version `apps/mobile/package.json` declares. */
-export function mobileVersion(base = root) {
-  const match = JSON_VERSION.exec(readFileSync(base + MOBILE_MANIFEST, "utf8"));
-  if (!match) throw new Error(`no version field in ${MOBILE_MANIFEST}`);
-  return match[2];
-}
-
-/** Write a new mobile version. Plain X.Y.Z only. */
-export function setMobileVersion(next, base = root) {
-  const version = String(next ?? "").trim();
-  if (!PLAIN_VERSION.test(version))
-    throw new Error(
-      `mobile version must be a plain X.Y.Z (no pre-release): ${next}`,
-    );
-  const file = base + MOBILE_MANIFEST;
-  const text = readFileSync(file, "utf8");
-  let previous = "";
-  const replaced = text.replace(JSON_VERSION, (_, head, current, tail) => {
-    previous = current;
-    return head + version + tail;
-  });
-  if (replaced !== text) writeFileSync(file, replaced);
-  return {
-    version,
-    changed:
-      previous && previous !== version
-        ? [`${MOBILE_MANIFEST}: ${previous} -> ${version}`]
-        : [],
-  };
-}
 
 function protocolOf(text, majorName, minorName) {
   const major = new RegExp(`${majorName}\\s*=\\s*(\\d+)`).exec(text);
@@ -344,13 +324,12 @@ function protocolOf(text, majorName, minorName) {
 }
 
 /**
- * Check the mobile app's version line on its own: the version is a plain
- * X.Y.Z, the tag (if any) names it, both native projects derive their version
- * and build number from the generated files instead of hard-coding them, the
- * app's changelog has a section for it, and compatibility.json `mobile`
- * agrees with the bundled page and with the core's protocol. Returns problems.
+ * Check what the mobile app derives from the shared version: both native
+ * projects take their version and build number from the generated files
+ * instead of hard-coding them, and compatibility.json `mobile` agrees with the
+ * bundled page and with the core's protocol. Returns problems.
  */
-export function checkMobile({ base = root, tag = "", mobile } = {}) {
+export function checkMobile({ base = root, mobile } = {}) {
   const problems = [];
   const read = (path) => {
     try {
@@ -360,22 +339,13 @@ export function checkMobile({ base = root, tag = "", mobile } = {}) {
       return "";
     }
   };
-  let version = "";
-  try {
-    version = mobileVersion(base);
-  } catch (error) {
-    problems.push(String(error instanceof Error ? error.message : error));
-  }
-  if (version && !PLAIN_VERSION.test(version))
-    problems.push(
-      `${MOBILE_MANIFEST} holds ${version}; the mobile version must be a plain X.Y.Z (store version names take no pre-release suffix)`,
-    );
-  if (tag) {
-    if (!tag.startsWith(MOBILE_TAG_PREFIX))
-      problems.push(`tag ${tag} does not start with "${MOBILE_TAG_PREFIX}"`);
-    else if (tag.slice(MOBILE_TAG_PREFIX.length) !== version)
-      problems.push(`tag ${tag} does not name the mobile version ${version}`);
-  }
+  const version = (() => {
+    try {
+      return readVersions(base).find((s) => s.path === MOBILE_MANIFEST).version;
+    } catch {
+      return "";
+    }
+  })();
 
   const project = read(IOS_PROJECT);
   if (/\b(MARKETING_VERSION|CURRENT_PROJECT_VERSION)\s*=/.test(project))
@@ -411,10 +381,6 @@ export function checkMobile({ base = root, tag = "", mobile } = {}) {
     problems.push(
       `${ANDROID_GRADLE} does not take versionName / versionCode from version.properties`,
     );
-
-  const changelog = read(MOBILE_CHANGELOG);
-  if (changelog && version && changelogSection(changelog, version) === null)
-    problems.push(`${MOBILE_CHANGELOG} has no "## ${version}" section`);
 
   let range;
   try {
@@ -455,44 +421,6 @@ export function checkMobile({ base = root, tag = "", mobile } = {}) {
   return { version, problems };
 }
 
-function mobileMain(argv) {
-  const [mode, ...rest] = argv;
-  if (mode === "print") {
-    process.stdout.write(mobileVersion() + "\n");
-    return 0;
-  }
-  if (mode === "set") {
-    const { version, changed } = setMobileVersion(rest[0]);
-    for (const line of changed) console.log(line);
-    console.log(`Mobile version is ${version}.`);
-    return 0;
-  }
-  if (mode !== "check") {
-    console.error(
-      "usage: node tools/release/version.mjs mobile check|set|print",
-    );
-    return 2;
-  }
-  const tagFlag = rest.indexOf("--tag");
-  const tag =
-    tagFlag >= 0
-      ? (rest[tagFlag + 1] ?? "")
-      : (process.env.GITHUB_REF_NAME ?? "");
-  const named = tag.startsWith(MOBILE_TAG_PREFIX) || tagFlag >= 0 ? tag : "";
-  const { version, problems } = checkMobile({ tag: named });
-  for (const problem of problems) console.error(`✗ ${problem}`);
-  if (problems.length > 0) {
-    console.error(
-      `\nMobile version check failed: ${problems.length} problem(s)`,
-    );
-    return 1;
-  }
-  console.log(
-    `Mobile version ${version}${named ? ` matches tag ${named}` : ""}; iOS and Android derive it, compatibility.json mobile agrees with the page and the core.`,
-  );
-  return 0;
-}
-
 /** Write a new version into every site. */
 export function setVersion(next, base = root) {
   const version = parseVersion(next).text;
@@ -512,7 +440,6 @@ export function setVersion(next, base = root) {
 
 function main(argv) {
   const [mode, ...rest] = argv;
-  if (mode === "mobile") return mobileMain(rest);
   if (mode === "print") {
     process.stdout.write(workspaceVersion() + "\n");
     return 0;
@@ -524,9 +451,7 @@ function main(argv) {
     return 0;
   }
   if (mode !== "check") {
-    console.error(
-      "usage: node tools/release/version.mjs check|set|print | mobile check|set|print",
-    );
+    console.error("usage: node tools/release/version.mjs check|set|print");
     return 2;
   }
   const tagFlag = rest.indexOf("--tag");
@@ -540,6 +465,8 @@ function main(argv) {
   problems.push(...checkAgentPin());
   problems.push(...checkPlatformPin());
   problems.push(...checkDesktopServe());
+  problems.push(...checkMobile().problems);
+  problems.push(...checkChangelog(version));
   for (const problem of problems) console.error(`✗ ${problem}`);
   if (problems.length > 0) {
     console.error(
@@ -548,7 +475,7 @@ function main(argv) {
     return 1;
   }
   console.log(
-    `Desktop suite version ${version} agrees across ${VERSION_SITES.length} files${tag ? ` and tag ${tag}` : ""}; ${AGENT_PACKAGE} and ${PLATFORM_PACKAGE} pinned as installed.`,
+    `Version ${version} (desktop, server, mobile) agrees across ${VERSION_SITES.length} files${tag ? ` and tag ${tag}` : ""}; ${AGENT_PACKAGE} and ${PLATFORM_PACKAGE} pinned as installed.`,
   );
   return 0;
 }

@@ -7,7 +7,7 @@
  * major 不同就是不兼容。
  *
  * {@link MINIMUM_HOST_PROTOCOL} 是 `tools/release/compatibility.json` 的
- * `mobile.minimumHostProtocol` 的副本，`node tools/release/version.mjs mobile check`
+ * `mobile.minimumHostProtocol` 的副本，`node tools/release/version.mjs check`
  * 核对两者一致、且不高于 core 自己的协议。1.14 起手机用到的推送与对外服务动词
  * （契约 §43.4、§43.7）都在契约上；已发布的 0.2.x 全在 1.18 及以上。
  */

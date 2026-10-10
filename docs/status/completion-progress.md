@@ -4000,3 +4000,17 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - `listOrigins` 的摘要比对没有单测（依赖 WebCrypto），由页面测试替身覆盖。
 
 接口：`api/accounts.ts` 的 `listOrigins`、`Origin`；`GatewayDevices` 的可选 `originOf`；i18n `sharing.origin.local`。
+
+## 三端统一版本线（#245）
+
+做了什么：
+
+- `version.mjs` 只剩 `check / set / print`；`VERSION_SITES` 重新纳入 `apps/mobile/package.json`，删除 `mobile` 子命令与 `mobile-v*` 标签；`check` 一并校验原生工程派生、协议门槛（`compatibility.json` 的 `mobile.minimumHostProtocol`）与根 `CHANGELOG.md` 有本版本一节。`release:check` 只剩一条。
+- `apps/mobile/package.json` 由 1.1.0 对齐到 0.2.6（本 PR 不改套件版本）；构建号仍是 `git rev-list --count HEAD`，单调递增、不回退。`app-version.mjs` 对预发布版本取 `X.Y.Z` 核心作商店版本名。
+- `apps/mobile/CHANGELOG.md` 并回根 `CHANGELOG.md`（0.2.5、0.2.6 下的「手机与平板」小节）；nightly 的移动端产物名用统一版本；文档 `ci-release.md` §2.8 与 `.github/CONTRIBUTING.md` 写明版本规则。
+
+实测：`version.test.mjs`、`app-version.test.mjs`、`pnpm release:test`、`release:check`、`ci:workflows`、`pnpm check`。
+
+没做：下一次统一发版 0.3.0 由发布时 `version.mjs set 0.3.0` 完成。
+
+接口：`version.mjs` 导出 `checkMobile({base, mobile})`（不再收 `tag`）、`checkChangelog`；移除 `mobileVersion`、`setMobileVersion`、`MOBILE_CHANGELOG`、`MOBILE_TAG_PREFIX`。
