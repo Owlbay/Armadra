@@ -225,23 +225,23 @@ test("ARMADRA_DEV_STACK_CLOUD_SRC：本地构建叠加文件与目录解析", ()
       () => resolveCloudSrc({ ARMADRA_DEV_STACK_CLOUD_SRC: join(fake, "no") }),
       /不是 armadra-cloud 的克隆/,
     );
-    // 变量没设时看仓库旁边的 armadra-cloud。
+    // 变量没设时看仓库旁边的 cloud。
     const parent = mkdtempSync(join(tmpdir(), "cloud-sibling-"));
     try {
       const repo = join(parent, "armadra");
       mkdirSync(repo);
       assert.equal(resolveCloudSrc({}, { repoRoot: repo }), null);
-      mkdirSync(join(parent, "armadra-cloud", "apps", "cloud"), {
+      mkdirSync(join(parent, "cloud", "apps", "cloud"), {
         recursive: true,
       });
       writeFileSync(
-        join(parent, "armadra-cloud", "apps", "cloud", "Dockerfile"),
+        join(parent, "cloud", "apps", "cloud", "Dockerfile"),
         "FROM scratch\n",
       );
       const notes = [];
       assert.equal(
         resolveCloudSrc({}, { repoRoot: repo, note: (l) => notes.push(l) }),
-        join(parent, "armadra-cloud"),
+        join(parent, "cloud"),
       );
       assert.equal(notes.length, 1);
     } finally {

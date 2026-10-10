@@ -1,5 +1,5 @@
 # 叠在 docker-compose.yml 上：云仓镜像改为从本地 armadra-cloud 克隆构建。
-# 由 dev-stack.mjs 在设了 ARMADRA_DEV_STACK_CLOUD_SRC（或旁边有 ../armadra-cloud）时加 -f，
+# 由 dev-stack.mjs 在设了 ARMADRA_DEV_STACK_CLOUD_SRC（或旁边有 ../cloud）时加 -f，
 # 不单独使用。服务集合与端口仍以 docker-compose.yml 为准。
 services:
   cloud:

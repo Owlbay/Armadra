@@ -82,7 +82,7 @@ mkdirSync(output, { recursive: true });
 const cloudHome = findCloudSource();
 if (!cloudHome) {
   console.error(
-    `没有 armadra-cloud 的本地检出（${CLOUD_ENTRY}）：设 ARMADRA_DEV_STACK_CLOUD_SRC 或放在仓库旁的 ../armadra-cloud`,
+    `没有 armadra-cloud 的本地检出（${CLOUD_ENTRY}）：设 ARMADRA_DEV_STACK_CLOUD_SRC 或放在仓库旁的 ../cloud`,
   );
   process.exit(2);
 }

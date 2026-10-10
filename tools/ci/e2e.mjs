@@ -26,7 +26,7 @@
  * another.
  *
  * An entry that `requires` "cloud" needs a local checkout of the private
- * armadra-cloud repository (ARMADRA_DEV_STACK_CLOUD_SRC, or ../armadra-cloud).
+ * armadra-cloud repository (ARMADRA_DEV_STACK_CLOUD_SRC, or ../cloud).
  * CI cannot clone it, so without one the entry is recorded as skipped with the
  * reason, not failed; with one the path is handed to the probe in
  * ARMADRA_DEV_STACK_CLOUD_SRC.

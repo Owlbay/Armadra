@@ -238,7 +238,7 @@ services:
   # ---- 平台（docs/design/platform/dev-stack-and-verification.md §1）----
   # `platform` / `personal` 是独立 profile：`pnpm platform:up` / `platform:personal` 只起各自
   # 的服务，不连带起上面那组非 profile 服务。云仓镜像缺省取 GHCR 的钉版本；设了
-  # ARMADRA_DEV_STACK_CLOUD_SRC（或旁边有 ../armadra-cloud）时叠加
+  # ARMADRA_DEV_STACK_CLOUD_SRC（或旁边有 ../cloud）时叠加
   # docker-compose.cloud-src.yml 改为本地构建。
 
   platform-postgres:
