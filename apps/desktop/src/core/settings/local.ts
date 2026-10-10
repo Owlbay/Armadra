@@ -53,6 +53,7 @@ export type JsonObject = { [key: string]: JsonValue };
  * | `push.apns.keyFile`      | Path of the APNs `.p8` on this filesystem (contents never leave the file)      |
  * | `push.fcm.serviceAccountFile` | Path of the FCM service-account JSON, same reason                         |
  * | `cloud.relay`            | Whether *this* machine opens its outbound relay tunnel, and to which node      |
+ * | `host.name`              | The name this machine advertises to other devices (contract §61)               |
  *
  * `agents.custom[]` is deliberately **not** here: a custom agent definition is
  * what the user configured, and it is meant to follow them. Only the probe
@@ -72,6 +73,8 @@ export const LOCAL_PATHS: readonly (readonly string[])[] = [
   ["cloud", "relay"],
   // 终端里 Claude Code mod 的文案语言（契约 §57.6）：跟着这台机器的页面走。
   ["ui", "locale"],
+  // 这台主机报给别的设备的名字（契约 §61）。
+  ["host", "name"],
 ];
 
 /** The same paths as dotted strings, for the settings page and for tests. */

@@ -471,3 +471,16 @@ describe("ui.locale (contract §57.6)", () => {
     });
   });
 });
+
+describe("host.name (contract §61)", () => {
+  it("is trimmed, dropped when not a string or too long, never created", () => {
+    expect(normalize({}).host).toBeUndefined();
+    expect(object(normalize({ host: { name: "  书房  " } }).host).name).toBe(
+      "书房",
+    );
+    expect(object(normalize({ host: { name: 3 } }).host)).toEqual({});
+    expect(
+      object(normalize({ host: { name: "x".repeat(129), other: 1 } }).host),
+    ).toEqual({ other: 1 });
+  });
+});

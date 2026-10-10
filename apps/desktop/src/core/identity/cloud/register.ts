@@ -15,7 +15,6 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { hostname } from "node:os";
 
 import type { Ed25519PublicJwk } from "@armadra/platform-protocol/assertion";
 import type {
@@ -26,6 +25,7 @@ import type {
 import { PROTOCOL_VERSION } from "@armadra/platform-protocol";
 
 import { CoreFailure, fail } from "../../http/errors";
+import { currentHostName } from "../../settings";
 import {
   normalizeFingerprint,
   normalizeOrigin,
@@ -205,7 +205,8 @@ export class CloudRegistry {
     }
     const sourceId = this.options.hostId();
     const publicKey: Ed25519PublicJwk = await sourceKey.publicJwk();
-    const name = (label ?? (hostname().trim() || "Armadra")).slice(0, 128);
+    // 中继目录里这台主机的名字：给了用它，否则是「主机名称」（契约 §61）。
+    const name = (label ?? currentHostName()).slice(0, 128);
     const registration = await client.register(issuer, fingerprint, {
       registrationToken,
       sourceId,

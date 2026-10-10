@@ -43,7 +43,9 @@ interface Harness {
   readonly service: IdentityService;
 }
 
-async function harness(): Promise<Harness> {
+async function harness(
+  options: { hostName?: () => string } = {},
+): Promise<Harness> {
   const directory = tempDir("armadra-identity-http-");
   const opened = openDatabase({
     file: join(directory, "canvas.db"),
@@ -52,7 +54,11 @@ async function harness(): Promise<Harness> {
   closing.push(opened.close);
   const store = new IdentityStore(opened.database);
   const service = new IdentityService(store, INSTANCE);
-  const http = new IdentityHttp({ service, instanceId: INSTANCE });
+  const http = new IdentityHttp({
+    service,
+    instanceId: INSTANCE,
+    ...(options.hostName ? { hostName: options.hostName } : {}),
+  });
   const server: Server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://core");
     const chunks: Buffer[] = [];
@@ -150,6 +156,25 @@ describe("身份域的 JSON 面", () => {
     // 页面靠这两个名字决定走原生传输还是浏览器会话。
     expect(hello.capabilities).toContain(NATIVE_SESSION_CAPABILITY);
     expect(hello.capabilities).toContain(BROWSER_SESSION_CAPABILITY);
+  });
+
+  it("Hello 报主机名称（契约 §61），每次现读；没装配时是空串", async () => {
+    let name = "书房";
+    const fixture = await harness({ hostName: () => name });
+    const first = (await (await call(fixture, "GET", "hello")).json()) as {
+      hostName: string;
+    };
+    expect(first.hostName).toBe("书房");
+    name = "客厅";
+    const second = (await (await call(fixture, "GET", "hello")).json()) as {
+      hostName: string;
+    };
+    expect(second.hostName).toBe("客厅");
+    const bare = await harness();
+    const third = (await (await call(bare, "GET", "hello")).json()) as {
+      hostName: string;
+    };
+    expect(third.hostName).toBe("");
   });
 
   it("配对答出原生密钥，回环 HTTP 上不发 Cookie", async () => {

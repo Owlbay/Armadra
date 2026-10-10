@@ -23,6 +23,13 @@ export const systemHelloOutputSchema = z.object({
   instanceId: z.string(),
   sourceId: z.string(),
   version: z.string(),
+  /**
+   * 这台主机的名字（契约 §61）：设置 `host.name`，没设是系统主机名。旧 core
+   * 不报，所以可选。
+   */
+  hostName: z.string().optional(),
+  /** 系统主机名（`host.name` 清空后用它）；与 `hostName` 同时出现。 */
+  systemHostName: z.string().optional(),
 });
 
 export type SystemHello = z.infer<typeof systemHelloOutputSchema>;

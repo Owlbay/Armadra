@@ -4,7 +4,12 @@ import { VERSION, instanceId } from "../instance";
 import { registerProcedures } from "../http/rpc";
 import { coreCapabilities } from "../schedule/capabilities";
 import { secretsFor } from "../secrets";
-import { completionSettings, settingsDomain } from "../settings";
+import {
+  completionSettings,
+  currentHostName,
+  settingsDomain,
+  systemHostName,
+} from "../settings";
 import { AccountsService } from "./accounts";
 import { createIdentitySecurity } from "./accounts-http";
 import { installAuditSink } from "./audit";
@@ -133,6 +138,7 @@ export function installIdentity(context: CoreContext): void {
     accounts,
     instanceId: runInstance,
     capabilities: coreCapabilities,
+    hostName: currentHostName,
     security,
     ...(wsTickets === undefined ? {} : { wsTickets }),
   });
@@ -151,6 +157,8 @@ export function installIdentity(context: CoreContext): void {
         instanceId: hello.hostInstanceId,
         sourceId: hello.hostId,
         version: VERSION,
+        hostName: hello.hostName,
+        systemHostName: systemHostName(),
       };
     },
     ping: ({ ts }) => ({ ts, serverTs: Date.now() }),
