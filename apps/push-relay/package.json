@@ -1,7 +1,7 @@
 {
   "name": "@armadra/push-relay",
   "description": "Armadra 商店版 App 的最小推送中继（无状态，端到端加密载荷）",
-  "homepage": "https://github.com/yovinchen/Armadra",
+  "homepage": "https://github.com/AMA-Link/Armadra",
   "author": {
     "name": "YoVinchen",
     "email": "gzh298255@gmail.com"
