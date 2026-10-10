@@ -17,6 +17,7 @@ import {
   type RemoteService,
   SHARE_LINK_MAX_USES,
   type ShareLink,
+  type ShareTarget,
   createShareLink,
   listShareLinks,
   renameShareLink,
@@ -29,6 +30,7 @@ import {
   stopSharing,
 } from "../../api/remote-services";
 import { onWorkspaceConnection, onWorkspaceEvent } from "../../api/events";
+import { sessionsQuery } from "../../agent/sessions";
 import { localSource } from "../../api/source";
 import { localizedFailure } from "../../api/request";
 import {
@@ -326,6 +328,7 @@ function linkName(
   return (
     link.label ||
     workspaceName ||
+    (link.target === "host" ? t("sharing.scope.host") : "") ||
     t("remote.link.unnamed", { id: link.linkId.slice(0, 6) })
   );
 }
@@ -630,6 +633,11 @@ function LinkItem({
               {t(`sharing.role.${link.role}`)}
             </Badge>
           )}
+          {(link.target === "host" || link.target === "session") && (
+            <Badge variant="outline" className="shrink-0 font-normal">
+              {t(`sharing.scope.${link.target}`)}
+            </Badge>
+          )}
           {link.state !== "active" && (
             <Badge variant="outline" className="shrink-0 font-normal">
               {t(`remote.link.state.${link.state}`)}
@@ -708,6 +716,9 @@ function CreateLinkDialog({
   const current = useCanvasStore((state) => state.workspace);
   const [label, setLabel] = React.useState("");
   const [workspaceId, setWorkspaceId] = React.useState(current?.id ?? "");
+  const [target, setTarget] = React.useState<ShareTarget>("workspace");
+  const [sessionId, setSessionId] = React.useState("");
+  const [readOnly, setReadOnly] = React.useState(false);
   const [role, setRole] = React.useState<ShareRole>("viewer");
   const [days, setDays] = React.useState<number>(7);
   const [uses, setUses] = React.useState<number>(SHARE_LINK_MAX_USES);
@@ -717,18 +728,41 @@ function CreateLinkDialog({
 
   const list = workspaces.data ?? [];
   const chosen = list.find((one) => one.id === workspaceId) ?? list[0];
+  const sessions = useQuery({
+    ...sessionsQuery(chosen?.id ?? null),
+    enabled: open && target === "session" && chosen !== undefined,
+  });
+  const sessionList = sessions.data ?? [];
+  const session =
+    sessionList.find((one) => one.sessionId === sessionId) ?? sessionList[0];
+  // 会话分享总是只读；只读把角色压成查看。
+  const locked = target === "session" || readOnly;
+  const fallbackName =
+    target === "host"
+      ? t("sharing.scope.host")
+      : target === "session"
+        ? session?.title || (chosen?.name ?? "")
+        : (chosen?.name ?? "");
+  const ready =
+    target === "host" ||
+    (chosen !== undefined && (target !== "session" || session !== undefined));
   const create = useMutation({
     mutationFn: () =>
       createShareLink({
         serviceId,
+        target,
         workspaceId: chosen?.id ?? "",
-        role,
+        ...(target === "session" && session
+          ? { sessionId: session.sessionId }
+          : {}),
+        readOnly: locked,
+        role: locked ? "viewer" : role,
         ttlMs: days * DAY_MS,
         maxUses: uses,
-        label: label.trim() || (chosen?.name ?? ""),
+        label: label.trim() || fallbackName,
       }),
     onSuccess: (created) =>
-      onCreated(created, created.link.label || (chosen?.name ?? "")),
+      onCreated(created, created.link.label || fallbackName),
     onError: (error: Error) => toast.error(error.message),
   });
 
@@ -743,7 +777,7 @@ function CreateLinkDialog({
         <ResponsiveDialogHeader>
           <ResponsiveDialogTitle>{t("remote.links.new")}</ResponsiveDialogTitle>
         </ResponsiveDialogHeader>
-        {list.length === 0 ? (
+        {list.length === 0 && target !== "host" ? (
           <p className="text-[13px] text-muted-foreground">
             {t("remote.invite.noWorkspace")}
           </p>
@@ -764,26 +798,55 @@ function CreateLinkDialog({
                   id="share-link-note"
                   value={label}
                   maxLength={128}
-                  placeholder={chosen?.name ?? ""}
+                  placeholder={fallbackName}
                   onChange={(event) => setLabel(event.target.value)}
                 />
               </Field>
               <div className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
                 <Choice
-                  label={t("remote.invite.workspace")}
-                  value={chosen?.id ?? ""}
-                  onChange={setWorkspaceId}
-                  options={list.map((one) => [one.id, one.name])}
-                />
-                <Choice
-                  label={t("remote.invite.role")}
-                  value={role}
-                  onChange={(value) => setRole(value as ShareRole)}
-                  options={SHARE_ROLES.map((one) => [
+                  label={t("sharing.scope")}
+                  value={target}
+                  onChange={(value) => setTarget(value as ShareTarget)}
+                  options={SHARE_TARGETS.map((one) => [
                     one,
-                    t(`sharing.role.${one}`),
+                    t(`sharing.scope.${one}`),
                   ])}
                 />
+                {target !== "host" && (
+                  <Choice
+                    label={t("remote.invite.workspace")}
+                    value={chosen?.id ?? ""}
+                    onChange={(value) => {
+                      setWorkspaceId(value);
+                      setSessionId("");
+                    }}
+                    options={list.map((one) => [one.id, one.name])}
+                  />
+                )}
+                {target === "session" && (
+                  <Choice
+                    label={t("sharing.session")}
+                    value={session?.sessionId ?? ""}
+                    onChange={setSessionId}
+                    placeholder={t("sharing.session.none")}
+                    options={sessionList.map((one) => [
+                      one.sessionId,
+                      one.title || one.sessionId.slice(0, 8),
+                    ])}
+                  />
+                )}
+                {target !== "session" && (
+                  <Choice
+                    label={t("remote.invite.role")}
+                    value={locked ? "viewer" : role}
+                    disabled={locked}
+                    onChange={(value) => setRole(value as ShareRole)}
+                    options={SHARE_ROLES.map((one) => [
+                      one,
+                      t(`sharing.role.${one}`),
+                    ])}
+                  />
+                )}
                 <Choice
                   label={t("remote.invite.expires")}
                   value={String(days)}
@@ -803,6 +866,18 @@ function CreateLinkDialog({
                   ])}
                 />
               </div>
+              {target !== "session" && (
+                <Field orientation="horizontal" className="justify-between">
+                  <FieldLabel htmlFor="share-link-read-only">
+                    {t("sharing.readOnly")}
+                  </FieldLabel>
+                  <Switch
+                    id="share-link-read-only"
+                    checked={readOnly}
+                    onCheckedChange={setReadOnly}
+                  />
+                </Field>
+              )}
             </FieldGroup>
           </form>
         )}
@@ -813,7 +888,7 @@ function CreateLinkDialog({
           <Button
             type="submit"
             form="share-link-form"
-            disabled={create.isPending || !chosen}
+            disabled={create.isPending || !ready}
           >
             {create.isPending && (
               <Spinner data-icon="inline-start" aria-hidden />
@@ -826,23 +901,34 @@ function CreateLinkDialog({
   );
 }
 
+/** 分享范围（契约 §60）：整台、工作空间、会话。 */
+const SHARE_TARGETS: readonly ShareTarget[] = ["host", "workspace", "session"];
+
 function Choice({
   label,
   value,
   options,
   onChange,
+  disabled,
+  placeholder,
 }: {
   label: string;
   value: string;
   options: readonly (readonly [string, string])[];
   onChange(value: string): void;
+  disabled?: boolean;
+  placeholder?: string;
 }) {
   return (
-    <Field className="min-w-0 gap-1.5">
+    <Field className="min-w-0 gap-1.5" data-disabled={disabled || undefined}>
       <FieldLabel>{label}</FieldLabel>
-      <Select value={value} onValueChange={onChange}>
+      <Select
+        value={value}
+        onValueChange={onChange}
+        disabled={disabled || options.length === 0}
+      >
         <SelectTrigger aria-label={label} className="w-full min-w-0">
-          <SelectValue />
+          <SelectValue placeholder={placeholder} />
         </SelectTrigger>
         <SelectContent className="z-[var(--z-dialog)]">
           {options.map(([id, text]) => (
