@@ -6,7 +6,7 @@ import {
   statSync,
   fstatSync,
   constants,
-  type Stats,
+  type BigIntStats,
 } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { CONTROLLER_LIMITS } from "@armadra/shared";
@@ -165,11 +165,16 @@ export function eventPage(
 
 export { pruneRunEvents } from "./store";
 
+// Bigint stats: NTFS file IDs exceed 2^53, so number inodes can round two
+// different files to the same value on Windows.
+const millis = (stat: BigIntStats) => Number(stat.mtimeNs) / 1e6;
+
 function fileVersion(
   path: string,
-  initial: Stats,
+  initial: BigIntStats,
 ): { contentVersion: string; versionKind: string } {
-  const { size, mtimeMs } = initial;
+  const size = Number(initial.size),
+    mtimeMs = millis(initial);
   let descriptor;
   try {
     descriptor = openSync(
@@ -192,7 +197,7 @@ function fileVersion(
   try {
     // The path can be replaced after scopedPath/stat (including a parent
     // directory swap). Verify the descriptor before reading even one byte.
-    const opened = fstatSync(descriptor);
+    const opened = fstatSync(descriptor, { bigint: true });
     if (opened.dev !== initial.dev || opened.ino !== initial.ino)
       throw new ControllerError(
         "artifact_changed",
@@ -222,10 +227,14 @@ function fileVersion(
       hash.update(buffer.subarray(0, read));
       position += read;
     }
-    const after = fstatSync(descriptor);
-    if (position !== size || after.size !== size || after.mtimeMs !== mtimeMs)
+    const after = fstatSync(descriptor, { bigint: true });
+    if (
+      position !== size ||
+      after.size !== initial.size ||
+      after.mtimeNs !== initial.mtimeNs
+    )
       return {
-        contentVersion: `metadata:${after.size}:${after.mtimeMs}`,
+        contentVersion: `metadata:${after.size}:${millis(after)}`,
         versionKind: "changedDuringCheck",
       };
     return {
@@ -268,7 +277,10 @@ export function artifactPage(database: DatabaseSync, run: RunRow, offset = 0) {
     const resolved = scopedPath(declaration.root, declaration.path);
     let stat;
     try {
-      stat = statSync(resolved.path, { throwIfNoEntry: false });
+      stat = statSync(resolved.path, {
+        bigint: true,
+        throwIfNoEntry: false,
+      });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENAMETOOLONG") throw error;
     }
@@ -281,11 +293,11 @@ export function artifactPage(database: DatabaseSync, run: RunRow, offset = 0) {
             : stat.isDirectory()
               ? "directory"
               : "other",
-          size: stat.size,
+          size: Number(stat.size),
           ...(stat.isFile()
             ? fileVersion(resolved.path, stat)
             : {
-                contentVersion: `metadata:${stat.size}:${stat.mtimeMs}`,
+                contentVersion: `metadata:${stat.size}:${millis(stat)}`,
                 versionKind: "metadata",
               }),
         }
