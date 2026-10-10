@@ -17,8 +17,8 @@ permissions:
   contents: read
 
 env:
-  PNPM_VERSION: "11.18.0"
-  NODE_VERSION: "22"
+  PNPM_VERSION: "12.8.1"
+  NODE_VERSION: "24"
 
 jobs:
   # Linux：在发布同一个 runner（22.04，glibc 基线）上打 AppImage / deb / rpm，

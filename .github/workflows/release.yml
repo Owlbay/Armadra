@@ -32,8 +32,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  PNPM_VERSION: "11.18.0"
-  NODE_VERSION: "22"
+  PNPM_VERSION: "12.8.1"
+  NODE_VERSION: "24"
   ARMADRA_RELEASE_CHANNEL: stable
 
 jobs:
