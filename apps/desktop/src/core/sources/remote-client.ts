@@ -31,6 +31,8 @@ export interface CloudSession {
 
 export interface PlatformInfo {
   readonly mode: "saas" | "personal";
+  /** 服务端名称（协议包 0.3.1 起可选，契约 §61）；旧中继不报是空串。 */
+  readonly name: string;
   readonly issuer: string;
   readonly capabilities: readonly string[];
 }
@@ -276,6 +278,7 @@ export class RemoteClient {
     }
     return {
       mode,
+      name: str(body.name).trim().slice(0, 128),
       issuer: str(body.issuer),
       capabilities: Array.isArray(body.capabilities)
         ? body.capabilities.filter(

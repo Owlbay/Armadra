@@ -22,6 +22,8 @@ import {
   remoteSources,
   removeRemote,
   removeSource,
+  renameRemote,
+  renameSource,
   retryRelayCleanup,
 } from "../../../api/remote-services";
 import { useT } from "../../../app/preferences-store";
@@ -38,6 +40,7 @@ import {
 } from "../../../sources/join-intent";
 import { SettingsGroup } from "../SettingsGroup";
 import { isNativeApp } from "../../../mobile/native-bridge";
+import { RenameDialog } from "../../../services/RenameDialog";
 import { ServicesSettingsGroup } from "../../../services/ServicesSettingsGroup";
 import { SettingsRow } from "../SettingsRow";
 import {
@@ -160,6 +163,7 @@ export function RemoteAccessPage() {
     retry: false,
   });
   const [removing, setRemoving] = React.useState<Removal | null>(null);
+  const [renaming, setRenaming] = React.useState<Renaming | null>(null);
   const [dismissing, setDismissing] = React.useState<string | null>(null);
   // 页面正走的隧道与当前源：对它们不给停用、登出、移除——那是自断。
   const access = useRemoteAccess();
@@ -299,6 +303,14 @@ export function RemoteAccessPage() {
               }
               onSignOut={() => logout.mutate(remote.serviceId)}
               onRetryCleanup={() => cleanup.mutate(remote.issuer)}
+              onRename={() =>
+                setRenaming({
+                  kind: "remote",
+                  id: remote.serviceId,
+                  name: remote.label,
+                  defaultName: remote.defaultLabel || remote.label,
+                })
+              }
               onRemove={() =>
                 setRemoving({
                   kind: "remote",
@@ -357,6 +369,11 @@ export function RemoteAccessPage() {
             <Badge variant="secondary" className="font-normal">
               {t("remote.kind.local")}
             </Badge>
+            <RowMenu name={local.label}>
+              <DropdownMenuItem onSelect={() => setRenaming(renamingOf(local))}>
+                {t("services.rename")}
+              </DropdownMenuItem>
+            </RowMenu>
           </SettingsRow>
         )}
         {mounted.map((source) => (
@@ -365,6 +382,7 @@ export function RemoteAccessPage() {
             source={source}
             inUse={source.sourceId === access.currentSourceId}
             onForget={() => forget.mutate(source.sourceId)}
+            onRename={() => setRenaming(renamingOf(source))}
             onRemove={() =>
               setRemoving({
                 kind: "source",
@@ -432,6 +450,18 @@ export function RemoteAccessPage() {
         onClose={() => setMounting(false)}
         onMounted={() => void changed()}
       />
+      <RenameDialog
+        target={renaming}
+        onClose={() => setRenaming(null)}
+        onSave={async (label) => {
+          if (renaming === null) return;
+          if (renaming.kind === "remote")
+            await renameRemote(renaming.id, label);
+          else await renameSource(renaming.id, label);
+          toast.success(t("services.renamed"));
+          void changed();
+        }}
+      />
       <ResponsiveAlertDialog
         open={dismissing !== null}
         onOpenChange={(open) => {
@@ -494,6 +524,24 @@ export function RemoteAccessPage() {
   );
 }
 
+/** 正在改名的一行（契约 §61）：源表行或远程服务。 */
+interface Renaming {
+  readonly kind: "remote" | "source";
+  readonly id: string;
+  readonly name: string;
+  readonly defaultName: string;
+}
+
+function renamingOf(source: ClientSource): Renaming {
+  return {
+    kind: "source",
+    id: source.sourceId,
+    name: source.label,
+    // 旧版 core 不报缺省名：占位就是现在的名字。
+    defaultName: source.defaultLabel || source.label,
+  };
+}
+
 interface Removal {
   readonly kind: "remote" | "source";
   readonly id: string;
@@ -510,6 +558,7 @@ function RemoteRow({
   onSignIn,
   onSignOut,
   onRetryCleanup,
+  onRename,
   onRemove,
 }: {
   remote: RemoteService;
@@ -519,6 +568,7 @@ function RemoteRow({
   onSignIn(): void;
   onSignOut(): void;
   onRetryCleanup(): void;
+  onRename(): void;
   onRemove(): void;
 }) {
   const t = useT();
@@ -549,6 +599,9 @@ function RemoteRow({
         </Button>
       )}
       <RowMenu name={remote.label}>
+        <DropdownMenuItem onSelect={onRename}>
+          {t("services.rename")}
+        </DropdownMenuItem>
         {remote.hasCredentials && (
           <DropdownMenuItem disabled={inUse} onSelect={onSignOut}>
             {t("remote.signOut")}
@@ -559,9 +612,7 @@ function RemoteRow({
             {t("remote.relayPending.retry")}
           </DropdownMenuItem>
         )}
-        {(remote.hasCredentials || pending !== null) && (
-          <DropdownMenuSeparator />
-        )}
+        <DropdownMenuSeparator />
         <DropdownMenuItem
           variant="destructive"
           disabled={inUse}
@@ -600,12 +651,14 @@ function MountedRow({
   source,
   inUse = false,
   onForget,
+  onRename,
   onRemove,
 }: {
   source: ClientSource;
   /** 当前源就是它：忘掉凭据、移除都会把正在用的源断掉。 */
   inUse?: boolean;
   onForget(): void;
+  onRename(): void;
   onRemove(): void;
 }) {
   const t = useT();
@@ -632,11 +685,15 @@ function MountedRow({
     >
       <StatusPill tone={pill.tone} label={t(pill.key)} />
       <RowMenu name={source.label}>
+        <DropdownMenuItem onSelect={onRename}>
+          {t("services.rename")}
+        </DropdownMenuItem>
         {source.hasCredentials && (
           <DropdownMenuItem disabled={inUse} onSelect={onForget}>
             {t("remote.forget")}
           </DropdownMenuItem>
         )}
+        <DropdownMenuSeparator />
         <DropdownMenuItem
           variant="destructive"
           disabled={inUse}

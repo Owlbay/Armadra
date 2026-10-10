@@ -24,6 +24,7 @@ import { type DomainHandlers, registerProcedures } from "../http/rpc";
 import type { CoreRequest, HandlerResult, RouteMatch } from "../http/router";
 import type { CoreContext } from "../main";
 import { secretsFor } from "../secrets";
+import { currentHostName } from "../settings";
 import {
   networkTransport,
   presentedAnchor,
@@ -142,7 +143,8 @@ export function install(
     remote,
     peer: new SourceClient(transport),
     hostId: () => identity.hostId(),
-    hostLabel: () => hostname(),
+    // 本机行的缺省名跟着「主机名称」（契约 §61）。
+    hostLabel: currentHostName,
     log: context.log,
     cloud: () => cloudDomain(),
     // 只有真网络才探信任锚；测试的假对端不探。
@@ -203,6 +205,7 @@ export function install(
     routeRemove: (input) => service.routeRemove(input),
     remoteAdd: (input) => service.remoteAdd(input),
     remoteDevicePoll: (input) => service.remoteDevicePoll(input.serviceId),
+    remoteUpdate: (input) => service.remoteUpdate(input),
     remoteRemove: (input) => service.remoteRemove(input.serviceId),
     remoteSources: (input) => service.remoteSources(input.serviceId),
     mount: (input) => service.mount(input),

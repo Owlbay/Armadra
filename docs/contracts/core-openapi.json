@@ -1,7 +1,7 @@
 {
   "info": {
     "title": "Armadra core",
-    "version": "1.27",
+    "version": "1.34",
     "description": "契约 procedure 的入参与出参（docs/contracts/core-json-api.md §34）。线上是 `POST /api/rpc/<域>/<动词>`，体按 `{ json }` 编码，下列 schema 是 `json` 那一格；失败一律是 `CoreError`。由 tools/contract/generate.mjs 生成，不要手改。"
   },
   "openapi": "3.1.1",
@@ -89,6 +89,12 @@
                       "type": "string"
                     },
                     "version": {
+                      "type": "string"
+                    },
+                    "hostName": {
+                      "type": "string"
+                    },
+                    "systemHostName": {
                       "type": "string"
                     }
                   },
@@ -5478,6 +5484,9 @@
                                 "lastOkAtMs"
                               ]
                             }
+                          },
+                          "defaultLabel": {
+                            "type": "string"
                           }
                         },
                         "required": [
@@ -5493,7 +5502,8 @@
                           "lastOkAtMs",
                           "orderIndex",
                           "hasCredentials",
-                          "routes"
+                          "routes",
+                          "defaultLabel"
                         ]
                       }
                     },
@@ -5536,6 +5546,9 @@
                           },
                           "hasCredentials": {
                             "type": "boolean"
+                          },
+                          "defaultLabel": {
+                            "type": "string"
                           }
                         },
                         "required": [
@@ -5548,7 +5561,8 @@
                           "addedAtMs",
                           "lastOkAtMs",
                           "registered",
-                          "hasCredentials"
+                          "hasCredentials",
+                          "defaultLabel"
                         ]
                       }
                     }
@@ -5708,6 +5722,9 @@
                           "lastOkAtMs"
                         ]
                       }
+                    },
+                    "defaultLabel": {
+                      "type": "string"
                     }
                   },
                   "required": [
@@ -5723,7 +5740,8 @@
                     "lastOkAtMs",
                     "orderIndex",
                     "hasCredentials",
-                    "routes"
+                    "routes",
+                    "defaultLabel"
                   ]
                 }
               }
@@ -5913,6 +5931,9 @@
                           "lastOkAtMs"
                         ]
                       }
+                    },
+                    "defaultLabel": {
+                      "type": "string"
                     }
                   },
                   "required": [
@@ -5928,7 +5949,8 @@
                     "lastOkAtMs",
                     "orderIndex",
                     "hasCredentials",
-                    "routes"
+                    "routes",
+                    "defaultLabel"
                   ]
                 }
               }
@@ -6416,6 +6438,9 @@
                           "lastOkAtMs"
                         ]
                       }
+                    },
+                    "defaultLabel": {
+                      "type": "string"
                     }
                   },
                   "required": [
@@ -6431,7 +6456,8 @@
                     "lastOkAtMs",
                     "orderIndex",
                     "hasCredentials",
-                    "routes"
+                    "routes",
+                    "defaultLabel"
                   ]
                 }
               }
@@ -6606,6 +6632,9 @@
                           "lastOkAtMs"
                         ]
                       }
+                    },
+                    "defaultLabel": {
+                      "type": "string"
                     }
                   },
                   "required": [
@@ -6621,7 +6650,8 @@
                     "lastOkAtMs",
                     "orderIndex",
                     "hasCredentials",
-                    "routes"
+                    "routes",
+                    "defaultLabel"
                   ]
                 }
               }
@@ -6777,6 +6807,9 @@
                         },
                         "hasCredentials": {
                           "type": "boolean"
+                        },
+                        "defaultLabel": {
+                          "type": "string"
                         }
                       },
                       "required": [
@@ -6789,7 +6822,8 @@
                         "addedAtMs",
                         "lastOkAtMs",
                         "registered",
-                        "hasCredentials"
+                        "hasCredentials",
+                        "defaultLabel"
                       ]
                     },
                     "next": {
@@ -6989,6 +7023,145 @@
           "legacy": {
             "method": "POST",
             "path": "/api/sources/remotes/{serviceId}/poll"
+          }
+        }
+      }
+    },
+    "/api/rpc/sources/remoteUpdate": {
+      "post": {
+        "operationId": "sources.remoteUpdate",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "serviceId": {
+                    "type": "string"
+                  },
+                  "label": {
+                    "type": "string",
+                    "maxLength": 256
+                  }
+                },
+                "required": ["serviceId", "label"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "serviceId": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": ["personal", "saas"],
+                      "type": "string"
+                    },
+                    "issuer": {
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "accountHint": {
+                      "type": "string"
+                    },
+                    "fingerprint": {
+                      "type": "string"
+                    },
+                    "addedAtMs": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "lastOkAtMs": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "registered": {
+                      "type": "boolean"
+                    },
+                    "hasCredentials": {
+                      "type": "boolean"
+                    },
+                    "defaultLabel": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "serviceId",
+                    "kind",
+                    "issuer",
+                    "label",
+                    "accountHint",
+                    "fingerprint",
+                    "addedAtMs",
+                    "lastOkAtMs",
+                    "registered",
+                    "hasCredentials",
+                    "defaultLabel"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "400",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "401",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreError"
+                }
+              }
+            }
+          }
+        },
+        "x-armadra": {
+          "contract": "§61.2",
+          "scope": "settings:write",
+          "since": "1.34",
+          "legacy": {
+            "method": "PUT",
+            "path": "/api/sources/remotes/{serviceId}"
           }
         }
       }
@@ -7336,6 +7509,9 @@
                           "lastOkAtMs"
                         ]
                       }
+                    },
+                    "defaultLabel": {
+                      "type": "string"
                     }
                   },
                   "required": [
@@ -7351,7 +7527,8 @@
                     "lastOkAtMs",
                     "orderIndex",
                     "hasCredentials",
-                    "routes"
+                    "routes",
+                    "defaultLabel"
                   ]
                 }
               }
@@ -7743,6 +7920,9 @@
                           "lastOkAtMs"
                         ]
                       }
+                    },
+                    "defaultLabel": {
+                      "type": "string"
                     }
                   },
                   "required": [
@@ -7758,7 +7938,8 @@
                     "lastOkAtMs",
                     "orderIndex",
                     "hasCredentials",
-                    "routes"
+                    "routes",
+                    "defaultLabel"
                   ]
                 }
               }

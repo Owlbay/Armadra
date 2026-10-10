@@ -228,12 +228,13 @@ export class CloudStore {
     }
     this.database
       .prepare(
-        "INSERT INTO remote_services(service_id, kind, issuer, label, account_hint, fingerprint, added_at_ms, last_ok_at_ms) " +
-          "VALUES(?, 'personal', ?, ?, '', ?, ?, 0)",
+        "INSERT INTO remote_services(service_id, kind, issuer, label, default_label, account_hint, fingerprint, added_at_ms, last_ok_at_ms) " +
+          "VALUES(?, 'personal', ?, ?, ?, '', ?, ?, 0)",
       )
       .run(
         input.serviceId,
         input.issuer,
+        input.label,
         input.label,
         input.fingerprint,
         input.atMs,

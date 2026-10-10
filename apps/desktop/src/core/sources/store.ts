@@ -15,7 +15,10 @@ export type RemoteServiceKind = "personal" | "saas";
 export interface SourceRow {
   readonly sourceId: string;
   readonly kind: ClientSourceKind;
+  /** 显示的名字：改过名是本地名，否则等于 {@link defaultLabel}（契约 §61）。 */
   readonly label: string;
+  /** 服务端报的名字（迁移 0046）；改名为空时恢复成它。 */
+  readonly defaultLabel: string;
   readonly baseUrl: string;
   readonly relayOrigin: string;
   readonly fingerprint: string;
@@ -30,7 +33,10 @@ export interface RemoteRow {
   readonly serviceId: string;
   readonly kind: RemoteServiceKind;
   readonly issuer: string;
+  /** 显示的名字（契约 §61）。 */
   readonly label: string;
+  /** 远程服务报的名字（platform.info `name`，迁移 0046）。 */
+  readonly defaultLabel: string;
   readonly accountHint: string;
   readonly fingerprint: string;
   readonly addedAtMs: number;
@@ -88,6 +94,7 @@ interface SourceRecord {
   source_id: string;
   kind: ClientSourceKind;
   label: string;
+  default_label: string;
   base_url: string;
   relay_origin: string;
   fingerprint: string;
@@ -103,6 +110,7 @@ interface RemoteRecord {
   kind: RemoteServiceKind;
   issuer: string;
   label: string;
+  default_label: string;
   account_hint: string;
   fingerprint: string;
   added_at_ms: number;
@@ -114,6 +122,7 @@ function sourceOf(record: SourceRecord): SourceRow {
     sourceId: record.source_id,
     kind: record.kind,
     label: record.label,
+    defaultLabel: record.default_label,
     baseUrl: record.base_url,
     relayOrigin: record.relay_origin,
     fingerprint: record.fingerprint,
@@ -131,6 +140,7 @@ function remoteOf(record: RemoteRecord): RemoteRow {
     kind: record.kind,
     issuer: record.issuer,
     label: record.label,
+    defaultLabel: record.default_label,
     accountHint: record.account_hint,
     fingerprint: record.fingerprint,
     addedAtMs: Number(record.added_at_ms),
@@ -139,10 +149,10 @@ function remoteOf(record: RemoteRecord): RemoteRow {
 }
 
 const SOURCE_COLUMNS =
-  "source_id, kind, label, base_url, relay_origin, fingerprint, cloud_issuer, " +
+  "source_id, kind, label, default_label, base_url, relay_origin, fingerprint, cloud_issuer, " +
   "principal_hint, added_at_ms, last_ok_at_ms, order_index";
 const REMOTE_COLUMNS =
-  "service_id, kind, issuer, label, account_hint, fingerprint, added_at_ms, last_ok_at_ms";
+  "service_id, kind, issuer, label, default_label, account_hint, fingerprint, added_at_ms, last_ok_at_ms";
 
 export class SourcesStore {
   constructor(private readonly database: DatabaseSync) {}
@@ -171,8 +181,9 @@ export class SourcesStore {
   upsert(row: SourceRow): SourceRow {
     this.database
       .prepare(
-        `INSERT INTO client_sources(${SOURCE_COLUMNS}) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ` +
+        `INSERT INTO client_sources(${SOURCE_COLUMNS}) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ` +
           "ON CONFLICT(source_id) DO UPDATE SET kind = excluded.kind, label = excluded.label, " +
+          "default_label = excluded.default_label, " +
           "base_url = excluded.base_url, relay_origin = excluded.relay_origin, " +
           "fingerprint = excluded.fingerprint, cloud_issuer = excluded.cloud_issuer, " +
           "principal_hint = excluded.principal_hint, last_ok_at_ms = excluded.last_ok_at_ms, " +
@@ -182,6 +193,7 @@ export class SourcesStore {
         row.sourceId,
         row.kind,
         row.label,
+        row.defaultLabel,
         row.baseUrl,
         row.relayOrigin,
         row.fingerprint,
@@ -433,9 +445,10 @@ export class SourcesStore {
   upsertRemote(row: RemoteRow): RemoteRow {
     this.database
       .prepare(
-        `INSERT INTO remote_services(${REMOTE_COLUMNS}) VALUES(?, ?, ?, ?, ?, ?, ?, ?) ` +
+        `INSERT INTO remote_services(${REMOTE_COLUMNS}) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?) ` +
           "ON CONFLICT(service_id) DO UPDATE SET kind = excluded.kind, issuer = excluded.issuer, " +
-          "label = excluded.label, account_hint = excluded.account_hint, " +
+          "label = excluded.label, default_label = excluded.default_label, " +
+          "account_hint = excluded.account_hint, " +
           "fingerprint = excluded.fingerprint, last_ok_at_ms = excluded.last_ok_at_ms",
       )
       .run(
@@ -443,6 +456,7 @@ export class SourcesStore {
         row.kind,
         row.issuer,
         row.label,
+        row.defaultLabel,
         row.accountHint,
         row.fingerprint,
         row.addedAtMs,

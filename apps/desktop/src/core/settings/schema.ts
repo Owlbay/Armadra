@@ -203,6 +203,7 @@ export function normalize(raw: JsonValue): JsonObject {
   normalizeResources(document);
   normalizeBrowser(document);
   normalizeUi(document);
+  normalizeHost(document);
   // Only the scalars are normalised; `servers` and `probes` are the user's map
   // and the probe cache, and both may hold ids this build has never heard of.
   normalizeLanguage(document);
@@ -708,6 +709,23 @@ function normalizeUi(document: JsonObject): void {
     delete next.locale;
   }
   document.ui = next;
+}
+
+/** `host.name` 的上限：与源表 `label` 相同（契约 §61）。 */
+export const MAX_HOST_NAME = 128;
+
+/**
+ * `host.name`，这台主机的名字（契约 §61）：去首尾空白，空串 = 用系统主机名。
+ * 没有 `host` 一节时不建；不是字符串或超长时删掉（回到系统主机名）。
+ */
+function normalizeHost(document: JsonObject): void {
+  const host = document.host;
+  if (!isJsonObject(host)) return;
+  const next = clone(host);
+  const name = asString(next.name)?.trim();
+  if (name === undefined || name.length > MAX_HOST_NAME) delete next.name;
+  else next.name = name;
+  document.host = next;
 }
 
 function normalizeConversations(document: JsonObject): void {

@@ -43,6 +43,8 @@ export interface IdentityHttpOptions {
   readonly accounts?: AccountsService;
   /** 额外的能力名，各域装配时追加。 */
   readonly capabilities?: () => readonly string[];
+  /** 这台主机的名字（契约 §61，设置 `host.name` 或系统主机名）；每次现读。 */
+  readonly hostName?: () => string;
   /**
    * 加固（契约 §18.1–§18.4）：口令策略、锁定、passkey、MFA、会话列表。没有它时
    * 登录照旧、那几条路径 404。
@@ -597,6 +599,7 @@ export class IdentityHttp {
     readonly hostId: string;
     readonly capabilities: readonly string[];
     readonly maxFrameBytes: number;
+    readonly hostName: string;
   } {
     return {
       protocol: { major: PROTOCOL_MAJOR, minor: PROTOCOL_MINOR },
@@ -604,6 +607,8 @@ export class IdentityHttp {
       hostId: this.service.hostId(),
       capabilities: this.capabilities(),
       maxFrameBytes: MAX_FRAME_BYTES,
+      // 契约 §61：添加这台主机的设备用它作缺省名。
+      hostName: this.options.hostName?.() ?? "",
     };
   }
 

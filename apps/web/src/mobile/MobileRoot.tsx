@@ -13,6 +13,7 @@ import {
   forgetConnection,
   openConnection,
 } from "./connect";
+import { loadConnections, renameConnection } from "./connections";
 import type { Entry } from "./entry";
 import { nativeBridge } from "./native-bridge";
 import { NativeMfa } from "./NativeMfa";
@@ -97,7 +98,9 @@ function NativeConnect({
 }) {
   const bridge = nativeBridge();
   const origin = entry.origin;
-  const connections = entry.connections;
+  // 改名只写连接表（契约 §61）：改完重读这张表，不重载页面。
+  const [connections, setConnections] = React.useState(entry.connections);
+  React.useEffect(() => setConnections(entry.connections), [entry.connections]);
   const rows = React.useMemo(() => {
     const recent = loadRecent();
     return (connections ?? []).map((row) => serviceRowOf(row, { recent }));
@@ -128,6 +131,10 @@ function NativeConnect({
       failedId={entry.failedId}
       manage={entry.manage === true}
       onOpen={(sourceId) => openConnection(sourceId)}
+      onRename={(sourceId, label) => {
+        renameConnection(sourceId, label);
+        setConnections(loadConnections());
+      }}
       onRemove={(sourceId) => {
         void forgetConnection(sourceId).then(() => {
           // 回到选择页（入口按这个片段进连接页）。

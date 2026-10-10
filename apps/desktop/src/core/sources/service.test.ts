@@ -226,11 +226,13 @@ describe("直连源", () => {
     expect(
       await code(service.update({ sourceId: HOST_ID, baseUrl: GATEWAY })),
     ).toBe("bad_request");
-    for (const label of ["", "   ", "x".repeat(129)]) {
-      expect(await code(service.update({ sourceId: PEER_ID, label }))).toBe(
-        "bad_request",
-      );
-    }
+    expect(
+      await code(service.update({ sourceId: PEER_ID, label: "x".repeat(129) })),
+    ).toBe("bad_request");
+    // 空名不再是错误：恢复成缺省名（契约 §61，见 naming.test.ts）。
+    expect(
+      await service.update({ sourceId: PEER_ID, label: "   " }),
+    ).toMatchObject({ label: new URL(GATEWAY).host });
     expect(
       await code(service.update({ sourceId: "9".repeat(32), label: "x" })),
     ).toBe("not_found");

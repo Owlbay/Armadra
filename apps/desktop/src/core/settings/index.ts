@@ -38,12 +38,14 @@ import {
 } from "./routes";
 import { SettingsStore } from "./store";
 import { workspaceCounts } from "./workspace-counts";
+import { effectiveHostName } from "./host-name";
 
 export { SettingsStore } from "./store";
 export type { JsonObject, JsonValue } from "./local";
 export { isLocal, localPaths, LOCAL_PATHS } from "./local";
 export { completionSettings, normalize, merge } from "./schema";
 export { parseHosts, validateHost, type SshHost } from "./ssh-hosts";
+export { systemHostName } from "./host-name";
 
 /** The store this run assembled, so other domains can read a preference. */
 export interface SettingsDomain {
@@ -63,6 +65,14 @@ let assembled: SettingsDomain | undefined;
  */
 export function settingsDomain(): SettingsDomain | undefined {
   return assembled;
+}
+
+/**
+ * 这台主机的名字（契约 §61）：设置 `host.name`，没设（或设置域还没装）是系统
+ * 主机名。每次现读，改了设置即时生效。
+ */
+export function currentHostName(): string {
+  return effectiveHostName(assembled?.settings.snapshot());
 }
 
 export function install(context: CoreContext): SettingsDomain {

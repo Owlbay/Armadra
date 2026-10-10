@@ -98,6 +98,7 @@ describe("GET /api/settings", () => {
       "push.fcm.serviceAccountFile",
       "cloud.relay",
       "ui.locale",
+      "host.name",
     ]);
   });
 });

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ExternalLink, Trash2 } from "lucide-react";
+import { ExternalLink, Pencil, Trash2 } from "lucide-react";
 
 import { useT } from "../app/preferences-store";
 import { formatRelativeTime } from "../lib/format";
@@ -28,6 +28,7 @@ import {
 import { Spinner } from "@/ui/spinner";
 import { StatusPill, type StatusTone } from "@/ui/status-pill";
 import type { ServiceStatus } from "./probe";
+import { RenameDialog } from "./RenameDialog";
 import { type ServiceGroup, type ServiceRow, layoutServices } from "./rows";
 
 /** 挂在某一行下方的失败（进入失败、需要重新登录）。 */
@@ -61,6 +62,11 @@ export interface ServicePickerProps {
   /** 桌面壳才给：在新窗口打开这个源。 */
   readonly onOpenWindow?: (sourceId: string) => void;
   readonly onSignIn?: (issuer: string) => void;
+  /**
+   * 给了才有「重命名」（契约 §61）：名字只存在这台设备上，空串 = 恢复缺省名。
+   * 失败时抛，消息显示在对话框里。
+   */
+  readonly onRename?: (sourceId: string, label: string) => Promise<void> | void;
 }
 
 const STATUS_TONE: Record<ServiceStatus, StatusTone> = {
@@ -129,9 +135,11 @@ export function ServicePicker({
   onRemove,
   onOpenWindow,
   onSignIn,
+  onRename,
 }: ServicePickerProps) {
   const t = useT();
   const [removing, setRemoving] = React.useState<ServiceRow | null>(null);
+  const [renaming, setRenaming] = React.useState<ServiceRow | null>(null);
   const layout = React.useMemo(
     () => layoutServices(rows, recent),
     [rows, recent],
@@ -201,6 +209,29 @@ export function ServicePicker({
             </div>
           )}
           <ItemActions className="gap-1 pr-2">
+            {onRename &&
+              (variant === "page" ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-11"
+                  disabled={locked}
+                  aria-label={t("services.renameRow", { name: row.name })}
+                  onClick={() => setRenaming(row)}
+                >
+                  <Pencil />
+                </Button>
+              ) : (
+                <IconButton
+                  size="cluster"
+                  label={t("services.renameRow", { name: row.name })}
+                  disabled={locked}
+                  onClick={() => setRenaming(row)}
+                >
+                  <Pencil />
+                </IconButton>
+              ))}
             {variant === "dialog" && !current && (
               <Button
                 type="button"
@@ -309,6 +340,15 @@ export function ServicePicker({
           </section>
         );
       })}
+      {onRename && (
+        <RenameDialog
+          target={renaming}
+          onClose={() => setRenaming(null)}
+          onSave={async (label) => {
+            if (renaming) await onRename(renaming.sourceId, label);
+          }}
+        />
+      )}
       <ResponsiveAlertDialog
         open={removing !== null}
         onOpenChange={(open) => {

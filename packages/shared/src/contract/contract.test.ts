@@ -237,7 +237,6 @@ describe("§33 与协议包同一份", () => {
       ["sources.update", "inputSchema", protocol.sourcesUpdateInputSchema],
       ["sources.session", "outputSchema", protocol.sourcesSessionOutputSchema],
       ["sources.remoteAdd", "inputSchema", protocol.remoteAddInputSchema],
-      ["sources.remoteAdd", "outputSchema", protocol.remoteAddOutputSchema],
       [
         "sources.remoteSources",
         "outputSchema",
@@ -259,8 +258,8 @@ describe("§33 与协议包同一份", () => {
 });
 
 describe("§55 在协议包的形状上追加", () => {
-  // 协议包（cloud 仓，0.3.0）还没有 `routes`：这几个 schema 是它的 `extend`，
-  // 协议包的每个字段逐个沿用同一个对象，只多 §55 的字段。
+  // 协议包（cloud 仓，0.3.1）还没有 `routes` 与 `defaultLabel`（§61）：这几个
+  // schema 是它的 `extend`，协议包的每个字段逐个沿用同一个对象，只多这两节的字段。
   it("源表行、列表与 session 入参是协议包形状的超集", async () => {
     const protocol = await import("@armadra/platform-protocol/core-api");
     type Shaped = { shape: Record<string, unknown> };
@@ -268,7 +267,9 @@ describe("§55 在协议包的形状上追加", () => {
       const mine = (ours as Shaped).shape;
       const base = (theirs as Shaped).shape;
       for (const key of Object.keys(base)) {
-        if (key === "sources") continue;
+        // 嵌套的行另外比（它们本身是超集）。
+        if (key === "sources" || key === "remotes" || key === "remote")
+          continue;
         expect(mine[key], key).toBe(base[key]);
       }
       expect(Object.keys(mine).filter((key) => !(key in base))).toEqual(extra);
@@ -278,12 +279,22 @@ describe("§55 在协议包的形状上追加", () => {
     superset(
       slot("sources.addDirect", "outputSchema"),
       protocol.clientSourceSchema,
-      ["routes"],
+      ["routes", "defaultLabel"],
     );
     superset(
       slot("sources.mount", "outputSchema"),
       protocol.clientSourceSchema,
-      ["routes"],
+      ["routes", "defaultLabel"],
+    );
+    superset(
+      slot("sources.remoteUpdate", "outputSchema"),
+      protocol.remoteServiceSchema,
+      ["defaultLabel"],
+    );
+    superset(
+      slot("sources.remoteAdd", "outputSchema"),
+      protocol.remoteAddOutputSchema,
+      [],
     );
     superset(
       slot("sources.list", "outputSchema"),

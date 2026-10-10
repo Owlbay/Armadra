@@ -149,6 +149,16 @@ export async function reorderSources(
   }
 }
 
+/** 改源的显示名（契约 §61），只在本机 core；空串恢复成服务端报的名字。 */
+export function renameSource(sourceId: string, label: string) {
+  return localClient().sources.update({ sourceId, label });
+}
+
+/** 改远程服务的显示名（契约 §61）；空串恢复成它报的名字。 */
+export function renameRemote(serviceId: string, label: string) {
+  return localClient().sources.remoteUpdate({ serviceId, label });
+}
+
 export function forgetSource(sourceId: string) {
   return localClient().sources.forget({ sourceId });
 }

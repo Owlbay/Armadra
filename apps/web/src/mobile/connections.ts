@@ -11,12 +11,13 @@ import type { SourceDescriptor, SourceRoute } from "../sources/types";
  * `kind` 照 v1：有中继那条路就是 `relayed`。
  *
  * 表的版本在 `armadra.sources.version`：1（§55 之前，一源一路）读到时一次性拆成
- * 路，写回成 2；远程服务的槽从按源改成按 `(源, 来源)`，旧槽搬到它那条中继上。
+ * 路；远程服务的槽从按源改成按 `(源, 来源)`，旧槽搬到它那条中继上。3（§61）在行上
+ * 加 `defaultLabel`（服务端报的名字），更早的行回填成 `label`。都一次性写回成 3。
  */
 const TABLE_KEY = "armadra.sources";
 const ACTIVE_KEY = "armadra.sources.active";
 const VERSION_KEY = "armadra.sources.version";
-const TABLE_VERSION = 2;
+const TABLE_VERSION = 3;
 /** 经中继的连接用钥匙串里哪一份远程服务登录（`serviceId`），见 {@link remoteSlotOf}。 */
 const SLOTS_KEY = "armadra.sources.remoteSlots";
 
@@ -90,7 +91,12 @@ function normalized(routes: readonly SourceRoute[]): SourceRoute[] {
 
 /** 由路算出镜像字段（与 core 的 `SourcesStore.mirror` 同一个规矩）。 */
 function withMirror(
-  base: { sourceId: string; label: string; orderIndex: number },
+  base: {
+    sourceId: string;
+    label: string;
+    defaultLabel: string;
+    orderIndex: number;
+  },
   routes: readonly SourceRoute[],
 ): SourceDescriptor | null {
   const list = normalized(routes);
@@ -110,6 +116,7 @@ function withMirror(
     // 连接；先走哪条由路的首选与选路决定，不看 `kind`。
     kind: relay === undefined ? "direct" : "relayed",
     label: base.label,
+    defaultLabel: base.defaultLabel,
     baseUrl: direct?.origin ?? "",
     relayOrigin: relay?.origin ?? "",
     cloudIssuer: relay?.cloudIssuer ?? "",
@@ -130,10 +137,14 @@ function descriptorOf(value: unknown): SourceDescriptor | null {
         return route === null ? [] : [route];
       })
     : legacyRoutes(row);
+  const label = text(row.label);
   return withMirror(
     {
       sourceId,
-      label: text(row.label),
+      label,
+      // v3 之前的行没有缺省名：当作没改过名（§61）。
+      defaultLabel:
+        typeof row.defaultLabel === "string" ? row.defaultLabel : label,
       orderIndex: typeof row.orderIndex === "number" ? row.orderIndex : 0,
     },
     routes,
@@ -157,20 +168,27 @@ function readTable(): SourceDescriptor[] {
 }
 
 /**
- * v1 → v2，一次性：行拆成路写回；按源记的远程服务槽搬到那个源的中继那条路上
- * （v1 一源只有一条中继）。读不出来的表不动、不标版本——不丢东西。
+ * 升到 v3，一次性：行按读出来的形状写回（v1 拆成路，v3 之前的行带上回填的
+ * `defaultLabel`）；v1 按源记的远程服务槽搬到那个源的中继那条路上（v1 一源只有
+ * 一条中继），v2 的槽已经是新的拼法，不动。读不出来的表不动、不标版本——不丢东西。
  */
 function upgrade(): void {
   const store = storage();
   if (store === undefined) return;
   try {
-    if (store.getItem(VERSION_KEY) === String(TABLE_VERSION)) return;
+    const version = store.getItem(VERSION_KEY);
+    if (version === String(TABLE_VERSION)) return;
     const raw = store.getItem(TABLE_KEY);
     if (raw) {
       const parsed: unknown = JSON.parse(raw);
       if (!Array.isArray(parsed)) return;
     }
     const rows = readTable();
+    if (version === "2") {
+      save(rows);
+      store.setItem(VERSION_KEY, String(TABLE_VERSION));
+      return;
+    }
     const slots = loadSlots();
     const moved: Record<string, string> = {};
     for (const [key, serviceId] of Object.entries(slots)) {
@@ -202,9 +220,32 @@ function save(rows: readonly SourceDescriptor[]): void {
 }
 
 /**
+ * 名字（契约 §61，与 core 的取名规矩相同）：这次报了缺省名就换上；改过名
+ * （`label ≠ defaultLabel`）的行留着本地名，没改过的跟着缺省名。`label` 只在
+ * 人亲手给的时候才带。
+ */
+function namesOf(
+  existing: SourceDescriptor | undefined,
+  incoming: { label: string; defaultLabel?: string | undefined },
+): { label: string; defaultLabel: string } {
+  const defaultLabel =
+    incoming.defaultLabel?.trim() || existing?.defaultLabel || "";
+  const renamed =
+    existing !== undefined &&
+    (existing.defaultLabel ?? "") !== "" &&
+    existing.label !== existing.defaultLabel;
+  return {
+    label:
+      incoming.label ||
+      (renamed ? existing.label : defaultLabel || existing?.label || ""),
+    defaultLabel,
+  };
+}
+
+/**
  * 加一个连接；同一个源已有就合并成一行：新到的路补进去（同一条路改写它的
- * 签发方与指纹），标签以新的为准，顺序不变。新的直连地址顶替原来首选的直连；
- * 中继只在没有首选时成为首选。返回合并后的行。
+ * 签发方与指纹），名字按 {@link namesOf}，顺序不变。新的直连地址顶替原来首选的
+ * 直连；中继只在没有首选时成为首选。返回合并后的行。
  */
 export function upsertConnection(
   incoming: Omit<SourceDescriptor, "kind" | "orderIndex" | "routes">,
@@ -253,7 +294,7 @@ export function upsertConnection(
   const merged = withMirror(
     {
       sourceId: incoming.sourceId,
-      label: incoming.label || existing?.label || "",
+      ...namesOf(existing, incoming),
       orderIndex:
         existing?.orderIndex ??
         rows.reduce((top, row) => Math.max(top, row.orderIndex), -1) + 1,
@@ -282,6 +323,23 @@ export function upsertConnection(
       : rows.map((row) => (row.sourceId === merged.sourceId ? merged : row)),
   );
   return merged;
+}
+
+/**
+ * 改一个连接的名字（契约 §61），只在这台设备上：去首尾空白，空串恢复缺省名；
+ * 超过 128 个字符截断。没有这一行不动。返回改后的行。
+ */
+export function renameConnection(
+  sourceId: string,
+  label: string,
+): SourceDescriptor | null {
+  const rows = loadConnections();
+  const row = rows.find((one) => one.sourceId === sourceId);
+  if (row === undefined) return null;
+  const name = label.trim().slice(0, 128);
+  const next = { ...row, label: name || row.defaultLabel || row.label };
+  save(rows.map((one) => (one.sourceId === sourceId ? next : one)));
+  return next;
 }
 
 /** 记下这条路刚连通（选路按最近成功排序）。没有这条路不动。 */

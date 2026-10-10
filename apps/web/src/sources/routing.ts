@@ -61,6 +61,44 @@ export async function probeDirect(
   }
 }
 
+/**
+ * 直连地址的 hello 报的主机名称（契约 §61）：添加时作缺省名。任何失败（超时、
+ * 证书、旧 core 不报）都是空串——名字是锦上添花，不拦添加。
+ */
+export async function helloHostName(
+  baseUrl: string,
+  options: ProbeOptions = {},
+): Promise<string> {
+  if (baseUrl === "") return "";
+  const send = options.fetch ?? globalThis.fetch;
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(),
+    options.timeoutMs ?? DIRECT_PROBE_TIMEOUT_MS,
+  );
+  try {
+    const response = await send(
+      `${baseUrl.replace(/\/+$/, "")}/api/identity/hello`,
+      {
+        headers: { Accept: "application/json" },
+        credentials: "omit",
+        cache: "no-store",
+        redirect: "error",
+        signal: controller.signal,
+      },
+    );
+    if (!response.ok) return "";
+    const body = (await response.json()) as { hostName?: unknown } | null;
+    return typeof body?.hostName === "string"
+      ? body.hostName.trim().slice(0, 128)
+      : "";
+  } catch {
+    return "";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export interface Route {
   readonly via: Via;
   readonly access: SourceAccess;

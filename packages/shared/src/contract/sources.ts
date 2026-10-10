@@ -2,9 +2,9 @@ import {
   clientSourceSchema as protocolClientSourceSchema,
   mountInputSchema,
   remoteAddInputSchema,
-  remoteAddOutputSchema,
+  remoteAddOutputSchema as protocolRemoteAddOutputSchema,
   remoteDevicePollOutputSchema,
-  remoteServiceSchema,
+  remoteServiceSchema as protocolRemoteServiceSchema,
   remoteSessionOutputSchema,
   remoteSourceSummarySchema,
   remoteSourcesOutputSchema,
@@ -52,10 +52,31 @@ export const clientSourceRouteSchema = z.object({
  */
 export const clientSourceSchema = protocolClientSourceSchema.extend({
   routes: z.array(clientSourceRouteSchema),
+  /**
+   * 服务端报的名字（契约 §61，迁移 0046）：直连主机 hello 的 `hostName`、远程服务
+   * 目录里的源名称、本机的「主机名称」。`label ≠ defaultLabel` 即本机改过名。
+   */
+  defaultLabel: z.string(),
+});
+
+/** 远程服务一行：协议包的形状加 `defaultLabel`（§61，platform.info 的 `name`）。 */
+export const remoteServiceSchema = protocolRemoteServiceSchema.extend({
+  defaultLabel: z.string(),
+});
+
+export const remoteAddOutputSchema = protocolRemoteAddOutputSchema.extend({
+  remote: remoteServiceSchema,
 });
 
 export const sourcesListOutputSchema = protocolSourcesListOutputSchema.extend({
   sources: z.array(clientSourceSchema),
+  remotes: z.array(remoteServiceSchema),
+});
+
+/** `sources.remoteUpdate`（§61）：改远程服务的显示名；空串恢复缺省名。 */
+export const remoteUpdateInputSchema = z.object({
+  serviceId: serviceIdInputSchema.shape.serviceId,
+  label: z.string().max(256),
 });
 
 /** 一条路的标识：`(via, origin)`。 */
@@ -74,7 +95,7 @@ export const sourceRouteInputSchema = sourceRouteRefSchema.extend({
   sourceId: sourceIdInputSchema.shape.sourceId,
 });
 
-export { remoteAddInputSchema, remoteServiceSchema, remoteSourceSummarySchema };
+export { remoteAddInputSchema, remoteSourceSummarySchema };
 export const sourceSessionSchema = sourcesSessionOutputSchema;
 
 const empty = z.object({});
@@ -306,6 +327,19 @@ export const sources = {
     .output(remoteDevicePollOutputSchema)
     .errors({ ...denied, ...errors.pick("not_found", "not_implemented") })
     .meta(write("§33.2", "POST", "/api/sources/remotes/{serviceId}/poll")),
+  /** 改远程服务的显示名，只在本机；空串恢复成它报的名字（§61）。 */
+  remoteUpdate: oc
+    .input(remoteUpdateInputSchema)
+    .output(remoteServiceSchema)
+    .errors({ ...denied, ...errors.pick("bad_request", "not_found") })
+    .meta(
+      meta({
+        scope: "settings:write",
+        since: "1.34",
+        contract: "§61.2",
+        legacy: { method: "PUT", path: "/api/sources/remotes/{serviceId}" },
+      }),
+    ),
   /** 删远程服务：尽力登出，删行与凭据。 */
   remoteRemove: oc
     .input(serviceIdInputSchema)

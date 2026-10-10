@@ -4107,3 +4107,34 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - web：`i18n/mod-commands.ts`（`mod.command.*`，`REFERENCED_ELSEWHERE` 放行）。
 - 线上：§59，协议 1.33。
 - 工具：`tools/probes/claude-mod-acp.mjs`（`findAdapter`、`bundledClaudeCode`）、`claude-mod-launch.mjs` 导出 `fakeApi`、e2e 需求 `claude-acp`、`tools/vendor/claude-mod-api.d.ts` 加 `command.register` / `command.run`。
+
+## 服务名称：主机名称、缺省名与重命名（契约 §61，迁移 0046，Closes #255，2026-10-10）
+
+做了什么：
+
+- 协议包升到 0.3.1（平台协议仍 1.1）：`platform.info` 多一个可选的 `name`（cloud-api §15）。vendored tgz、三处 `package.json`、锁文件、`compatibility.json` 的 `platform` 段（版本、sha256、镜像 tag 0.3.1）、dev-stack 镜像 tag 同步；core 协议 minor 34。
+- 主机名称：设置 `host.name`（本机那一半，去首尾空白、不超过 128，空 = 系统主机名），设置 → 本机服务里改（只给 owner，占位是系统主机名，失焦或回车保存）。`GET /api/identity/hello` 与 `system.hello` 报 `hostName`，`system.hello` 另带 `systemHostName`；本机源表行的缺省名与登记到远程服务的源名称跟着它。
+- 迁移 0046：`client_sources` / `remote_services` 加 `default_label`，旧行回填成 `label`。出参多 `defaultLabel`（协议包形状上的追加，同 §55）。添加、重新配对、重新登录、再次挂载时更新缺省名：直连取对端 hello 的 `hostName`、远程服务取 `platform.info.name`、挂载的源取目录里的名称；没改过名的跟着走，改过的留着本地名。`sources.update` 空名恢复缺省名；新增 `sources.remoteUpdate`（`PUT /api/sources/remotes/{serviceId}`）。
+- 页面：`RenameDialog`（预填现在的名字、占位是缺省名、清空保存即恢复）；选择服务页（手机整页、桌面「切换服务」）每行一个重命名按钮；设置 → 远程访问的中转账号、本机与已连接主机每行菜单加「重命名」。中英文案在 `i18n/services.ts` 与 `i18n/host.ts`。
+- 手机连接表 v3：行上加 `defaultLabel`（v2 回填成 `label`、槽不动；v1 照旧一次性升到最新）；局域网配对后问一次 hello 的主机名称，经中转用目录里的名称作缺省名；改名只写连接表。
+
+实测（macOS arm64）：
+
+- 新单测：core 取名 6（本机行跟随主机名称、直连 hello 名与旧对端兜底、重新配对保留改名、远程服务 `name` 与旧中继兜底、`remoteUpdate` 改名 / 清空 / 超长 / 不存在、挂载用目录名且再挂载不覆盖）、迁移 0046 两条、主机名称设置 3、identity hello 1；web：连接表 v3 两条、选择服务改名 3、远程访问改名 1、本机服务主机名称 2、手机配对取主机名称 2；`sources.update` 空名的旧断言改为「恢复缺省名」（语义按 §61 改变，理由成立）。
+- 跨仓：armadra-cloud（feat/relay-display-name，0.3.1）源码起个人中转（临时数据目录与 HOME、随机端口、`--name 家里的中转`），`/.well-known/armadra-platform` 报 `name`；`ARMADRA_PERSONAL_RELAY=1 … ARMADRA_PERSONAL_RELAY_NAME=家里的中转 vitest run src/core/sources/personal-relay.devstack.integration.test.ts` 6 过（新加的一条：远程服务缺省名就是中转名、改名、重新登录不覆盖、清空恢复）。联调后按 PID 停了中继。
+- 展示页（隔离数据目录起 vite）看过手机「选择服务」行尾的重命名按钮与对话框。
+- `pnpm libs:build && pnpm -r --if-present test`：desktop 5575 过 / 79 跳，web 4339 过，shared 384、server 98、mobile 32、push-relay 9 过；`vitest.live` 里 `passkey-cdp.live`（main 上同样 409）与 `verbs.live`（本机 Chromium 负载下 `browser_timeout`）两条失败，与本包无关；桌面脚本测试 73 过。`pnpm --filter @armadra/web typecheck`、`pnpm check` 过。
+
+没做 / 限制：
+
+- 中转托管页面（选择服务那一步）列的是中继目录，不提供改名。
+- 远程服务登录时报给中继的设备名仍是系统主机名（装配时取一次），不跟主机名称。
+- 主机改了主机名称，已添加它的设备要等下一次重新配对 / 重新登录 / 再次挂载才更新缺省名（没改过名的行显示随之更新）；没有后台刷新。
+- 没有新加 e2e 探针；跨仓覆盖在上面的联调用例里。cloud 0.3.1 镜像未发布，`compatibility.json` 的镜像 tag 先指向 0.3.1，夜间跨仓 e2e 在镜像发布前用本地构建。
+
+接口：
+
+- core：`settings/host-name.ts` 的 `systemHostName` / `configuredHostName` / `effectiveHostName`，`settings` 的 `currentHostName()`，`MAX_HOST_NAME`（`schema.ts`）；`SourcesService.remoteUpdate`，`SourceRow` / `RemoteRow` 的 `defaultLabel`，`PlatformInfo.name`，`SourceClient.hello` 答 `hostName`。
+- shared：`ClientSource.defaultLabel`、`RemoteService.defaultLabel`（`remoteServiceSchema` 改为协议包的 extend）、`remoteUpdateInputSchema`、`sources.remoteUpdate`，`SystemHello` 的 `hostName` / `systemHostName`（可选）。
+- web：`RenameDialog`、`ServicePicker` 的 `onRename`、`ServiceRow.defaultName`、`SourceDescriptor.defaultLabel`、`renameSource` / `renameRemote`（`api/remote-services.ts`）、`renameConnection`（`mobile/connections.ts`）、`helloHostName`（`sources/routing.ts`）。
+- 线上：§61，协议 1.34，协议包 0.3.1。

@@ -285,6 +285,37 @@ describe("添加连接 · 局域网（现有方式）记进连接表", () => {
   });
 });
 
+describe("添加连接 · 主机名称（§61）", () => {
+  it("配对成功后问 hello 的主机名称，作连接表的缺省名", async () => {
+    const d = deps();
+    d.pair.mockResolvedValue({ hostId: HOST } as never);
+    const hostName = vi.fn().mockResolvedValue("书房");
+    await connectNative(LINK, {
+      ...d,
+      hostName,
+      record: recordDirectConnection,
+    });
+    expect(hostName).toHaveBeenCalledWith("https://192.168.1.8:8443");
+    expect(loadConnections()[0]).toMatchObject({
+      sourceId: HOST,
+      label: "书房",
+      defaultLabel: "书房",
+    });
+  });
+
+  it("问不到名字（旧主机）：不带名字，界面按地址兜底", async () => {
+    const d = deps();
+    d.pair.mockResolvedValue({ hostId: HOST } as never);
+    const record = vi.fn();
+    await connectNative(LINK, {
+      ...d,
+      hostName: async () => "",
+      record,
+    });
+    expect(record.mock.calls[0]?.[0]).not.toHaveProperty("hostName");
+  });
+});
+
 describe("添加连接 · 个人中转", () => {
   it("自签中转：先问指纹，确认后钉住，再登录；勾选的在线主机逐个挂载，凭据只进钥匙串", async () => {
     const { bridge, sessions, remotes, pins } = fakeBridge({

@@ -35,6 +35,8 @@ const api = vi.hoisted(() => ({
   retryRelayCleanup: vi.fn(),
   dismissRelayCleanup: vi.fn(),
   renameShareLink: vi.fn(),
+  renameSource: vi.fn(),
+  renameRemote: vi.fn(),
 }));
 const boot = vi.hoisted(() => ({
   applySourceTable: vi.fn(async () => undefined),
@@ -654,6 +656,37 @@ describe("中继侧待清理（契约 §31.4）", () => {
     );
     await waitFor(() =>
       expect(toasts.success).toHaveBeenCalledWith("Relay cleaned up"),
+    );
+  });
+
+  it("重命名（§61）：中转账号与本机一行都能改，占位是缺省名；清空即恢复", async () => {
+    api.listSources.mockResolvedValue({
+      sources: [{ ...local, defaultLabel: "this-mac" }],
+      remotes: [{ ...relay, label: "Home", defaultLabel: "home-relay" }],
+    });
+    api.renameRemote.mockResolvedValue({});
+    api.renameSource.mockResolvedValue({});
+    mount();
+    await screen.findByText("Home");
+    openMenu("Home");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Rename" }));
+    const input = await screen.findByRole("textbox", { name: "Name" });
+    expect((input as HTMLInputElement).value).toBe("Home");
+    expect(input.getAttribute("placeholder")).toBe("home-relay");
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(api.renameRemote).toHaveBeenCalledWith("svc", ""),
+    );
+    await waitFor(() => expect(toasts.success).toHaveBeenCalledWith("Renamed"));
+
+    openMenu("this-mac");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Rename" }));
+    const name = await screen.findByRole("textbox", { name: "Name" });
+    fireEvent.change(name, { target: { value: " Studio " } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(api.renameSource).toHaveBeenCalledWith(local.sourceId, "Studio"),
     );
   });
 

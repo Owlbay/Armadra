@@ -33,6 +33,11 @@ export interface SourceDescriptor {
   readonly sourceId: string;
   readonly kind: SourceKind;
   readonly label: string;
+  /**
+   * 服务端报的名字（契约 §61）：清空改名时恢复成它。没有（旧 core、旧连接表）时
+   * 不出现，界面按 `label` / 地址兜底。
+   */
+  readonly defaultLabel?: string;
   /** 直连地址（`https://host:port`）；没有是空串。 */
   readonly baseUrl: string;
   /** 中继来源；没有是空串。 */

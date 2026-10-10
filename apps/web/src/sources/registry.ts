@@ -216,6 +216,7 @@ const clientSourceSchema = z.object({
   sourceId: z.string().min(1),
   kind: z.enum(["local", "direct", "relayed", "hosted"]),
   label: z.string().default(""),
+  defaultLabel: z.string().optional(),
   baseUrl: z.string().default(""),
   relayOrigin: z.string().default(""),
   cloudIssuer: z.string().default(""),
@@ -254,6 +255,9 @@ export const loadSourcesFromLocalCore: SourceLoader = async () => {
     sourceId: source.sourceId,
     kind: source.kind,
     label: source.label,
+    ...(source.defaultLabel === undefined
+      ? {}
+      : { defaultLabel: source.defaultLabel }),
     baseUrl: source.baseUrl,
     relayOrigin: source.relayOrigin,
     cloudIssuer: source.cloudIssuer,

@@ -1062,7 +1062,7 @@ export const ROUTES: readonly RouteEntry[] = [
   },
   {
     path: "/api/sources/remotes/{serviceId}",
-    methods: ["DELETE"],
+    methods: ["PUT", "DELETE"],
     surface: "runtime",
     implemented: true,
   },

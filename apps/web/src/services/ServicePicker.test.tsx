@@ -94,6 +94,21 @@ describe("行模型与排版", () => {
     );
   });
 
+  it("缺省名（§61）：有服务端报的名字用它，没有用地址兜底", () => {
+    const named = serviceRowOf(viaLan("box", "工作机"));
+    expect(named.defaultName).toBe("box.lan:8443");
+    const reported = serviceRowOf({
+      ...viaLan("box", ""),
+      defaultLabel: "laptop",
+    });
+    expect(reported).toMatchObject({ name: "laptop", defaultName: "laptop" });
+    const renamed = serviceRowOf({
+      ...viaRelay("box", "我的"),
+      defaultLabel: "studio",
+    });
+    expect(renamed).toMatchObject({ name: "我的", defaultName: "studio" });
+  });
+
   it("行数超过 3 才单列最近使用", () => {
     const rows = ["a", "b", "c"].map((id) => serviceRowOf(viaLan(id)));
     expect(layoutServices(rows, ["b"]).recent).toEqual([]);
@@ -163,6 +178,72 @@ describe("选择服务 · 整页", () => {
     expect(onRemove).toHaveBeenCalledWith("d");
     fireEvent.click(screen.getByText("Studio"));
     expect(onEnter).toHaveBeenCalledWith("d");
+  });
+
+  it("重命名（§61）：预填现在的名字、占位是缺省名；清空保存交出空串", async () => {
+    const onRename = vi.fn();
+    render(
+      <ServicePicker
+        variant="page"
+        rows={[
+          serviceRowOf({
+            ...viaLan("d", "Studio"),
+            defaultLabel: "studio-mac",
+          }),
+        ]}
+        onEnter={vi.fn()}
+        onRename={onRename}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "重命名 Studio" }));
+    const input = await screen.findByRole("textbox", { name: "名称" });
+    expect((input as HTMLInputElement).value).toBe("Studio");
+    expect(input.getAttribute("placeholder")).toBe("studio-mac");
+    fireEvent.change(input, { target: { value: "  书房  " } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    });
+    expect(onRename).toHaveBeenLastCalledWith("d", "书房");
+
+    fireEvent.click(screen.getByRole("button", { name: "重命名 Studio" }));
+    const again = await screen.findByRole("textbox", { name: "名称" });
+    fireEvent.change(again, { target: { value: "" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    });
+    expect(onRename).toHaveBeenLastCalledWith("d", "");
+  });
+
+  it("重命名失败：消息留在对话框里，不关", async () => {
+    const onRename = vi
+      .fn()
+      .mockRejectedValue(new Error("名称应为 1 到 128 个字符"));
+    render(
+      <ServicePicker
+        variant="dialog"
+        rows={[serviceRowOf(viaLan("d", "Studio"))]}
+        onEnter={vi.fn()}
+        onRename={onRename}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "重命名 Studio" }));
+    await screen.findByRole("textbox", { name: "名称" });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    });
+    expect(screen.getByText("名称应为 1 到 128 个字符")).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "名称" })).toBeTruthy();
+  });
+
+  it("不给 onRename 就没有重命名", () => {
+    render(
+      <ServicePicker
+        variant="page"
+        rows={[serviceRowOf(viaLan("d", "Studio"))]}
+        onEnter={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "重命名 Studio" })).toBeNull();
   });
 
   it("失败挂在那一行下面，带动作；登录失效的组头给「登录」", () => {

@@ -129,7 +129,9 @@ describe("the local split", () => {
     expect(isLocal("cloud.orgDefaultRole")).toBe(false);
     // 终端里 mod 文案的语言是这台机器的页面写的（契约 §57.6）。
     expect(isLocal("ui.locale")).toBe(true);
-    expect(localPaths()).toHaveLength(12);
+    // 这台主机报给别的设备的名字（契约 §61）。
+    expect(isLocal("host.name")).toBe(true);
+    expect(localPaths()).toHaveLength(13);
   });
 
   it("recognises a document written before the split", () => {
