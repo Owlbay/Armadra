@@ -576,21 +576,32 @@ await h.run(async () => {
       settled = next;
     }
     await sleep(300);
-    const first = await capture(`canvas-${theme}-1440-reduced-motion`, 1440);
-    await sleep(700);
-    const second = await capture(null, 1440);
-    const still = first.bytes.equals(second.bytes);
-    // 失败时留下第二张图和差异外接矩形，方便定位还在变的元素。
-    if (!still) {
-      writeFileSync(
-        join(output, `canvas-${theme}-1440-reduced-motion-second.png`),
-        second.bytes,
-      );
+    // 隔 700ms 的两张图逐字节相同才算静止。CI 的 Linux 上见过偶发的一张
+    // 截图把小地图画在错位置、下一张又对了（#250，本机复现不出）；真有动画的画面连着几对都不会相同，所以最多比 3 对，
+    // 任何一对相同即静止，每一对的差异框都记进报告。
+    const boxes = [];
+    let first;
+    let second;
+    let still = false;
+    for (let attempt = 0; attempt < 3 && !still; attempt += 1) {
+      first = await capture(`canvas-${theme}-1440-reduced-motion`, 1440);
+      await sleep(700);
+      second = await capture(null, 1440);
+      still = first.bytes.equals(second.bytes);
+      if (!still) {
+        boxes.push(differenceBox(first.bytes, second.bytes));
+        // 失败时留下第二张图，方便定位还在变的元素。
+        writeFileSync(
+          join(output, `canvas-${theme}-1440-reduced-motion-second.png`),
+          second.bytes,
+        );
+        await sleep(300);
+      }
     }
     report.reducedMotion = {
-      box: still ? null : differenceBox(first.bytes, second.bytes),
+      boxes,
       running,
-      still: first.bytes.equals(second.bytes),
+      still,
       animatedWithoutReduce: !movingA.equals(movingB),
       file: first.path,
     };
