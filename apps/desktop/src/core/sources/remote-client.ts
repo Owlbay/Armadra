@@ -3,7 +3,8 @@
  * cloud-api §2、§4、§10）。外呼登记 `net/outbound.ts` 的 `cloudApi`。
  *
  * 只实现个人中转用到的那几条：`platform.info`、`auth.login`、`auth.refresh`、
- * `auth.logout`、`me.sources`、`sources.assertion`、`sources.revoke`、`links.accept`，
+ * `auth.logout`、`auth.changePassword`（契约 §63）、`me.sources`、`sources.assertion`、
+ * `sources.revoke`、`links.accept`，
  * 以及分享链接的 `links.create` / `links.list` / `links.update` / `links.revoke`（契约 §33.9、§33.10）。SaaS 的设备码登录等能力就绪
  * 后再加；在那之前 `service.ts` 对 `saas` 答 `not_implemented`。
  *
@@ -185,6 +186,17 @@ function rejected(status: number, body: unknown, during: string): never {
       );
     case "rate_limited":
       throw fail("rate_limited", "远程服务限流，请稍后重试");
+    // 改口令（cloud-api §18）：新口令不合策略，码原样透传，页面按码取文案。
+    case "password_too_short":
+      throw fail("password_too_short", "新口令太短");
+    case "password_too_long":
+      throw fail("password_too_long", "新口令太长");
+    case "password_contains_name":
+      throw fail("password_contains_name", "新口令不能包含账号名");
+    case "password_too_common":
+      throw fail("password_too_common", "新口令太常见");
+    case "password_breached":
+      throw fail("password_breached", "新口令出现在泄露的口令表里");
     // 挑战（cloud-api §16）：缺失与无效分开，页面按码取文案。
     case "challenge_required":
       throw fail("challenge_required", "远程服务要求先完成人机验证");
@@ -334,6 +346,35 @@ export class RemoteClient {
       throw fail("not_implemented", "这个远程服务要求二次验证，当前版本不支持");
     }
     return sessionOf(body);
+  }
+
+  /**
+   * 改口令（cloud-api §18）：要这台设备的访问令牌与旧口令。答这台设备换了刷新令牌的
+   * 新会话；账号的其它设备由远程服务撤销。
+   */
+  async changePassword(
+    endpoint: RemoteEndpoint,
+    accessToken: string,
+    password: string,
+    newPassword: string,
+    challengeToken?: string,
+  ): Promise<CloudSession> {
+    return sessionOf(
+      await this.call(
+        endpoint,
+        "POST",
+        "/v1/auth/password",
+        "改口令",
+        {
+          password,
+          newPassword,
+          ...(challengeToken === undefined || challengeToken === ""
+            ? {}
+            : { challenge: { provider: "turnstile", token: challengeToken } }),
+        },
+        accessToken,
+      ),
+    );
   }
 
   async refresh(

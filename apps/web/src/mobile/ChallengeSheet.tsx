@@ -11,7 +11,10 @@ import {
 } from "../panels/ResponsiveDialog";
 
 export interface ChallengeSheetProps
-  extends Pick<ChallengeFrameProps, "issuer" | "siteKey" | "origin" | "load"> {
+  extends Pick<
+    ChallengeFrameProps,
+    "issuer" | "siteKey" | "action" | "origin" | "load"
+  > {
   readonly open: boolean;
   readonly onToken: (token: string) => void;
   readonly onCancel: () => void;

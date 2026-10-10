@@ -76,6 +76,12 @@ const MESSAGE_BY_CODE: Readonly<Record<string, string>> = {
   fingerprint_mismatch: "error.fingerprintMismatch",
   challenge_required: "error.challengeRequired",
   challenge_invalid: "error.challengeInvalid",
+  // 改远程服务的口令（契约 §63）：策略码与 core 自己的口令策略同一句话。
+  password_too_short: "security.error.password_too_short",
+  password_too_long: "security.error.password_too_long",
+  password_contains_name: "security.error.password_contains_name",
+  password_too_common: "security.error.password_too_common",
+  password_breached: "security.error.password_breached",
   address_invalid: "error.addressInvalid",
   address_https_only: "error.addressHttpsOnly",
   address_plaintext_loopback_only: "error.addressPlaintextLoopbackOnly",

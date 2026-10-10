@@ -4184,3 +4184,29 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - 对 workerd 的这一列没有 Electron 与手机步骤（明文 `ws://` 与 http 来源在原生壳里不成立）；iOS 空闲 keep-alive 一步只在 Node 个人中转版里。
 - 本地 workerd 的 `/app/` 要在未配置 Turnstile 的模式下登录；配了挑战令牌的线上中继不能用 `--issuer` 跑登录。
 - 线上只读探针没跑过真线上（部署由用户做，D3）。
+
+## 中转账号改口令（契约 §63，协议 1.36，Closes #263，2026-10-10）
+
+做了什么：
+
+- core：`RemoteClient.changePassword`（`POST /v1/auth/password`，cloud-api §18）；对端的口令策略码（`password_too_short` 等）原样映射。`SourcesService.remotePasswordChange`：先问 `platform.info`，没报 `auth.password-change` 答 `not_implemented`；`challenge.scope` 含 `auth.changePassword` 而没带令牌，不发口令、答 `challenge_required`（与 §62.1 同一个判断，抽到 `sources/remote-gate.ts`）；成功后把这台设备换新的刷新令牌写回 SecretStore、换掉缓存的访问令牌（与刷新同一条串行队）。新 procedure `sources.remotePasswordChange`（`POST /api/sources/remotes/{serviceId}/password`，`settings:write`）；`/api/sources/remotes/{serviceId}/*` 的路由表改成一张小表。协议 minor 36。
+- 页面：设置 → 远程访问的中转账号行菜单加「修改口令」，只在已登录的个人中转且 `sources.remoteSession` 报 `auth.password-change` 时显示；`RemotePasswordDialog`（`ResponsiveDialog`，当前口令 / 新口令 / 确认，两次不一致不提交），要求人机验证时升起挑战面板（action `armadra-password`）。挑战页 `/app/challenge` 认 `action`（只认 `armadra-login` / `armadra-password`），`mode=copy` 不要 `parent`、把令牌显示在只读输入框里可复制（给 cloud 仓的 `rotate-password.sh`）。文案 `remote.password.*`、`challenge.token` / `challenge.copy*`，中英同步；口令策略码按 `security.error.*` 取文案。
+
+实测（macOS arm64，假中继 + 假 Turnstile）：
+
+- 新单测：core 5（成功写回新刷新令牌且口令不进日志、不报能力不发口令、旧口令错 / 策略不过不动保存的登录、要挑战而没带不发口令且带令牌放进 `challenge`、没有这一行）；web `RemoteAccessPage` 4（入口按能力显示、不一致不提交、成功提示、已登出不问能力、挑战带 `armadra-password` 重提交与错误显示）、挑战页 2（action、copy 模式）、`challengeFrameUrl` 1、`remote-services` 2。
+- `pnpm libs:build && pnpm -r --if-present test`（隔离 `ARMADRA_DATA_DIR`、临时 HOME、`ARMADRA_NO_GLOBAL_WRITES=1`）：desktop 5585 过（`vitest.live` 的 `passkey-cdp.live` 在 main 上同样失败）、desktop 脚本 73、web 4363、shared 386、server 98、mobile 32、push-relay 9；`pnpm check` 通过。
+
+没做 / 限制：
+
+- 中继侧（armadra-cloud，`auth.changePassword` 与 `rotate-password.sh`）在 cloud 仓的 PR 里；中继没升级前入口不显示。
+- 能力取自 core 缓存的 `platform.info`：中继升级后要等这一行下次登录或 core 重启才显示入口。
+- vendored 协议包仍是 0.3.5（core 不解析 cloud-api 的认证 schema），`compatibility.json` 不变。
+- 没有对真中继、真 Turnstile 联调（部署由用户做）。
+
+接口：
+
+- core：`RemoteClient.changePassword(endpoint, accessToken, password, newPassword, challengeToken?)`、`SourcesService.remotePasswordChange`、`remote-gate.ts` 的 `PASSWORD_CHANGE_CAPABILITY` / `challengeTokenFor`。
+- shared：`remotePasswordChangeInputSchema`、`sources.remotePasswordChange`。
+- web：`remotePasswordChangeable`、`changeRemotePassword`、`ChangePasswordDialog`、`TURNSTILE_PASSWORD_ACTION` / `challengeAction`、`challengeFrameUrl(…, action?)`、`ChallengeFrame` / `ChallengeSheet` 的 `action`。
+- 线上：§63，协议 1.36。

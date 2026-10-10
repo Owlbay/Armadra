@@ -210,8 +210,8 @@ export const OUTBOUND = {
     // 远程服务、且页面要用它时才连；core 启动与回环 API 从不等它。
     url: "https://<远程服务 issuer>",
     purpose:
-      "远程服务：登录、刷新、源目录与访问断言（/v1/*）；本机登记（/.well-known/armadra-platform、/v1/sources/register）",
-    cadence: "用户动作：加入、挂载、换票、登记时；隧道令牌每 50 分钟",
+      "远程服务：登录、刷新、改口令、源目录与访问断言（/v1/*）；本机登记（/.well-known/armadra-platform、/v1/sources/register）",
+    cadence: "用户动作：加入、挂载、换票、登记、改口令时；隧道令牌每 50 分钟",
     switch: null,
     defaultOn: false,
     documented: true,

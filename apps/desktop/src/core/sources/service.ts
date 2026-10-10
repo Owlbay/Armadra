@@ -31,6 +31,7 @@ import type {
   RemoteEndpoint,
   SourceAssertion,
 } from "./remote-client";
+import { challengeTokenFor, PASSWORD_CHANGE_CAPABILITY } from "./remote-gate";
 import type { SourceSecrets, StoredCredential } from "./secrets";
 import type {
   NativeCredentials,
@@ -986,14 +987,7 @@ export class SourcesService {
       throw fail("bad_request", "这个地址不是个人中转");
     }
     // 要挑战而没带令牌：不发口令，把 siteKey 交给页面去渲染挑战组件（契约 §62）。
-    const challenge = info.challenge;
-    const token = input.challengeToken?.trim() ?? "";
-    if (challenge?.scope.includes("auth.login") && token === "") {
-      throw fail("challenge_required", "远程服务要求先完成人机验证", {
-        provider: challenge.provider,
-        siteKey: challenge.siteKey,
-      });
-    }
+    const token = challengeTokenFor(info, "auth.login", input.challengeToken);
     const session = await this.remote.login(
       endpoint,
       input.account,
@@ -1070,6 +1064,57 @@ export class SourcesService {
           : label,
     });
     return this.remoteJson(next);
+  }
+
+  /**
+   * 改远程服务账号的口令（契约 §63，cloud-api §18）：中继报 `auth.password-change` 才做，
+   * 不报答 `not_implemented`。要挑战而没带令牌时**不发口令**，答 `challenge_required`
+   * （`details` 同 §62.1）。成功后远程服务撤销账号的其它设备，这台设备答回换新的
+   * 刷新令牌——写回 SecretStore、换掉缓存的访问令牌。口令不存、不记。
+   */
+  async remotePasswordChange(input: {
+    serviceId: string;
+    password: string;
+    newPassword: string;
+    challengeToken?: string | undefined;
+  }): Promise<Record<string, never>> {
+    const row = this.remoteRow(input.serviceId);
+    if (row.kind === "saas") {
+      throw fail("not_implemented", "SaaS 远程服务尚未开放");
+    }
+    const endpoint = this.endpoint(row);
+    const info = await this.remote.info(endpoint);
+    this.capabilities.set(row.serviceId, info.capabilities);
+    if (!info.capabilities.includes(PASSWORD_CHANGE_CAPABILITY)) {
+      throw fail("not_implemented", "这个远程服务不支持改口令");
+    }
+    const token = challengeTokenFor(
+      info,
+      "auth.changePassword",
+      input.challengeToken,
+    );
+    const access = await this.remoteAccess(row);
+    // 与刷新同一条队：远程服务换了这台设备的刷新令牌，不能让一次并发的刷新拿旧的去换。
+    await this.serial(`remote ${row.serviceId}`, async () => {
+      const stored = await this.secrets.remote(row.serviceId);
+      const session = await this.remote.changePassword(
+        endpoint,
+        access.accessToken,
+        input.password,
+        input.newPassword,
+        token === "" ? undefined : token,
+      );
+      await this.secrets.putRemote(row.serviceId, {
+        refreshToken: session.refreshToken,
+        deviceId: session.deviceId || stored?.deviceId || "",
+      });
+      this.remember(row.serviceId, session);
+      this.store.touchRemoteOk(row.serviceId, this.now());
+    });
+    this.options.log.info("changed the password of a remote service", {
+      serviceId: row.serviceId,
+    });
+    return {};
   }
 
   async remoteDevicePoll(serviceId: string): Promise<never> {

@@ -90,6 +90,17 @@ export const remoteUpdateInputSchema = z.object({
   label: z.string().max(256),
 });
 
+/**
+ * `sources.remotePasswordChange`（§63）：改远程服务账号的口令。`password` 是旧口令；
+ * 远程服务要求挑战时带 `challengeToken`（同 §62）。口令不存、不记。
+ */
+export const remotePasswordChangeInputSchema = z.object({
+  serviceId: serviceIdInputSchema.shape.serviceId,
+  password: z.string().min(1).max(1024),
+  newPassword: z.string().min(1).max(1024),
+  challengeToken: z.string().max(2048).optional(),
+});
+
 /** 一条路的标识：`(via, origin)`。 */
 export const sourceRouteRefSchema = z.object({
   via: viaSchema,
@@ -419,6 +430,43 @@ export const sources = {
     .output(empty)
     .errors({ ...denied, ...errors.pick("not_found") })
     .meta(write("§33.6", "POST", "/api/sources/remotes/{serviceId}/logout")),
+  /**
+   * 改远程服务账号的口令（§63，cloud-api §18）：远程服务撤销账号的其它设备，这台设备
+   * 换新的刷新令牌写回；远程服务不报 `auth.password-change` 答 `not_implemented`。
+   */
+  remotePasswordChange: oc
+    .input(remotePasswordChangeInputSchema)
+    .output(empty)
+    .errors({
+      ...denied,
+      ...errors.pick(
+        "not_found",
+        "credentials_invalid",
+        "account_locked",
+        "rate_limited",
+        "password_too_short",
+        "password_too_long",
+        "password_contains_name",
+        "password_too_common",
+        "password_breached",
+        "challenge_required",
+        "challenge_invalid",
+        "source_unauthorized",
+        "source_unreachable",
+        "not_implemented",
+      ),
+    })
+    .meta(
+      meta({
+        scope: "settings:write",
+        since: "1.36",
+        contract: "§63.1",
+        legacy: {
+          method: "POST",
+          path: "/api/sources/remotes/{serviceId}/password",
+        },
+      }),
+    ),
   /**
    * 按分享链接挂载（§33.7）：`links.accept` → 经中继 `cloud/login`（断言 + 邀请
    * 令牌）→ 存凭据，建 `relayed` 行（远程服务没登记过的顺带建一行访客的）。

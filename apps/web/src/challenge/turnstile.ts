@@ -7,6 +7,15 @@
 
 /** 登录用的 action，与中继 `RELAY_CHALLENGE_SCOPE=auth.login` 对应。 */
 export const TURNSTILE_LOGIN_ACTION = "armadra-login";
+/** 改口令用的 action（契约 §63，中继 scope `auth.changePassword`）。 */
+export const TURNSTILE_PASSWORD_ACTION = "armadra-password";
+
+/** 挑战页认的 action；别的值按登录处理。 */
+export function challengeAction(value: string | null | undefined): string {
+  return value === TURNSTILE_PASSWORD_ACTION
+    ? TURNSTILE_PASSWORD_ACTION
+    : TURNSTILE_LOGIN_ACTION;
+}
 
 export const TURNSTILE_SCRIPT =
   "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
@@ -85,14 +94,19 @@ export function isChallengeMessage(value: unknown): value is ChallengeMessage {
 /** 中继托管的挑战页路径（与 `/app/` 一起托管）。 */
 export const CHALLENGE_PATH = "/app/challenge";
 
-/** 内嵌挑战页的地址：站点密钥与页面自己的来源（令牌只发给它）放在查询里。 */
+/**
+ * 内嵌挑战页的地址：站点密钥与页面自己的来源（令牌只发给它）放在查询里；不是登录的
+ * action（§63）另带 `action`。
+ */
 export function challengeFrameUrl(
   issuer: string,
   siteKey: string,
   parentOrigin: string,
+  action: string = TURNSTILE_LOGIN_ACTION,
 ): string {
   const url = new URL(CHALLENGE_PATH, issuer);
   url.searchParams.set("siteKey", siteKey);
   url.searchParams.set("parent", parentOrigin);
+  if (action !== TURNSTILE_LOGIN_ACTION) url.searchParams.set("action", action);
   return url.toString();
 }
