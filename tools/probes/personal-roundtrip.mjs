@@ -20,7 +20,7 @@
 // 最后扫一遍中继、core、Electron 与探针自己的输出，口令、令牌、链接秘密一个都不许出现。
 //
 // 中继来自 armadra-cloud 的本地检出（`tools/probes/cloud-source.mjs`：
-// ARMADRA_DEV_STACK_CLOUD_SRC，或仓库旁的 ../cloud）；没有检出时退出码 2，
+// ARMADRA_DEV_STACK_CLOUD_SRC，或仓库旁的 ../armadra-cloud）；没有检出时退出码 2，
 // e2e 清单里依赖 `cloud` 的条目在 CI 上记为 skipped。
 //
 // 用法（仓库根目录）：
@@ -101,7 +101,7 @@ mkdirSync(output, { recursive: true });
 const cloudHome = findCloudSource();
 if (!cloudHome && (!external || useWorkerd)) {
   console.error(
-    `没有 armadra-cloud 的本地检出（${CLOUD_ENTRY}）：设 ARMADRA_DEV_STACK_CLOUD_SRC 或放在仓库旁的 ../cloud`,
+    `没有 armadra-cloud 的本地检出（${CLOUD_ENTRY}）：设 ARMADRA_DEV_STACK_CLOUD_SRC 或放在仓库旁的 ../armadra-cloud`,
   );
   process.exit(2);
 }

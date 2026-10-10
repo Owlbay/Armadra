@@ -354,7 +354,7 @@ pnpm dev-stack down gitea              # 只停并删这几个
 
 平台（云控制面、中继、单人中转）的本地替身也在 dev-stack 里，用两个自成一体的 profile：起 `platform` /
 `personal` 只会起各自的服务，不连带默认那组。云仓（`armadra-cloud`）的镜像缺省取 GHCR 的钉版本；
-设了 `ARMADRA_DEV_STACK_CLOUD_SRC=<armadra-cloud 克隆>`（或克隆就在本仓库旁边的 `../cloud`）时
+设了 `ARMADRA_DEV_STACK_CLOUD_SRC=<armadra-cloud 克隆>`（或克隆就在本仓库旁边的 `../armadra-cloud`）时
 改为本地构建，并打印一行说明。
 
 ```sh
