@@ -195,15 +195,15 @@ export interface AcpAdapter {
 }
 ```
 
-| agentId  | program            | args                             | sessionId  | resume | modes（default / auto-edit / full-auto / plan）                                                        | 注入                                                             |
-| -------- | ------------------ | -------------------------------- | ---------- | ------ | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
-| claude   | `claude-agent-acp` | `[]`                             | same（测） | load   | `default` / `acceptEdits` / `bypassPermissions` / `plan`（都是 modeId）                                | 只有 MCP（D6）；`CLAUDE_CONFIG_DIR` 不设，沿用用户登录           |
-| codex    | `codex-acp`        | `[]`                             | same（测） | load   | `workspace-write` / `agent` / `agent-full-access` / `read-only`（modeId；`INITIAL_AGENT_MODE` 设初值） | MCP + `CODEX_CONFIG` JSON 带 `developer_instructions`（测）      |
-| opencode | `opencode`         | `["acp"]`                        | same       | load   | `build` / null / null / `plan`                                                                         | `OPENCODE_CONFIG_DIR` + `OPENCODE_CONFIG_CONTENT` 照旧 + MCP     |
-| pi       | `pi-acp`           | `[]`                             | mapFile    | load   | `default` / null / null / null                                                                         | `-- --extension … --skill … --append-system-prompt …` 透传 + MCP |
-| omp      | `omp`              | `["acp"]`                        | same       | load   | `default` / `--approval-mode write` / `--approval-mode yolo` / `plan`（modeId）                        | `--extension= --config= --append-system-prompt=` 照旧 + MCP      |
-| copilot  | `copilot`          | `["--acp","--stdio"]`            | opaque     | none   | `default` / `--allow-tool=write`（测） / `--allow-all-tools`（测） / `--plan`（测）                    | `--plugin-dir` + `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` 照旧 + MCP   |
-| ama      | `ama`              | `["--mode","acp","--profile",…]` | same       | load   | 与[协调 Agent](coordinator-agent.md) §2.2 的 `permissionFlag` 相同（argv）                             | 只走 `--host`，**不加 MCP**                                      |
+| agentId  | program            | args                             | sessionId  | resume | modes（default / auto-edit / full-auto / plan）                                                        | 注入                                                                                       |
+| -------- | ------------------ | -------------------------------- | ---------- | ------ | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| claude   | `claude-agent-acp` | `[]`                             | same（测） | load   | `default` / `acceptEdits` / `bypassPermissions` / `plan`（都是 modeId）                                | MCP（D6）＋ mod（`CLAUDE_CODE_PLUGIN_DIRS`，§5.8）；`CLAUDE_CONFIG_DIR` 不设，沿用用户登录 |
+| codex    | `codex-acp`        | `[]`                             | same（测） | load   | `workspace-write` / `agent` / `agent-full-access` / `read-only`（modeId；`INITIAL_AGENT_MODE` 设初值） | MCP + `CODEX_CONFIG` JSON 带 `developer_instructions`（测）                                |
+| opencode | `opencode`         | `["acp"]`                        | same       | load   | `build` / null / null / `plan`                                                                         | `OPENCODE_CONFIG_DIR` + `OPENCODE_CONFIG_CONTENT` 照旧 + MCP                               |
+| pi       | `pi-acp`           | `[]`                             | mapFile    | load   | `default` / null / null / null                                                                         | `-- --extension … --skill … --append-system-prompt …` 透传 + MCP                           |
+| omp      | `omp`              | `["acp"]`                        | same       | load   | `default` / `--approval-mode write` / `--approval-mode yolo` / `plan`（modeId）                        | `--extension= --config= --append-system-prompt=` 照旧 + MCP                                |
+| copilot  | `copilot`          | `["--acp","--stdio"]`            | opaque     | none   | `default` / `--allow-tool=write`（测） / `--allow-all-tools`（测） / `--plan`（测）                    | `--plugin-dir` + `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` 照旧 + MCP                             |
+| ama      | `ama`              | `["--mode","acp","--profile",…]` | same       | load   | 与[协调 Agent](coordinator-agent.md) §2.2 的 `permissionFlag` 相同（argv）                             | 只走 `--host`，**不加 MCP**                                                                |
 
 `null` 的模式在界面上不出现（与现在设置页「只提供有对应参数的权限模式」同一规矩）。`GET /api/agents` 的每一行加 `acp: { support, program, installed, version?, resume }`（契约 §13.1），`installed` 用 `resolveCommand` 探；没装的在新建向导里灰掉并给安装命令。
 
@@ -290,6 +290,8 @@ ACP 规范把 `mcpServers` 放在 `session/new` 参数里，六家入口都收�
 `armadra-hook mcp` 是 Hook 客户端的新子命令：stdio 上讲 MCP（`initialize` / `tools/list` / `tools/call` 三个方法手写，不引 MCP SDK），每个工具就是一次现有的 `/control/{verb}` 或 `/context-link/{verb}` HTTP 调用，带同一份节点令牌与 `terminalBinding`——core 分不出它和 `armadra-hook canvas` 的区别，也不多给权限。工具表与参数从 `collab/control/index.ts::VERBS`、`context-link.ts::VERBS`、`browser/verb-spec.ts` 生成，一条测试断言与 `armadra-hook canvas --help` 的动词集合一致（[协调 Agent](coordinator-agent.md) §3 对 ama 适配器用的是同一手法；两边的生成器放 `src/hook-client/verbs.ts` 共用，若第三部分的 `src/hook-client/` 抽取先合入就直接用，否则 A3 先在 `cli/armadra-hook/` 里做、之后搬）。MCP `initialize` 结果的 `instructions` 放 `collab/skill.ts` 的画布说明与信任规则（CLI 会把它并进系统提示）。`SKILL.md` 不再需要：工具描述本身就是说明。
 
 终端模式的注入产物与启动行**一个字节不改**：`canvasInjection` 对 ACP 驱动只产出 §5.2 「注入」一列里还能用的那一半（环境变量与透传参数），其余由 MCP 承担。
+
+Claude 多一条（[Claude Code mods](claude-mods.md) §5.2，契约 §59）：适配器自带的 Claude Code ≥ 2.1.293 时，适配器进程的环境加上 `CLAUDE_CODE_PLUGIN_DIRS=<数据目录>/integration/claude/mod`（接在原值后面）与 `ARMADRA_MOD_PROFILE=acp`，SDK 起的 CLI 照 `--plugin-dir` 加载 mod。这一档的 mod 只注册 `/armadra-*` 斜杠命令并发 hello，不转发状态（节点状态只有 ACP 会话一个写者）；命令经 `available_commands_update` 出现在会话视图里，人发 `/armadra-list` 这样的提示由 mod 经 `armadra-hook canvas` 应答、不问模型。技能插件不挂（画布说明已在 MCP 里）。mod 靠节点身份找端点，所以挂了 mod 的 Claude 适配器不预启动。
 
 ## §6 前端：会话视图
 

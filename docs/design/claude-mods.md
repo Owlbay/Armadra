@@ -1,8 +1,10 @@
 # Claude Code mods 注入设计（M1–M3）
 
-日期：2026-10-10 · 状态：目标设计；M1（§2、§3、§6 的契约、§7、§10.1、§10.3）已实施，M2、M3 未实施 · 输入：可行性调研（隔离 HOME 下的原型实测）、Claude Code 2.1.293 的 `plugin-authoring/types/claude-code.d.ts` 与 `reference.md`。基线 `main` 9cd38293；下表的行号是那个基线的。契约是 [core JSON API](../contracts/core-json-api.md) §57，实测进度见 [补全进度](../status/completion-progress.md)。
+日期：2026-10-10 · 状态：目标设计；M1（§2、§3、§6 的契约、§7、§10.1、§10.3）与 M3（§5，契约 §59）已实施，M2 未实施 · 输入：可行性调研（隔离 HOME 下的原型实测）、Claude Code 2.1.293 的 `plugin-authoring/types/claude-code.d.ts` 与 `reference.md`。基线 `main` 9cd38293；下表的行号是那个基线的。契约是 [core JSON API](../contracts/core-json-api.md) §57，实测进度见 [补全进度](../status/completion-progress.md)。
 
 M1 落地时与本文不同的几处（以代码与契约为准）：契约节号与协议版本因与同期的包撞号，改为 §57、协议 1.29（下文已同步）；hello 在宿主拒绝 fetch 时经 `armadra-hook mod-hello` 送达（本文 §2.5 只说「再发一次 process」，没说走哪条路）；core 分配 `sourceRevision` 时计数器文件不存在就不创建（与 hook 客户端同一条规矩），报告不带绑定照常归约；2.1.293 上 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 不再拒绝插件不带 `auth` 的 fetch，`CLAUDE_CODE_SAFE_MODE` 连设置 hook 也不跑——启动器的两条环境回退照旧保留；mod 的 `PreToolUse` 等九个事件都带 `.catch`，`claude plugin validate` 不再报「gating hook without .catch」。
+
+M3 落地时与本文不同的几处（以代码与契约 §59 为准）：命令不自己 POST `/control/<verb>`，而是 `$.process.run` 起 `armadra-hook canvas <verb> <词…>`，旗标、会话绑定、超时与答复全是客户端的，mod 只按 shell 规则切词（§5.1 原说「按 control.ts 同一套规则切成映射」）；引擎只许一个不带 matcher 的 `session.start`，所以由 `template.ts` 生成唯一的那一个、各段交一个调用（`*_SESSION_START`）；`$.command.register` 必须逐条写字面量，`claude plugin validate` 才把 `command.run` 认作「answers its own command」；可见名就是 `/armadra-<名>`，2.1.293 / 2.1.296 都不加插件前缀；说明文案在 `apps/web/src/i18n/mod-commands.ts`，core 镜像在 `claude-mod/commands.ts`；ACP 的门看适配器**自带**的 Claude Code（SDK 清单的 `claudeCodeVersion`），不看 PATH 上 `claude` 的探测缓存；节点地址变量本来就在适配器环境里，只新增 `CLAUDE_CODE_PLUGIN_DIRS`（接在原值后）与 `ARMADRA_MOD_PROFILE`；挂了 mod 的 Claude 适配器不再预启动（§51）。
 
 ## 0. 结论
 
