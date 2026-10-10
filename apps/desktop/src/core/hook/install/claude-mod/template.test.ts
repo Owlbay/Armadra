@@ -4,13 +4,15 @@ import { join, resolve } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../../../testing/temp-dir";
-import { CLAUDE_HOOK_EVENTS } from "../events";
+import { CLAUDE_HOOK_EVENTS, MOD_REVISION } from "../events";
 import {
   MOD_MODULE_FILE,
   MOD_PLUGIN_NAME,
+  MOD_TYPES_FILE,
   claudeModHooks,
   claudeModManifest,
   claudeModSource,
+  claudeModTypes,
 } from "./template";
 import { MOD_CLASSIC_EVENTS } from "./status";
 import { claudeModPluginTest } from "./plugin-test";
@@ -47,6 +49,7 @@ function writeMod(dir: string, clientBin = CLIENT): void {
     join(dir, "hooks", MOD_MODULE_FILE),
     claudeModSource(clientBin),
   );
+  writeFileSync(join(dir, MOD_TYPES_FILE), claudeModTypes());
 }
 
 describe("the Claude Code mod", () => {
@@ -66,6 +69,14 @@ describe("the Claude Code mod", () => {
     expect(MOD_MODULE_FILE).toMatch(/^armadra/);
     expect(claudeModManifest().name).toBe(MOD_PLUGIN_NAME);
     expect(claudeModHooks()).toEqual({ modules: ["./armadra.ts"] });
+    expect(claudeModManifest().types).toBe("./hooks/armadra-state.d.ts");
+    // The contract declares the mod's own state, and nothing else.
+    expect(claudeModTypes()).toContain('"armadra-mod": {');
+    expect(claudeModTypes()).not.toMatch(/^import /m);
+    const keys = [
+      ...source.matchAll(/\{ plugin: "([^"]+)", key: "([^"]+)" \}/g),
+    ].map((match) => `${match[1]}.${match[2]}`);
+    expect(keys.sort()).toEqual(["armadra-mod.overlay", "armadra-mod.seen"]);
   });
 
   it("reads only literal, armadra-named variables and imports nothing at run time", () => {
@@ -91,7 +102,8 @@ describe("the Claude Code mod", () => {
     expect(source).not.toMatch(/\bimport\s*\(/);
     const imports = source.match(/^import .*$/gm) ?? [];
     expect(imports).toEqual([
-      'import type { EngineInterface, Register, SessionStartInput } from "claude-code";',
+      'import type { EngineInterface, Register, RenderElement, SessionStartInput } from "claude-code";',
+      'import type { ArmadraModLink, ArmadraModOverlay } from "./armadra-state";',
     ]);
     expect(source).not.toMatch(/\$\.env\.set\b/);
   });
@@ -111,13 +123,14 @@ describe("the Claude Code mod", () => {
     ]) {
       expect(source, forbidden).not.toContain(forbidden);
     }
-    // Every hook passes its event on, unchanged.
+    // Every hook passes its event on, unchanged; the band's draws or hands
+    // the band on (twice), and nothing else.
     const hooks = source.match(/on\("[^"]+"/g) ?? [];
-    expect(hooks.length).toBe(MOD_CLASSIC_EVENTS.length + 1);
-    expect(source.match(/return next\(e\);/g)?.length).toBe(hooks.length);
+    expect(hooks.length).toBe(MOD_CLASSIC_EVENTS.length + 2);
+    expect(source.match(/return next\(e\);/g)?.length).toBe(hooks.length + 1);
     expect(
       source.match(/\.catch\(\(\$, e, next\) => next\(e\)\)/g)?.length,
-    ).toBe(MOD_CLASSIC_EVENTS.length);
+    ).toBe(MOD_CLASSIC_EVENTS.length + 1);
   });
 
   it("carries every settings hook event but PermissionRequest", () => {
@@ -133,9 +146,9 @@ describe("the Claude Code mod", () => {
 
   it("type-checks against the API it uses", () => {
     const dir = tempDir("armadra-claude-mod-tsc-");
-    const file = join(dir, MOD_MODULE_FILE);
-    writeFileSync(file, source);
-    const program = ts.createProgram([file, SHIM], {
+    writeMod(dir);
+    const file = join(dir, "hooks", MOD_MODULE_FILE);
+    const program = ts.createProgram([file, join(dir, MOD_TYPES_FILE), SHIM], {
       strict: true,
       noEmit: true,
       target: ts.ScriptTarget.ES2022,
@@ -162,6 +175,11 @@ describe("the Claude Code mod", () => {
     env: Record<string, string>;
     files: Record<string, string>;
     fetch?: (url: string, init: Record<string, unknown>) => unknown;
+    /** What a GET answers; 204 with no body when absent. */
+    get?: (
+      url: string,
+      init: Record<string, unknown>,
+    ) => { status: number; text: string } | undefined;
   }) {
     const js = ts.transpileModule(source, {
       compilerOptions: {
@@ -173,17 +191,26 @@ describe("the Claude Code mod", () => {
       `data:text/javascript;base64,${Buffer.from(js).toString("base64")}`
     )) as { register: (on: unknown) => void };
     const hooks = new Map<string, (...args: unknown[]) => Promise<unknown>>();
-    const on = (
-      event: string,
-      hook: (...args: unknown[]) => Promise<unknown>,
-    ) => {
-      hooks.set(event, hook);
+    const on = (event: string, ...rest: unknown[]) => {
+      hooks.set(
+        event,
+        rest[rest.length - 1] as (...args: unknown[]) => Promise<unknown>,
+      );
       return { catch: () => {} };
     };
+    // The JSX factory is a global of the module's environment.
+    (globalThis as Record<string, unknown>).h = (
+      tag: unknown,
+      props: unknown,
+      ...children: unknown[]
+    ) => ({ tag, props, children });
     module.register(on);
     const fetched: { url: string; init: Record<string, unknown> }[] = [];
     const ran: { argv: string[]; init: Record<string, unknown> }[] = [];
     const statuses: (string | undefined)[] = [];
+    const toasts: string[] = [];
+    const timers: (() => void)[] = [];
+    const state = new Map<string, { value: unknown; version: number }>();
     const $ = {
       env: { get: async (name: string) => world.env[name] },
       fs: {
@@ -197,6 +224,11 @@ describe("the Claude Code mod", () => {
         fetch: async (url: string, init: Record<string, unknown>) => {
           fetched.push({ url, init });
           await world.fetch?.(url, init);
+          const got =
+            init.method === "GET" ? world.get?.(url, init) : undefined;
+          if (got !== undefined) {
+            return { ...got, ok: got.status < 300, headers: {} };
+          }
           return { status: 204, ok: true, headers: {}, text: "" };
         },
       },
@@ -208,11 +240,32 @@ describe("the Claude Code mod", () => {
       },
       clock: {
         sleep: (ms: number) => new Promise((done) => setTimeout(done, ms)),
+        every: (_ms: number, fn: () => void) => {
+          timers.push(fn);
+          return { cancel: () => timers.splice(timers.indexOf(fn), 1) };
+        },
+      },
+      state: {
+        get: async (ref: { plugin: string; key: string }) =>
+          state.get(`${ref.plugin}.${ref.key}`) ?? {
+            value: undefined,
+            version: 0,
+          },
+        set: async (ref: { plugin: string; key: string }, value: unknown) => {
+          const key = `${ref.plugin}.${ref.key}`;
+          const version = (state.get(key)?.version ?? 0) + 1;
+          state.set(key, { value, version });
+          return { isSet: true, version };
+        },
       },
       session: {
         version: async () => ({ version: "2.1.293", base: "2.1.293" }),
       },
-      ui: { status: (text: string | undefined) => statuses.push(text) },
+      ui: {
+        status: (text: string | undefined) => statuses.push(text),
+        toast: (text: string) => toasts.push(text),
+        resolve: () => ({ Text: "Text", Box: "Box" }),
+      },
     };
     const raise = async (event: string, e: unknown) => {
       const passed: unknown[] = [];
@@ -225,7 +278,32 @@ describe("the Claude Code mod", () => {
       await new Promise((done) => setTimeout(done, 20));
       return passed;
     };
-    return { hooks, raise, fetched, ran, statuses };
+    // The band as the engine asks for it: what the hook drew, or "next".
+    const band = async (props: Record<string, unknown>) => {
+      const hook = hooks.get("ui.render");
+      if (hook === undefined) throw new Error("no band");
+      return hook(
+        $,
+        {
+          surface: "terminal",
+          component: "AbovePrompt",
+          requestId: "band",
+          props: {
+            hasSurvey: false,
+            isWorking: false,
+            maxRows: 10,
+            bodyColumns: 80,
+            ...props,
+          },
+        },
+        async () => "next",
+      );
+    };
+    const tick = async () => {
+      for (const timer of [...timers]) timer();
+      await new Promise((done) => setTimeout(done, 20));
+    };
+    return { hooks, raise, fetched, ran, statuses, toasts, timers, band, tick };
   }
 
   const WORLD = {
@@ -337,7 +415,7 @@ describe("the Claude Code mod", () => {
       surface: "terminal",
       isInteractive: true,
       profile: "terminal",
-      modRevision: 1,
+      modRevision: MOD_REVISION,
       nodeId: "node-1",
       transport: "socket",
     });
@@ -381,6 +459,109 @@ describe("the Claude Code mod", () => {
     expect(headless.statuses).toEqual([]);
   });
 
+  function overlay(extra: Record<string, unknown> = {}) {
+    return {
+      revision: 7,
+      node: { id: "node-1", name: "reviewer", role: "sub", agentId: "claude" },
+      board: { id: "b1", title: "Release" },
+      links: {
+        main: [{ id: "n-lead", name: "lead" }],
+        subs: [],
+        peers: [
+          { id: "n-t", name: "tester" },
+          { id: "n-x", name: "" },
+        ],
+      },
+      inbox: { pending: 2, latestSequence: 40, latestFrom: "lead" },
+      outbox: { queued: 0 },
+      approvals: { pending: 0 },
+      ...extra,
+    };
+  }
+
+  it("draws the band from the overlay: names, counts and glyphs only", async () => {
+    let answer = overlay();
+    const mod = await load({
+      ...WORLD,
+      get: (url, init) => {
+        expect(url).toBe("http://armadra/node/overlay?nodeId=node-1");
+        const headers = init.headers as Record<string, string>;
+        expect(headers["X-Armadra-Node-Token"]).toBe("kid.mac");
+        expect(headers["Content-Type"]).toBeUndefined();
+        if (headers["If-None-Match"] === `"${answer.revision}"`) {
+          return { status: 304, text: "" };
+        }
+        return { status: 200, text: JSON.stringify(answer) };
+      },
+    });
+    expect(await mod.band({})).toBe("next");
+    await mod.raise("session.start", {
+      cwd: "/work",
+      surface: "terminal",
+      isInteractive: true,
+    });
+    expect(mod.timers).toHaveLength(1);
+    expect(await mod.band({})).toEqual({
+      tag: "Text",
+      props: { dimColor: true, wrap: "truncate" },
+      children: ["↑ lead   ↔ tester, +1   ✉ 2"],
+    });
+    // Narrow: the peers are left out. A survey holds the band.
+    expect(
+      ((await mod.band({ bodyColumns: 30 })) as { children: string[] })
+        .children,
+    ).toEqual(["↑ lead   ✉ 2"]);
+    expect(await mod.band({ hasSurvey: true })).toBe("next");
+    // The status line gains the board's name.
+    expect(mod.statuses.at(-1)).toBe("reviewer · Release");
+    // What was waiting at the start is the band's, not a toast.
+    expect(mod.toasts).toEqual([]);
+    // Nothing moved: 304, nothing redrawn, no toast.
+    await mod.tick();
+    expect(mod.toasts).toEqual([]);
+    // A newer message: one toast, the sender's name only.
+    answer = overlay({
+      revision: 8,
+      inbox: { pending: 3, latestSequence: 41, latestFrom: "tester" },
+    });
+    await mod.tick();
+    await mod.tick();
+    expect(mod.toasts).toEqual(["✉ tester"]);
+    // Nothing linked, nothing unread: no band.
+    answer = overlay({
+      revision: 9,
+      links: { main: [], subs: [], peers: [] },
+      inbox: { pending: 0, latestSequence: 0, latestFrom: "" },
+    });
+    await mod.tick();
+    expect(await mod.band({})).toBe("next");
+  });
+
+  it("asks for no overlay under -p or ACP", async () => {
+    const headless = await load({ ...WORLD, get: () => undefined });
+    await headless.raise("session.start", {
+      cwd: "/",
+      surface: null,
+      isInteractive: false,
+    });
+    const acp = await load({
+      ...WORLD,
+      env: { ...WORLD.env, ARMADRA_MOD_PROFILE: "acp" },
+      get: () => undefined,
+    });
+    await acp.raise("session.start", {
+      cwd: "/",
+      surface: "terminal",
+      isInteractive: true,
+    });
+    for (const mod of [headless, acp]) {
+      expect(mod.timers).toEqual([]);
+      expect(mod.fetched.some((call) => call.url.includes("overlay"))).toBe(
+        false,
+      );
+    }
+  });
+
   const claude = process.env.ARMADRA_CLAUDE_BIN ?? "claude";
   const probe = process.env.ARMADRA_CLAUDE_PROBE === "1";
   it.skipIf(!probe)("passes claude plugin validate", () => {
@@ -407,9 +588,12 @@ describe("the Claude Code mod", () => {
       new Set([
         "session.start",
         ...MOD_CLASSIC_EVENTS.map((event) => `classic.${event}`),
+        "ui.render{component=AbovePrompt}",
       ]),
     );
     expect(output).not.toMatch(/gating hook without \.catch/);
+    // Every $.state key the module names is the contract's.
+    expect(output).not.toMatch(/not declared|undeclared/i);
     const reads =
       /armadra\.ts env reads: (.+)$/m.exec(output)?.[1]?.split(", ") ?? [];
     for (const name of reads) expect(name).toMatch(/^ARMADRA_/);

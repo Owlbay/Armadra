@@ -26,7 +26,7 @@ export const SKILLS_REVISION = 18;
  * PermissionRequest-only settings beside it. Bump it whenever the generated
  * source changes, so a launcher written for the old module is not trusted.
  */
-export const MOD_REVISION = 1;
+export const MOD_REVISION = 2;
 
 /**
  * One number for "is this CLI integrated, and is it current" — the hook

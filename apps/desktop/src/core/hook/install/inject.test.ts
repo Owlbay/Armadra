@@ -902,6 +902,12 @@ describe("Claude's mod (contract §57)", () => {
     const report = prepare("claude");
     expect(report.written).toContain(layout.modModule);
     expect(readFileSync(layout.modModule as string, "utf8")).toBe(module);
+    // The state contract beside it (contract §58.2) is ours too, and named so.
+    expect(layout.modTypes).toBe(
+      join(layout.modDir as string, "hooks", "armadra-state.d.ts"),
+    );
+    rmSync(layout.modTypes as string);
+    expect(prepare("claude").written).toEqual([layout.modTypes]);
     // Claude 2.1.287–2.1.294 writes these into the folder; a launch neither
     // reads nor removes them.
     const types = join(layout.modDir as string, ".claude-plugin", "types");
