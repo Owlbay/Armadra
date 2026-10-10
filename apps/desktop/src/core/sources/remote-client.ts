@@ -75,6 +75,13 @@ export interface CreatedLink {
   readonly expiresAtMs: number;
 }
 
+/** 分享范围（cloud-api `linkScope`，协议 1.1 起；中继报 `links.scope` 能力才发）。 */
+export interface LinkScope {
+  readonly workspaceId?: string;
+  readonly sessionId?: string;
+  readonly readOnly?: boolean;
+}
+
 /** `links.list` 的一行（cloud-api §5 `linkSummary`）。 */
 export interface LinkSummary {
   readonly linkId: string;
@@ -88,6 +95,8 @@ export interface LinkSummary {
   readonly expiresAtMs: number;
   readonly createdAtMs: number;
   readonly revokedAtMs: number | null;
+  /** 中继记着的分享范围；旧中继没有。 */
+  readonly scope?: LinkScope;
 }
 
 /** 远程服务的一个地址：issuer 来源加它的 CA 指纹（空 = 系统信任）。 */
@@ -195,6 +204,20 @@ function rejected(status: number, body: unknown, during: string): never {
 }
 
 /** `links.list` / `links.update` 的一行；`linkId` 不像样的丢掉（`null`）。 */
+function scopeOf(value: unknown): LinkScope | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const row = record(value);
+  const scope: {
+    workspaceId?: string;
+    sessionId?: string;
+    readOnly?: boolean;
+  } = {};
+  if (typeof row.workspaceId === "string") scope.workspaceId = row.workspaceId;
+  if (typeof row.sessionId === "string") scope.sessionId = row.sessionId;
+  if (row.readOnly === true) scope.readOnly = true;
+  return Object.keys(scope).length === 0 ? undefined : scope;
+}
+
 function linkSummaryOf(value: unknown): LinkSummary | null {
   const row = record(value);
   const linkId = str(row.linkId);
@@ -211,6 +234,7 @@ function linkSummaryOf(value: unknown): LinkSummary | null {
     expiresAtMs: num(row.expiresAtMs),
     createdAtMs: num(row.createdAtMs),
     revokedAtMs: typeof row.revokedAtMs === "number" ? row.revokedAtMs : null,
+    ...(scopeOf(row.scope) === undefined ? {} : { scope: scopeOf(row.scope) }),
   };
 }
 
@@ -437,6 +461,8 @@ export class RemoteClient {
       role: string;
       expiresAtMs: number;
       maxUses: number;
+      /** 只在中继报 `links.scope` 能力时给（调用方判）。 */
+      scope?: LinkScope;
     },
   ): Promise<CreatedLink> {
     const body = record(
