@@ -358,6 +358,16 @@ rpm 用 `rpm --import` 之后 `rpm -K`。本地演练：`node tools/release/sign
 确定性的 Finder 布局（背景图、图标位置）——丢掉 bundler 的 DMG 就必须自己公证。我们没有
 这个需求，不做这一段。
 
+### 2.6.3 Android 上传密钥
+
+`android` 作业从 secrets `ANDROID_UPLOAD_KEYSTORE_BASE64`（PKCS12 密钥库的 base64）、
+`ANDROID_UPLOAD_KEYSTORE_PASSWORD`、`ANDROID_UPLOAD_KEY_ALIAS` 还原密钥到 `RUNNER_TEMP`，经
+`app/build.gradle` 读的 `ANDROID_UPLOAD_KEYSTORE*` 环境变量签名，用完即删。三个都没有就跳过并告警，
+给了一部分就失败。维护者在自己的机器上跑 `apps/mobile/scripts/create-upload-keystore.sh`：生成
+`~/.armadra-signing/armadra-upload.jks` 与随机口令（已存在就拒绝覆盖），经 stdin 写进三个 secrets，
+打印证书 SHA-256。这把密钥丢了就发不了同一个 App 的更新，生成后立即离线备份；同一把密钥以后也是
+Play 上架的上传密钥。
+
 ### 2.7 发布说明与 draft
 
 说明正文是 `CHANGELOG.md` 里本版那一节：从 `## X.Y.Z` 起（标题后可跟「（未发布）」或
@@ -444,7 +454,7 @@ npm 上 `latest` 仍是 26.15.3（本仓库钉的版本），`v26` 线到 26.17.
 
 **兼容性只看协议**，不看两边版本是否相等（版本线统一后仍如此）：`compatibility.json` 的 `mobile.minimumHostProtocol`（现为 1.14：手机用到的推送与对外服务动词自此都在契约上；已发布的 0.2.x 都在 1.18 及以上）是 App 内页面能用的最老 core 协议，页面副本在 `apps/web/src/mobile/host-compatibility.ts`；`version.mjs check` 核对两者一致、major 等于 core 的 `PROTOCOL_MAJOR`、minor 不高于 core 的 `PROTOCOL_MINOR`。它不进发布说明的围栏。App 的「设置 → 关于」显示 App 版本与构建号（原生插件 `appInfo`）、所连主机的版本与协议，主机协议不够或 major 不同时提示更新哪一边。
 
-**产物**：`nightly.yml` 的移动端产物名用统一版本（`artifacts.mjs::mobileAssets(version print)`，如 `armadra-mobile_0.3.0_android-debug.apk`）。`release.yml` 不打移动端：商店构建要用户的签名与上传凭据（客户端平台指南「真机与商店」），`vX.Y.Z` 发布之后的上架是人的动作。
+**产物**：`nightly.yml` 的移动端产物名用统一版本（`artifacts.mjs::mobileAssets(version print)`，如 `armadra-mobile_0.3.0_android-debug.apk`）。`release.yml` 的 `android` 作业打一个用上传密钥签名的 release APK（`artifacts.mjs::androidReleaseAsset`，如 `armadra-mobile_0.5.1_android.apk`），`apksigner verify` 通过后进 draft Release 与 `SHA256SUMS`，可直接安装；没有密钥就跳过并告警（§2.6.3）。iOS 只能经 App Store / TestFlight 分发，仍不进 Release；商店上架是人的动作（客户端平台指南「真机与商店」）。
 
 ## 3. 密钥清单
 
@@ -452,29 +462,30 @@ npm 上 `latest` 仍是 26.15.3（本仓库钉的版本），`v26` 线到 26.17.
 `assemble` 会把这件事写进 Release 说明顶部，`latest.json` 会把没有签名的
 updater 包排除在外。
 
-| Secret / 变量                                                     | 谁用                                                                                                             | 缺了会怎样                                   |
-| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| `APPLE_CERTIFICATE_P12_BASE64`                                    | macOS 代码签名（base64 的 Developer ID Application .p12，G2 链）                                                 | 不签名，首次打开有 Gatekeeper 提示           |
-| `APPLE_CERTIFICATE_PASSWORD`                                      | 导入上面的证书                                                                                                   | 只给一半：构建失败                           |
-| `APPLE_SIGNING_IDENTITY`                                          | 指定用哪张证书；缺则取第一张                                                                                     | 钥匙串里有多张时可能选错                     |
-| `APPLE_API_KEY_P8_BASE64`                                         | 公证（推荐）：App Store Connect API key 的 .p8，base64                                                           | 退回 Apple ID；两套都没有就不公证            |
-| `APPLE_API_KEY_ID` / `APPLE_API_ISSUER_ID`                        | 同上的 key id 与 issuer                                                                                          | 三个只给一部分：构建失败                     |
-| `APPLE_ID` / `APPLE_TEAM_ID`                                      | 公证（回退）                                                                                                     | 不公证，`notarize` 作业把 macOS 列进说明     |
-| `APPLE_APP_SPECIFIC_PASSWORD`                                     | 公证回退用的 app 专用密码                                                                                        | 同上                                         |
-| `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET`     | Windows：Azure Artifact Signing 的 Entra 凭据                                                                    | 与下面三个变量、发布者名一起：缺一个构建失败 |
-| 变量 `AZURE_SIGNING_ENDPOINT` / `_ACCOUNT` / `_PROFILE`           | Windows：Artifact Signing 账户、证书配置                                                                         | 同上                                         |
-| 变量 `ARMADRA_WIN_PUBLISHER_NAME`                                 | Windows：证书主体 CN，钉进 `publisherName`                                                                       | Azure 路径必需；证书文件路径缺省取证书 CN    |
-| `WINDOWS_CERT_BASE64` / `WINDOWS_CERT_PASSWORD`                   | Windows：OV 证书文件（与 Azure、令牌三选一）                                                                     | 不签名，SmartScreen 提示，不自动更新         |
-| 变量 `ARMADRA_WIN_CERT_SHA1`                                      | Windows：自托管 runner 证书库里的令牌证书                                                                        | 同上                                         |
-| `ARMADRA_LINUX_GPG_KEY` / `ARMADRA_LINUX_GPG_PASSPHRASE`          | Linux 包的 `.asc` 与 rpm 签名                                                                                    | 不带 `.asc`，rpm 不签名，说明里写明          |
-| `ARMADRA_RELEASE_SIGNING_KEY`                                     | 每个产物与 `SHA256SUMS` 的 minisign 签名，`latest.json` 引用的也是它                                             | 产物不带签名，`latest.json` 为空，说明里写明 |
-| `HOMEBREW_TAP_TOKEN`                                              | `distribute.yml` 推 Homebrew tap（细粒度 PAT，只对 tap 仓库 `contents: write`）                                  | 跳过 tap，告警                               |
-| `SCOOP_BUCKET_TOKEN`                                              | `distribute.yml` 推 Scoop bucket（同上，只对 bucket 仓库）                                                       | 跳过 Scoop，告警                             |
-| `WINGET_TOKEN`                                                    | `distribute.yml` 用 wingetcreate 向 `microsoft/winget-pkgs` 提 PR（对 fork `contents` + `pull_requests: write`） | 跳过 winget，告警                            |
-| 变量 `ARMADRA_HOMEBREW_TAP` / `ARMADRA_SCOOP_BUCKET`              | tap / bucket 仓库名，缺省 `Owlbay/homebrew-tap` / `Owlbay/scoop-bucket`                                          | 用缺省                                       |
-| `CLOUDFLARE_R2_ACCESS_KEY_ID` / `CLOUDFLARE_R2_SECRET_ACCESS_KEY` | 更新镜像（§3.3）：R2 的 S3 API 令牌，只授权镜像那个桶的读写                                                      | 与下面两个变量一起：全缺跳过，缺一半失败     |
-| 变量 `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_R2_BUCKET`             | 镜像：端点 `https://<账户>.r2.cloudflarestorage.com` 与桶名                                                      | 同上                                         |
-| 变量 `ARMADRA_MIRROR_PUBLIC_URL`                                  | 镜像桶的公开地址（例如 `https://updates.armadra.dev`），`assemble` 据此另签一份链接指向镜像的 `latest.json`      | 镜像里的 `latest.json` 仍指向 GitHub 下载    |
+| Secret / 变量                                                               | 谁用                                                                                                             | 缺了会怎样                                   |
+| --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| `APPLE_CERTIFICATE_P12_BASE64`                                              | macOS 代码签名（base64 的 Developer ID Application .p12，G2 链）                                                 | 不签名，首次打开有 Gatekeeper 提示           |
+| `APPLE_CERTIFICATE_PASSWORD`                                                | 导入上面的证书                                                                                                   | 只给一半：构建失败                           |
+| `APPLE_SIGNING_IDENTITY`                                                    | 指定用哪张证书；缺则取第一张                                                                                     | 钥匙串里有多张时可能选错                     |
+| `APPLE_API_KEY_P8_BASE64`                                                   | 公证（推荐）：App Store Connect API key 的 .p8，base64                                                           | 退回 Apple ID；两套都没有就不公证            |
+| `APPLE_API_KEY_ID` / `APPLE_API_ISSUER_ID`                                  | 同上的 key id 与 issuer                                                                                          | 三个只给一部分：构建失败                     |
+| `APPLE_ID` / `APPLE_TEAM_ID`                                                | 公证（回退）                                                                                                     | 不公证，`notarize` 作业把 macOS 列进说明     |
+| `APPLE_APP_SPECIFIC_PASSWORD`                                               | 公证回退用的 app 专用密码                                                                                        | 同上                                         |
+| `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET`               | Windows：Azure Artifact Signing 的 Entra 凭据                                                                    | 与下面三个变量、发布者名一起：缺一个构建失败 |
+| 变量 `AZURE_SIGNING_ENDPOINT` / `_ACCOUNT` / `_PROFILE`                     | Windows：Artifact Signing 账户、证书配置                                                                         | 同上                                         |
+| 变量 `ARMADRA_WIN_PUBLISHER_NAME`                                           | Windows：证书主体 CN，钉进 `publisherName`                                                                       | Azure 路径必需；证书文件路径缺省取证书 CN    |
+| `WINDOWS_CERT_BASE64` / `WINDOWS_CERT_PASSWORD`                             | Windows：OV 证书文件（与 Azure、令牌三选一）                                                                     | 不签名，SmartScreen 提示，不自动更新         |
+| 变量 `ARMADRA_WIN_CERT_SHA1`                                                | Windows：自托管 runner 证书库里的令牌证书                                                                        | 同上                                         |
+| `ARMADRA_LINUX_GPG_KEY` / `ARMADRA_LINUX_GPG_PASSPHRASE`                    | Linux 包的 `.asc` 与 rpm 签名                                                                                    | 不带 `.asc`，rpm 不签名，说明里写明          |
+| `ANDROID_UPLOAD_KEYSTORE_BASE64` / `_PASSWORD` / `ANDROID_UPLOAD_KEY_ALIAS` | Android release APK 的签名（§2.6.3）                                                                             | 全缺：不带 APK，告警；缺一部分：发布失败     |
+| `ARMADRA_RELEASE_SIGNING_KEY`                                               | 每个产物与 `SHA256SUMS` 的 minisign 签名，`latest.json` 引用的也是它                                             | 产物不带签名，`latest.json` 为空，说明里写明 |
+| `HOMEBREW_TAP_TOKEN`                                                        | `distribute.yml` 推 Homebrew tap（细粒度 PAT，只对 tap 仓库 `contents: write`）                                  | 跳过 tap，告警                               |
+| `SCOOP_BUCKET_TOKEN`                                                        | `distribute.yml` 推 Scoop bucket（同上，只对 bucket 仓库）                                                       | 跳过 Scoop，告警                             |
+| `WINGET_TOKEN`                                                              | `distribute.yml` 用 wingetcreate 向 `microsoft/winget-pkgs` 提 PR（对 fork `contents` + `pull_requests: write`） | 跳过 winget，告警                            |
+| 变量 `ARMADRA_HOMEBREW_TAP` / `ARMADRA_SCOOP_BUCKET`                        | tap / bucket 仓库名，缺省 `Owlbay/homebrew-tap` / `Owlbay/scoop-bucket`                                          | 用缺省                                       |
+| `CLOUDFLARE_R2_ACCESS_KEY_ID` / `CLOUDFLARE_R2_SECRET_ACCESS_KEY`           | 更新镜像（§3.3）：R2 的 S3 API 令牌，只授权镜像那个桶的读写                                                      | 与下面两个变量一起：全缺跳过，缺一半失败     |
+| 变量 `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_R2_BUCKET`                       | 镜像：端点 `https://<账户>.r2.cloudflarestorage.com` 与桶名                                                      | 同上                                         |
+| 变量 `ARMADRA_MIRROR_PUBLIC_URL`                                            | 镜像桶的公开地址（例如 `https://updates.armadra.dev`），`assemble` 据此另签一份链接指向镜像的 `latest.json`      | 镜像里的 `latest.json` 仍指向 GitHub 下载    |
 
 证书与公证密码用当前的两个 secret 名字；工作流同时接受早先的
 `APPLE_CERTIFICATE` 与 `APPLE_PASSWORD`（`${{ secrets.A || secrets.B }}`），
