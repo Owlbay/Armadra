@@ -106,6 +106,12 @@ async function armadraStart($: EngineInterface, e: SessionStartInput): Promise<v
 `;
 
 /**
+ * What the one `session.start` hook (`template.ts`) starts for this half:
+ * the status line and the hello.
+ */
+export const STATUS_SESSION_START = "armadraStart($, e)";
+
+/**
  * The registrations, one literal `on(...)` per event so `claude plugin
  * validate` reads them. Each passes its event on unchanged and at once
  * (`void`): a report never holds a tool call or a turn. SessionEnd alone
@@ -113,10 +119,6 @@ async function armadraStart($: EngineInterface, e: SessionStartInput): Promise<v
  * throws anyway is answered by its `.catch`, which passes the event on.
  */
 export const STATUS_REGISTRATIONS = String.raw`
-  on("session.start", async ($, e, next) => {
-    void armadraStart($, e);
-    return next(e);
-  });
   on("classic.SessionStart", async ($, e, next) => {
     armadraRemember(e);
     void armadraForward($, e);

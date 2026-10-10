@@ -4076,3 +4076,34 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - core：`hostRoleScopes` / `sessionViewerScopes` / `grantScopes` / `HOST_WORKSPACE` / `GrantTargetKind`（`roles.ts`）、`resourceOf` 与 `scope(…, resourceId)`（`scopes.ts`）、`compileGrants(accounts, id, nowMs)`、`grant-sync.ts` 的 `applyCloudGrants` / `disableLinkGuests` / `registerExternal` / `putGrantRow` / `GRANT_LEASE_MS`、`assertedGrants`（`cloud/login.ts`）、`shareScopeOf` / `linkScopeOf` / `LINK_SCOPE_CAPABILITY`（`share-links.ts`）；`issueInvitation` 收 `targetSessionId` / `targetHost`。
 - shared：`shareTargetSchema` / `ShareTarget`，`ShareLink` 的 `target` / `sessionId` / `readOnly`，`shareLinkCreate` 入参同名三项。
 - 线上：§60，协议 1.32，协议包 0.3.0。
+
+## Claude Code mod M3：`/armadra-*` 斜杠命令与 ACP 挂载（契约 §59，2026-10-10）
+
+做了什么：
+
+- 斜杠命令（`core/hook/install/claude-mod/commands.ts`）：`/armadra-post`、`-inbox`、`-ack`、`-send`、`-team`、`-open`（`open-agent`）、`-list` 七条，`session.start` 里逐条字面量 `$.command.register`（`immediate`），各自一个字面 matcher 的 `command.run` hook 自答、不读 `next`。执行就是 `$.process.run` 起 `armadra-hook canvas <动词> <词…>`：mod 只按 POSIX shell 规则切词，旗标、`ack` 的会话绑定、超时与答复全是客户端与 core 的，和模型经 Bash / 画布 MCP 调同一个动词一样；成功显示 stdout，失败显示客户端那一行 stderr。说明按 `ui.locale` 选中英，缺省英文，文案在 `apps/web/src/i18n/mod-commands.ts`，core 镜像由单测逐键比对。
+- 引擎只许一个不带 matcher 的 `session.start`：改为 `template.ts` 生成唯一的那一个，各段交一个调用（`STATUS_SESSION_START`、`COMMAND_SESSION_START`）；`claudeModSource(clientBin, { locale })`。`MOD_REVISION` 2 → 3（`INTEGRATION_REVISION` 50318）。
+- ACP（`agent/canvas-launch.ts::acpModEnvironment`、`acp/adapters.ts` 的 `injection.mods`、`acp/prestart.ts::bundledClaudeCodeVersion`）：Claude 适配器自带的 Claude Code（SDK 清单 `claudeCodeVersion`）≥ 2.1.293 时，适配器环境加 `CLAUDE_CODE_PLUGIN_DIRS`（接在原值后）与 `ARMADRA_MOD_PROFILE=acp`；只挂 mod 不挂技能。`profile=acp` 下 mod 不转发状态、不画状态栏（M1 已有），只注册命令并发 hello。挂了 mod 的 Claude 适配器不再预启动。
+- 契约 §59，协议 minor 32 → 33（M2 是 30，A7-4 是 32）。
+
+实测（macOS arm64；Claude Code 2.1.293 / 2.1.296 与 claude-agent-acp 0.89.0 用 `npm install --prefix /tmp/…` 装到临时目录，隔离 HOME、假 Messages API、假 key）：
+
+- 新单测：命令 9（表与动词、中英镜像、按语言生成、字面 matcher 不读 `next`、只在画布节点注册、切词与 `parseFlags` 结果一致、客户端拒绝 / 引号未闭合 / 起不来、经真 `/bin/sh` 替身客户端原样回显）、ACP 注入 1、`bundledClaudeCodeVersion` 1、ACP 挂载集成 2（假适配器按 npm 布局：门开时环境里有 mod 目录、profile 与节点地址且不预启动；门关时不挂、照旧预启动）、e2e 运行器 1。
+- `ARMADRA_CLAUDE_PROBE=1` 下 2.1.293、2.1.296：`claude plugin validate` 通过，七条命令都是「answers its own command」；`claude plugin test` 全过（新增一条经 `$.command.run` 跑 `/armadra-post` → 客户端 argv）；与 M2 合并后重跑仍过。
+- `claude-mod-launch` 新增场景 7（M2 的横条是 6）：`claude -p '/armadra-list'` 打印的与同一节点 `armadra-hook canvas list` 的相同、假 API 没有新的主循环请求；2.1.293、2.1.296 全过，2.1.293 上模块对引擎自带类型检查通过。
+- 新探针 `claude-mod-acp`（`tools/ci/e2e.d/claude-mod-acp.json`，需求 `claude-acp`，CI 没有时记 skipped）：真 core + 真 claude-agent-acp 0.89.0（与本机 0.88.0）：hello 的 `profile` 为 `acp`；会话日志 `availableCommands` 有七条 `armadra-*`；发 `/armadra-list` 由 mod 答出画布列表（引擎在前面加 `armadra-mod:`）、不问模型；节点状态仍是 `acp` 来源；`~/.claude/settings.json` 前后一致。`$.process.run` 在 SDK 宿主下可用。
+- `pnpm libs:build && pnpm -r --if-present test`：desktop 5536 / 69 跳（首轮两条协议版本断言随 minor 更新后重跑通过）、web 4320、shared 384、server 98 / 4 跳、mobile 31、push-relay 9，`node --test scripts/*.test.mjs` 73；live 配置的 `passkey-cdp.live.integration.test.ts` 本机失败（同前几节）。`pnpm --filter @armadra/web typecheck`、`pnpm check` 通过。`--record-compat` 把 `claudeMods.verified` 扩到 2.1.293–2.1.296。
+
+没做 / 限制：
+
+- 挂了 mod 的 Claude ACP 会话不再领预启动进程（约省 200 ms 的那段没了）：预启动时还没有节点，mod 拿不到身份。要恢复需要按会话给环境（`_meta.claudeCode.options.env` / `plugins`），`@armadra/agent` 0.6.8 的会话选项没有 `_meta`，留作后续。
+- 门只看适配器自带的 CLI；设了 `CLAUDE_CODE_EXECUTABLE` 一律不挂；Windows、执行主机上的适配器不挂。集成页的 `mods` 不单列 ACP 的门（hello 的 `profile` 能区分）。
+- 交互式 TUI 里 `/help` 与补全的观感没有截图确认（命令名在 `-p` 与 ACP 下实测为 `/armadra-<名>`，不加插件前缀）。
+- 没有用真实账号跑。
+
+接口：
+
+- core：`MOD_COMMANDS`、`COMMAND_MESSAGES`、`commandMessages`、`commandDeclarations(locale)`、`COMMAND_REGISTRATIONS`、`COMMAND_SESSION_START`、`ModLocale`；`STATUS_SESSION_START`；`ClaudeModOptions`、`claudeModSource(clientBin, options)`；`acpModEnvironment`、`ACP_MOD_PROFILE`、`AcpInjectionOptions`、`acpInjection(..., options)`；`AcpAdapter.injection.mods`；`bundledClaudeCodeVersion`。
+- web：`i18n/mod-commands.ts`（`mod.command.*`，`REFERENCED_ELSEWHERE` 放行）。
+- 线上：§59，协议 1.33。
+- 工具：`tools/probes/claude-mod-acp.mjs`（`findAdapter`、`bundledClaudeCode`）、`claude-mod-launch.mjs` 导出 `fakeApi`、e2e 需求 `claude-acp`、`tools/vendor/claude-mod-api.d.ts` 加 `command.register` / `command.run`。

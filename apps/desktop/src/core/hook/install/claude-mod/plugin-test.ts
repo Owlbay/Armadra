@@ -59,9 +59,15 @@ function world(on: any, refuse: boolean, overlay: any = undefined) {
     }
     return { value: { status: 204, ok: true, headers: {}, text: "" } };
   });
+  const registered: any[] = [];
   on("process.run", async ($: any, e: any) => {
     ran.push(e);
-    return { value: { exitCode: 0, stdout: "", stderr: "" } };
+    const canvas = e.argv[1] === "canvas";
+    return { value: { exitCode: 0, stdout: canvas ? "lead, reviewer\\n" : "", stderr: "" } };
+  });
+  on("command.register", async ($: any, e: any) => {
+    registered.push(e);
+    return { value: { command: e.name } };
   });
   // The engine beneath: each event answered as a session with no settings
   // hook would, so the mod's own hooks are all that runs.
@@ -77,7 +83,7 @@ function world(on: any, refuse: boolean, overlay: any = undefined) {
     statuses.push(e.text);
     return { value: undefined };
   });
-  return { fetched, ran, statuses };
+  return { fetched, ran, statuses, registered };
 }
 
 async function settle($: any, done: () => boolean) {
@@ -117,6 +123,18 @@ describe("armadra-mod", () => {
     const payload = JSON.parse(w.ran[0].init.stdin);
     expect(payload.hook_event_name).toBe("UserPromptSubmit");
     expect(payload.prompt).toBe("go");
+  });
+
+  test("serves a slash command through the hook client", async ($: any, on: any) => {
+    const w = world(on, false);
+    await $.session.start({ cwd: "/tmp", surface: "terminal", isInteractive: true });
+    await settle($, () => w.registered.length >= 7);
+    expect(w.registered.map((spec: any) => spec.name)).toContain("armadra-list");
+    expect(w.registered.every((spec: any) => spec.immediate === true)).toBe(true);
+    const answer = await $.command.run({ command: "armadra-post", args: "--to lead --body 'two words'" });
+    expect(answer.text).toBe("lead, reviewer");
+    const call = w.ran.find((run: any) => run.argv[1] === "canvas");
+    expect(call.argv).toEqual([CLIENT, "canvas", "post", "--to", "lead", "--body", "two words"]);
   });
 
   test("says hello at session start", async ($: any, on: any) => {

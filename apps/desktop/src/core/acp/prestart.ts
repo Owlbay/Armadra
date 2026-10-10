@@ -20,7 +20,13 @@
  */
 
 import { execFile } from "node:child_process";
-import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 
 import { AcpProcess } from "./client";
@@ -252,6 +258,37 @@ export function bundledCli(
     }
   }
   return undefined;
+}
+
+/**
+ * 适配器自带的 Claude Code 的版本（契约 §59 的 mod 门）：{@link bundledCli} 找到
+ * 的 SDK 平台包旁边，`@anthropic-ai/claude-agent-sdk/package.json` 的
+ * `claudeCodeVersion`。只读一个小文件，不起进程。`CLAUDE_CODE_EXECUTABLE` 设了
+ * （适配器改用别的 CLI）、找不到或读不出时答 `undefined`：门按未知关着。
+ */
+export function bundledClaudeCodeVersion(
+  paths: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+): string | undefined {
+  if ((env.CLAUDE_CODE_EXECUTABLE ?? "") !== "") return undefined;
+  const cli = bundledCli(paths, platform, arch);
+  if (cli === undefined || !/claude-agent-sdk-/.test(cli)) return undefined;
+  try {
+    const manifest = JSON.parse(
+      readFileSync(
+        join(dirname(dirname(cli)), "claude-agent-sdk", "package.json"),
+        "utf8",
+      ),
+    ) as { claudeCodeVersion?: unknown };
+    const version = manifest.claudeCodeVersion;
+    return typeof version === "string" && /^\d+\.\d+\.\d+/.test(version)
+      ? version
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function isFile(path: string): boolean {

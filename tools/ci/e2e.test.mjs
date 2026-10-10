@@ -476,6 +476,54 @@ test("an entry that needs WebKit is skipped with the install command when it is 
   }
 });
 
+test("an entry that needs claude-agent-acp is skipped with the reason when there is none", async () => {
+  const { root, remove } = fixture();
+  try {
+    const entries = [
+      {
+        id: "mod-acp",
+        tier: "a",
+        script: "pass.mjs",
+        args: ["{out}"],
+        requires: ["claude-acp"],
+        timeoutMinutes: 1,
+      },
+    ];
+    const without = await runTier({
+      tier: "a",
+      root,
+      out: join(root, "out-without"),
+      log: quiet,
+      env: { PATH: process.env.PATH },
+      probe: {
+        ...present,
+        claudeAcp: () => ({ reason: "no claude-agent-acp" }),
+      },
+      manifest: { entries },
+    });
+    assert.equal(without.entries[0].status, "skipped");
+    assert.match(without.entries[0].reason, /claude-agent-acp/);
+    const withIt = await runTier({
+      tier: "a",
+      root,
+      out: join(root, "out-with"),
+      log: quiet,
+      env: { PATH: process.env.PATH },
+      probe: {
+        ...present,
+        claudeAcp: () => ({
+          program: "/fake/claude-agent-acp",
+          version: "2.1.293",
+        }),
+      },
+      manifest: { entries },
+    });
+    assert.equal(withIt.entries[0].status, "passed");
+  } finally {
+    remove();
+  }
+});
+
 test("an entry that needs Claude Code is skipped with the reason when there is none", async () => {
   const { root, remove } = fixture();
   try {

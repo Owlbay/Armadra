@@ -1,10 +1,14 @@
+import { delimiter } from "node:path";
+
 import {
   type ShellDialect,
   shellCommandLine,
   shellDialect,
 } from "../terminal/shell";
 import {
+  artifactLayout,
   canvasInjection,
+  claudeLoadsMods,
   currentLauncher,
   isInjected,
   prepareInjection,
@@ -224,10 +228,28 @@ export function canvasEnvironment(
 
 /** 适配器表里决定注入怎么复用的那两项（`core/acp/adapters.ts`）。 */
 export interface AcpInjectionRule {
-  readonly injection: { readonly reuse: readonly ("env" | "args")[] };
+  readonly injection: {
+    readonly reuse: readonly ("env" | "args")[];
+    /** 挂 Claude Code mod（`core/acp/adapters.ts` 的 `injection.mods`）。 */
+    readonly mods?: boolean;
+  };
   /** ama：注入只有一个 `--profile <path>`，由适配器表单独接（`profileFlag`）。 */
   readonly profileFlag?: string;
 }
+
+/** {@link acpInjection} 的可选输入。 */
+export interface AcpInjectionOptions {
+  /**
+   * 适配器真正会起的 Claude Code 的版本（适配器自带 SDK 里的那份，不是 PATH
+   * 上的 `claude`）；未知为 `null` / 缺席，mod 的门关着。
+   */
+  readonly claudeVersion?: string | null;
+  /** 适配器进程原本的环境：`CLAUDE_CODE_PLUGIN_DIRS` 在它后面追加。 */
+  readonly ambient?: NodeJS.ProcessEnv;
+}
+
+/** ACP 下 mod 的那一档（契约 §59）：`ARMADRA_MOD_PROFILE` 的值。 */
+export const ACP_MOD_PROFILE = "acp";
 
 export interface AcpInjection {
   readonly env: readonly (readonly [string, string])[];
@@ -252,6 +274,7 @@ export function acpInjection(
   agentId: string,
   rule: AcpInjectionRule,
   log?: (message: string, fields: Record<string, unknown>) => void,
+  options: AcpInjectionOptions = {},
 ): AcpInjection {
   const base = baseAgent(settings, agentId);
   if (!isInjected(base)) return { env: [], args: [] };
@@ -274,7 +297,43 @@ export function acpInjection(
     };
   }
   return {
-    env: rule.injection.reuse.includes("env") ? injection.env : [],
+    env: [
+      ...(rule.injection.reuse.includes("env") ? injection.env : []),
+      ...(rule.injection.mods === true
+        ? acpModEnvironment(dataDir, base, options)
+        : []),
+    ],
     args: rule.injection.reuse.includes("args") ? injection.args : [],
   };
+}
+
+/**
+ * ACP 下挂 Claude Code mod 的环境（契约 §59，设计 claude-mods.md §5.2）。
+ *
+ * 适配器经 SDK 起 CLI，没有 `--plugin-dir`；`CLAUDE_CODE_PLUGIN_DIRS` 是同一件事
+ * 给 SDK 宿主的写法，适配器把进程环境整体透传给 CLI。只挂 mod，不挂技能插件：
+ * ACP 下画布工具走 MCP，再来一份技能说明就是两套。`ARMADRA_MOD_PROFILE=acp`
+ * 让 mod 不转发状态、不画状态栏（节点状态由 ACP 会话写，再来一路 `hook` 就是
+ * 两个写者），只注册斜杠命令并发 hello。
+ *
+ * 门与终端驱动同一个 {@link claudeLoadsMods}，但版本是适配器自带的那份 CLI 的；
+ * 未知即关。适配器环境里原有的 `CLAUDE_CODE_PLUGIN_DIRS` 保留，mod 接在后面。
+ */
+export function acpModEnvironment(
+  dataDir: string,
+  agentId: string,
+  options: AcpInjectionOptions = {},
+): readonly (readonly [string, string])[] {
+  if (agentId !== "claude") return [];
+  if (!claudeLoadsMods(options.claudeVersion)) return [];
+  const modDir = artifactLayout(dataDir, "claude").modDir;
+  if (modDir === undefined) return [];
+  const before = options.ambient?.CLAUDE_CODE_PLUGIN_DIRS ?? "";
+  const dirs = before
+    .split(delimiter)
+    .filter((dir) => dir !== "" && dir !== modDir);
+  return [
+    ["CLAUDE_CODE_PLUGIN_DIRS", [...dirs, modDir].join(delimiter)],
+    ["ARMADRA_MOD_PROFILE", ACP_MOD_PROFILE],
+  ];
 }

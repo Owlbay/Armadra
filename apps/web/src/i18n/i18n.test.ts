@@ -205,9 +205,10 @@ function dynamicPrefixes(corpus: string): Set<string> {
  * `desktop` 模块是桌面壳托盘与菜单的文案，引用它的是 Electron 主进程
  * （apps/desktop/src/main），不在这里扫描的前端语料里。它的键由
  * apps/desktop/src/shell-core/messages.test.ts 按「托盘与菜单要的键」全等守住，
- * 这里不再重复检查。
+ * 这里不再重复检查。`mod-commands` 是 Claude Code mod 斜杠命令的说明，用在
+ * core 生成的 mod 源码里，由 core 的 `claude-mod/commands.test.ts` 按逐键全等守住。
  */
-const REFERENCED_ELSEWHERE = new Set(["desktop"]);
+const REFERENCED_ELSEWHERE = new Set(["desktop", "mod-commands"]);
 
 /**
  * 没人引用的键。2026-09-26 清空：死键已从各语言模块里删掉，动态拼接的由

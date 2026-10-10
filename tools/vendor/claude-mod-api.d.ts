@@ -51,6 +51,24 @@ declare module "claude-code" {
     stderr: string;
   };
 
+  export type CommandSpec = {
+    name: string;
+    description: string;
+    argumentHint?: string;
+    immediate?: true;
+  };
+
+  export type CommandRunInput = {
+    command: string;
+    args: string;
+  };
+
+  export type CommandRunResult = {
+    text?: string;
+    context?: readonly string[];
+    exitCode?: number;
+  };
+
   /** Each plugin's session state, declared by its contract (`hooks/armadra-state.d.ts`). */
   export interface PluginState {}
 
@@ -151,6 +169,9 @@ declare module "claude-code" {
       toast: (text: string, options?: ToastOptions) => void;
       resolve: (e: { surface: "terminal" | "desktop" }) => Elements;
     };
+    command: {
+      register: (command: CommandSpec) => Promise<{ command: string }>;
+    };
   }
 
   export interface Next<I, R> {
@@ -186,6 +207,11 @@ declare module "claude-code" {
       event: "session.start",
       hook: Hook<SessionStartInput, { cwd: string }>,
     ): Registration<SessionStartInput, { cwd: string }>;
+    (
+      event: "command.run",
+      matcher: { command: string },
+      hook: Hook<CommandRunInput, CommandRunResult>,
+    ): Registration<CommandRunInput, CommandRunResult>;
     (
       event: ClassicEventName,
       hook: Hook<Record<string, unknown>, unknown>,

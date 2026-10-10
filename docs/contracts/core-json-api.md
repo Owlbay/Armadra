@@ -3827,6 +3827,37 @@ hook surface 上，节点 token 必须验过，只答调用者自己节点的连
 - 设备级（随执行主机，不随账号）：`zh-CN` | `en`。页面在切换界面语言时写，打开时若与 core 不一致也写一次；成员（读不了设置文档的）不写。值不在这两个里时 core 归一化时去掉它；没有这个键时 core 按 `en` 生成。
 - 只用于生成 mod 里需要词的地方（M3 斜杠命令的说明）。模块按语言生成，语言变了，下一次画布启动前 core 把 mod 模块重写。
 
+## 59. Claude Code mod 的斜杠命令与 ACP 挂载
+
+自协议 1.33 起（M3）。§57 的 mod 多两件事；没有新路由、没有新的答复形状，命令走的就是 hook 面现有的 `/control/<verb>` 画布动词（`collab/control/index.ts::VERBS`）。设计见 [Claude Code mods](../design/claude-mods.md) §5。
+
+### 59.1 `/armadra-*` 斜杠命令
+
+mod 在 `session.start` 用 `$.command.register` 注册七条命令（都是 `immediate`，回合进行中敲也立即执行），每条由自己的 `command.run` hook 应答（字面 matcher，不调 `next`）：
+
+| 命令             | 画布动词     | 提示（`argumentHint`）                                        |
+| ---------------- | ------------ | ------------------------------------------------------------- |
+| `/armadra-post`  | `post`       | `--to NAME --key KEY --body TEXT`                             |
+| `/armadra-inbox` | `inbox`      | `[--limit N] [--after SEQ]`                                   |
+| `/armadra-ack`   | `ack`        | `--id ID`                                                     |
+| `/armadra-send`  | `send`       | `--to ID --body TEXT [--key KEY] [--no-queue \| --interrupt]` |
+| `/armadra-team`  | `team`       | `--member "AGENT\|TITLE\|TASK"... [--chain]`                  |
+| `/armadra-open`  | `open-agent` | `--agent ID [--task TEXT]`                                    |
+| `/armadra-list`  | `list`       | 无                                                            |
+
+- 执行：命令后面的文字按 POSIX shell 的规则切成词（空白分隔，`'…'` 原样，`"…"` 里只认 `\"` `\\` `\$` `` \` ``，引号外的 `\` 取下一个字符，不做任何展开；引号没闭合时不执行），再以 `$.process.run` 起 `armadra-hook canvas <动词> <词…>`。所以旗标规则、`ack` 带的会话绑定、超时与每一句答复、拒绝都是客户端与 core 的，和模型经 Bash 或画布 MCP 调同一个动词完全一样。成功时命令的输出是客户端的 stdout，失败时是它的那一行 stderr；不在画布节点里、引号没闭合、客户端起不来时各答一句短文。
+- 不经模型：命令自己应答，不产生模型回合，不消耗 token。可见名就是 `/armadra-<名>`（2.1.293 与 2.1.296 实测不加插件前缀）。
+- 说明文字按设备设置 `ui.locale`（§57.6）选 `zh-CN` / `en`，缺省英文；文案在 `apps/web/src/i18n/mod-commands.ts`，core 生成源码时用它的镜像。
+- `MOD_REVISION` 升为 3（M2 升到 2）。
+
+### 59.2 ACP 下挂 mod
+
+- 以 ACP 驱动的 Claude 节点（`claude-agent-acp`），适配器进程的环境多两条：`CLAUDE_CODE_PLUGIN_DIRS` 末尾加上 `<数据目录>/integration/claude/mod`（原有的值保留，按平台的路径分隔符拼接），`ARMADRA_MOD_PROFILE=acp`。只挂 mod，不挂技能插件（画布工具在 ACP 下走 MCP）。节点自己的地址变量（`ARMADRA_NODE_ID`、`ARMADRA_ENDPOINT_FILE`、`ARMADRA_SESSION_ID` 等）照旧在适配器环境里。
+- 门：与终端驱动同一个 `CLAUDE_MODS_MIN = 2.1.293`，但版本是适配器**自带**的 Claude Code：适配器包旁边 `@anthropic-ai/claude-agent-sdk/package.json` 的 `claudeCodeVersion`。读不到、设了 `CLAUDE_CODE_EXECUTABLE`、Windows 或执行主机上的适配器一律不挂。
+- `profile = acp` 时 mod 不转发 `classic.*`、不画状态栏，只注册 §59.1 的命令并发 §57.3 的 hello（`profile: "acp"`）：节点状态只有 ACP 会话一个写者（`state_source = 'acp'`）。命令经适配器的 `available_commands_update` 进会话日志的 `snapshot.availableCommands`（§49），在会话里发 `/armadra-list` 这样的提示由 mod 应答，回答作为 assistant 文本记进镜像。
+- 挂了 mod 的 Claude 适配器不再预启动（§51）：mod 靠节点身份找端点，预启动的进程还没有节点。门关着时照旧预启动。
+- 不写数据库迁移；`HOOK_CLIENT_REVISION` 不动；没有新 procedure。
+
 ## 60. 断言范围、授予租约与会话分享（`scp` / `role`、`target`、`links.scope`）
 
 自协议 1.32 起，钉协议包 0.3.0（平台协议 1.1）。分享有三档：整台主机、一个工作空间、那个工作空间里的一个终端 / ACP 会话（只读）。三档在 core 都落为一张邀请、兑换成一条授予，core 是判定点；远程服务签的断言 `scp` 与只读中继令牌 `ro` 是同一范围在云端的写法与边缘的纵深防御。实现在 `core/identity/{scopes,roles,authorize,route-access,accounts}.ts`、`core/identity/cloud/login.ts`、`core/sources/share-links.ts`，迁移 `0045_grant_scope.sql`。

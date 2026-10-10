@@ -15,6 +15,7 @@ import {
   claudeModTypes,
 } from "./template";
 import { MOD_CLASSIC_EVENTS } from "./status";
+import { MOD_COMMANDS } from "./commands";
 import { claudeModPluginTest } from "./plugin-test";
 
 /**
@@ -102,7 +103,7 @@ describe("the Claude Code mod", () => {
     expect(source).not.toMatch(/\bimport\s*\(/);
     const imports = source.match(/^import .*$/gm) ?? [];
     expect(imports).toEqual([
-      'import type { EngineInterface, Register, RenderElement, SessionStartInput } from "claude-code";',
+      'import type { CommandRunResult, EngineInterface, Register, RenderElement, SessionStartInput } from "claude-code";',
       'import type { ArmadraModLink, ArmadraModOverlay } from "./armadra-state";',
     ]);
     expect(source).not.toMatch(/\$\.env\.set\b/);
@@ -124,8 +125,11 @@ describe("the Claude Code mod", () => {
       expect(source, forbidden).not.toContain(forbidden);
     }
     // Every hook passes its event on, unchanged; the band's draws or hands
-    // the band on (twice), and nothing else.
-    const hooks = source.match(/on\("[^"]+"/g) ?? [];
+    // the band on (twice), and nothing else; a slash command's answers for
+    // itself (commands.test.ts).
+    const hooks = (source.match(/on\("[^"]+"/g) ?? []).filter(
+      (hook) => hook !== 'on("command.run"',
+    );
     expect(hooks.length).toBe(MOD_CLASSIC_EVENTS.length + 2);
     expect(source.match(/return next\(e\);/g)?.length).toBe(hooks.length + 1);
     expect(
@@ -190,12 +194,14 @@ describe("the Claude Code mod", () => {
     const module = (await import(
       `data:text/javascript;base64,${Buffer.from(js).toString("base64")}`
     )) as { register: (on: unknown) => void };
-    const hooks = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+    type Hook = (...args: unknown[]) => Promise<unknown>;
+    const hooks = new Map<string, Hook[]>();
     const on = (event: string, ...rest: unknown[]) => {
-      hooks.set(
-        event,
-        rest[rest.length - 1] as (...args: unknown[]) => Promise<unknown>,
-      );
+      const hook = rest[rest.length - 1] as Hook;
+      const matcher = rest.length > 1 ? (rest[0] as { command?: string }) : {};
+      const key =
+        matcher.command === undefined ? event : `${event}:${matcher.command}`;
+      hooks.set(key, [...(hooks.get(key) ?? []), hook]);
       return { catch: () => {} };
     };
     // The JSX factory is a global of the module's environment.
@@ -269,18 +275,20 @@ describe("the Claude Code mod", () => {
     };
     const raise = async (event: string, e: unknown) => {
       const passed: unknown[] = [];
-      const hook = hooks.get(event);
-      if (hook === undefined) throw new Error(`no hook on ${event}`);
-      await hook($, e, async (value: unknown) => {
-        passed.push(value);
-        return {};
-      });
+      const chain = hooks.get(event);
+      if (chain === undefined) throw new Error(`no hook on ${event}`);
+      for (const hook of chain) {
+        await hook($, e, async (value: unknown) => {
+          passed.push(value);
+          return {};
+        });
+      }
       await new Promise((done) => setTimeout(done, 20));
       return passed;
     };
     // The band as the engine asks for it: what the hook drew, or "next".
     const band = async (props: Record<string, unknown>) => {
-      const hook = hooks.get("ui.render");
+      const hook = hooks.get("ui.render")?.[0];
       if (hook === undefined) throw new Error("no band");
       return hook(
         $,
@@ -588,9 +596,18 @@ describe("the Claude Code mod", () => {
       new Set([
         "session.start",
         ...MOD_CLASSIC_EVENTS.map((event) => `classic.${event}`),
+        ...MOD_COMMANDS.map(
+          (command) => `command.run{command=${command.name}}`,
+        ),
         "ui.render{component=AbovePrompt}",
       ]),
     );
+    // A slash command is answered by its own hook, not a gate.
+    for (const command of MOD_COMMANDS) {
+      expect(output).toContain(
+        `answers its own command: command.run{command=${command.name}}`,
+      );
+    }
     expect(output).not.toMatch(/gating hook without \.catch/);
     // Every $.state key the module names is the contract's.
     expect(output).not.toMatch(/not declared|undeclared/i);
