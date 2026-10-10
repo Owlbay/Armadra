@@ -1,0 +1,9 @@
+{
+  "id": "personal-roundtrip-workers",
+  "tier": "b",
+  "script": "tools/probes/personal-roundtrip.mjs",
+  "args": ["--workerd", "{out}"],
+  "requires": ["tmux", "chrome", "cloud"],
+  "platforms": ["darwin", "linux"],
+  "timeoutMinutes": 20
+}

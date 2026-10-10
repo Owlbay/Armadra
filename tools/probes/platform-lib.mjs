@@ -20,6 +20,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { createRequire } from "node:module";
 import { join } from "node:path";
@@ -31,7 +32,7 @@ import { freePort, root, sleep, until } from "./ui-features/harness.mjs";
 
 /* ------------------------------ 对中继的调用 ------------------------------ */
 
-/** 钉着中继 CA 的 HTTPS 调用；答 `{ status, headers, body }`，不因状态码抛错。 */
+/** 钉着中继 CA 的 HTTPS 调用（issuer 是 `http:` 时走明文，本地 workerd 用）；答 `{ status, headers, body }`，不因状态码抛错。 */
 export function relayRaw(
   issuer,
   ca,
@@ -41,14 +42,15 @@ export function relayRaw(
 ) {
   const url = new URL(path, issuer);
   const payload = body === undefined ? undefined : JSON.stringify(body);
+  const plain = url.protocol === "http:";
   return new Promise((done, fail) => {
-    const request = httpsRequest(
+    const request = (plain ? httpRequest : httpsRequest)(
       {
         host: url.hostname,
         port: url.port,
         path: url.pathname + url.search,
         method,
-        ca,
+        ...(plain ? {} : { ca }),
         headers: {
           accept: "application/json",
           ...(payload === undefined
@@ -966,7 +968,7 @@ export async function relayedRoute({
   );
   const socket = (path, list) =>
     new WebSocketImpl(
-      `${relay.issuer.replace(/^https/, "wss")}${base}${path}`,
+      `${relay.issuer.replace(/^http/, "ws")}${base}${path}`,
       list,
       { ca: relay.caPem, servername: "", origin, maxPayload: 64 * 1024 * 1024 },
     );
