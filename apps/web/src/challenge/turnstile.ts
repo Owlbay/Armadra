@@ -5,6 +5,9 @@
  * `/app/challenge` 页（`ChallengeFrame`），那一页也走这里。令牌一次性、300 秒内有效。
  */
 
+/** 登录用的 action，与中继 `RELAY_CHALLENGE_SCOPE=auth.login` 对应。 */
+export const TURNSTILE_LOGIN_ACTION = "armadra-login";
+
 export const TURNSTILE_SCRIPT =
   "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
 
@@ -13,6 +16,8 @@ export interface TurnstileApi {
     container: HTMLElement,
     options: {
       sitekey: string;
+      /** 中继按 action 校验令牌用途（登录 `armadra-login`、接受链接 `armadra-accept`）。 */
+      action?: string;
       theme?: "auto" | "light" | "dark";
       size?: "normal" | "flexible" | "compact";
       callback(token: string): void;

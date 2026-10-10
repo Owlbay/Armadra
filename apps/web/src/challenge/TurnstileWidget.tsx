@@ -2,10 +2,16 @@ import * as React from "react";
 
 import { useT } from "../app/preferences-store";
 import { Spinner } from "@/ui/spinner";
-import { loadTurnstile, type TurnstileApi } from "./turnstile";
+import {
+  loadTurnstile,
+  TURNSTILE_LOGIN_ACTION,
+  type TurnstileApi,
+} from "./turnstile";
 
 export interface TurnstileWidgetProps {
   readonly siteKey: string;
+  /** 令牌用途，中继校验 siteverify 回的 action 是否一致。 */
+  readonly action?: string;
   readonly onToken: (token: string) => void;
   /** 组件载不进来或判定失败：面板给「重试」。 */
   readonly onError?: () => void;
@@ -16,6 +22,7 @@ export interface TurnstileWidgetProps {
 /** Turnstile 组件本体：隐式无交互时它自己不显示，需要时在这里渲染。 */
 export function TurnstileWidget({
   siteKey,
+  action = TURNSTILE_LOGIN_ACTION,
   onToken,
   onError,
   load = () => loadTurnstile(),
@@ -37,6 +44,7 @@ export function TurnstileWidget({
         setReady(true);
         widget = turnstile.render(element, {
           sitekey: siteKey,
+          action,
           theme: "auto",
           size: "flexible",
           callback: (token) => handlers.current.onToken(token),
@@ -54,7 +62,7 @@ export function TurnstileWidget({
     };
     // load 是稳定的注入点；换 siteKey 才重渲染。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [siteKey]);
+  }, [siteKey, action]);
   return (
     <div className="flex min-h-[65px] items-center justify-center">
       {!ready && <Spinner aria-label={t("challenge.loading")} />}
