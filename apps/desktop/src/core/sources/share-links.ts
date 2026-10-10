@@ -6,16 +6,22 @@
  * 分享出去的是 `<url>#<secret>.<邀请令牌>`——两样秘密都只在创建时出现，所以整条
  * 链接存进 SecretStore（`armadra-share-links-<serviceId>`），之后才能随时再复制。
  *
+ * **范围**（契约 §60）：整台 / 工作空间 / 会话，可选只读。范围落在本机邀请上
+ * （`targetHost` / `targetWorkspaceId` / `targetSessionId`，只读压成 viewer），core 是
+ * 判定点；远程服务报 `links.scope` 能力时再把范围交给它，访客的断言带 `scp`、只读的
+ * 中继令牌带 `ro`（边缘的纵深防御）。撤链接时连同经它进来的访客一起停用。
+ *
  * **凭据边界**：整条链接只在 SecretStore、`shareLinkCreate` 与 `shareLinkUrl` 的
  * 答案里；不进 SQLite、日志与列表。链接撤销、过期、用尽，或远程服务上已经没有
  * 它时，列表顺手把存着的那份删掉。
  */
 
-import type { ShareLink, ShareLinkState } from "@armadra/shared";
+import type { ShareLink, ShareLinkState, ShareTarget } from "@armadra/shared";
 
 import { CoreFailure, fail } from "../http/errors";
 import { IdentityError } from "../identity/errors";
 import type {
+  LinkScope,
   LinkSummary,
   RemoteClient,
   RemoteEndpoint,
@@ -30,10 +36,91 @@ export interface ShareInvitations {
   issue(input: {
     role: string;
     targetWorkspaceId: string;
+    targetSessionId?: string;
+    targetHost?: boolean;
     ttlMs: number;
     maxUses: number;
   }): { invitationId: string; token: string; expiresAtMs: number };
   revoke(invitationId: string): void;
+  /** 停用经这条链接进来的访客（契约 §60）；答停用了几个。 */
+  disableGuests?(issuer: string, linkId: string): number;
+}
+
+/** 远程服务要知道范围才能签 `scp` / `ro` 的能力（协议 1.1）。 */
+export const LINK_SCOPE_CAPABILITY = "links.scope";
+
+/** 建链接时请求的范围，规范化之后。 */
+interface ShareScope {
+  readonly target: ShareTarget;
+  readonly workspaceId: string;
+  readonly sessionId: string;
+  readonly readOnly: boolean;
+  readonly role: string;
+}
+
+/**
+ * 校验并规范化范围：整台不带工作空间，工作空间要有 id，会话要有工作空间与会话、
+ * 角色总是 viewer、总是只读；只读把角色压成 viewer。不合规答 `bad_request`。
+ */
+export function shareScopeOf(input: {
+  target?: ShareTarget | undefined;
+  workspaceId: string;
+  sessionId?: string | undefined;
+  readOnly?: boolean | undefined;
+  role: string;
+}): ShareScope {
+  const target = input.target ?? "workspace";
+  const sessionId = input.sessionId ?? "";
+  if (target === "host") {
+    if (sessionId !== "") throw fail("bad_request", "整台分享不带会话");
+    const readOnly = input.readOnly === true;
+    return {
+      target,
+      workspaceId: "",
+      sessionId: "",
+      readOnly,
+      role: readOnly ? "viewer" : input.role,
+    };
+  }
+  if (input.workspaceId === "") {
+    throw fail("bad_request", "要分享哪个工作空间");
+  }
+  if (target === "session") {
+    if (sessionId === "") throw fail("bad_request", "要分享哪个会话");
+    return {
+      target,
+      workspaceId: input.workspaceId,
+      sessionId,
+      readOnly: true,
+      role: "viewer",
+    };
+  }
+  if (sessionId !== "") throw fail("bad_request", "工作空间分享不带会话");
+  const readOnly = input.readOnly === true;
+  return {
+    target,
+    workspaceId: input.workspaceId,
+    sessionId: "",
+    readOnly,
+    role: readOnly ? "viewer" : input.role,
+  };
+}
+
+/** 范围 → 远程服务的 `linkScope`（与协议包 `scopeClaims` 同一套语义）。整台可写答 undefined。 */
+export function linkScopeOf(scope: ShareScope): LinkScope | undefined {
+  if (scope.target === "host") {
+    return scope.readOnly ? { readOnly: true } : undefined;
+  }
+  if (scope.target === "session") {
+    return {
+      workspaceId: scope.workspaceId,
+      sessionId: scope.sessionId,
+      readOnly: true,
+    };
+  }
+  return scope.readOnly
+    ? { workspaceId: scope.workspaceId, readOnly: true }
+    : { workspaceId: scope.workspaceId };
 }
 
 /** 本机到远程服务的登记（契约 §31）里这一模块要的两件事。 */
@@ -132,6 +219,39 @@ export class ShareLinks {
     });
   }
 
+  /** 远程服务报没报这条能力；没给能力表时当作有。记着的没有就重问一次。 */
+  private async capable(serviceId: string, name: string): Promise<boolean> {
+    const capable = this.options.capabilities;
+    if (capable === undefined) return true;
+    try {
+      return (
+        (await capable(serviceId, { refresh: false })).includes(name) ||
+        (await capable(serviceId, { refresh: true })).includes(name)
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  /** 撤链接连同访客（契约 §60）：尽力，失败只记一笔——链接已撤、邀请已作废。 */
+  private disableGuests(issuer: string, linkId: string): void {
+    try {
+      const count =
+        this.options.invitations()?.disableGuests?.(issuer, linkId) ?? 0;
+      if (count > 0) {
+        this.options.log.info("disabled guests of a share link", {
+          linkId,
+          count,
+        });
+      }
+    } catch (error) {
+      this.options.log.warn("could not disable guests of a share link", {
+        linkId,
+        code: error instanceof IdentityError ? error.kind : "unknown",
+      });
+    }
+  }
+
   private revokeInvitation(invitationId: string): void {
     if (invitationId === "") return;
     try {
@@ -223,12 +343,16 @@ export class ShareLinks {
   async create(input: {
     serviceId: string;
     workspaceId: string;
+    target?: ShareTarget | undefined;
+    sessionId?: string | undefined;
+    readOnly?: boolean | undefined;
     role: string;
     ttlMs: number;
     maxUses: number;
-    label?: string;
+    label?: string | undefined;
   }): Promise<{ link: ShareLink; url: string }> {
     const issuer = this.options.issuerOf(input.serviceId);
+    const scope = shareScopeOf(input);
     const registrations = this.options.registrations();
     if (registrations?.registered(issuer) !== true) {
       throw fail("cloud_not_registered", "本机还没有分享到这个远程服务");
@@ -241,10 +365,18 @@ export class ShareLinks {
     const { endpoint, accessToken } = await this.options.access(
       input.serviceId,
     );
+    // 只有远程服务报了 `links.scope` 才把范围交给它：旧中继会拒认不得的字段。
+    // 范围本身总落在本机邀请上，交不过去也照样由 core 判定。
+    const linkScope = linkScopeOf(scope);
+    const scoped =
+      linkScope !== undefined &&
+      (await this.capable(input.serviceId, LINK_SCOPE_CAPABILITY));
     const invitation = identity(() =>
       invitations.issue({
-        role: input.role,
-        targetWorkspaceId: input.workspaceId,
+        role: scope.role,
+        targetWorkspaceId: scope.workspaceId,
+        ...(scope.sessionId === "" ? {} : { targetSessionId: scope.sessionId }),
+        ...(scope.target === "host" ? { targetHost: true } : {}),
         ttlMs: Math.min(input.ttlMs, LINK_TTL_MAX_MS),
         maxUses: input.maxUses,
       }),
@@ -256,9 +388,10 @@ export class ShareLinks {
         sourceId,
         invitationId: invitation.invitationId,
         label,
-        role: input.role,
+        role: scope.role,
         expiresAtMs: invitation.expiresAtMs,
         maxUses: input.maxUses,
+        ...(scoped && linkScope !== undefined ? { scope: linkScope } : {}),
       });
       if (!sameOrigin(created.url, issuer)) {
         await this.options.remote
@@ -282,7 +415,8 @@ export class ShareLinks {
         [created.linkId]: {
           url,
           invitationId: invitation.invitationId,
-          workspaceId: input.workspaceId,
+          workspaceId: scope.workspaceId,
+          ...savedScope(scope),
         },
       }));
     } catch (error) {
@@ -303,8 +437,9 @@ export class ShareLinks {
       link: {
         linkId: created.linkId,
         label,
-        role: input.role,
-        workspaceId: input.workspaceId,
+        role: scope.role,
+        workspaceId: scope.workspaceId,
+        ...linkScopeFields(scope.target, scope.sessionId, scope.readOnly),
         createdAtMs: this.now(),
         expiresAtMs,
         uses: 0,
@@ -338,6 +473,7 @@ export class ShareLinks {
     }
     const saved = (await this.options.secrets.shareLinks(serviceId))[linkId];
     if (saved !== undefined) this.revokeInvitation(saved.invitationId);
+    this.disableGuests(this.options.issuerOf(serviceId), linkId);
     await this.update(serviceId, (links) => {
       if (!(linkId in links)) return undefined;
       delete links[linkId];
@@ -346,6 +482,54 @@ export class ShareLinks {
     this.options.log.info("revoked a share link", { serviceId, linkId });
     return {};
   }
+}
+
+function savedScope(scope: ShareScope): Partial<SavedShareLink> {
+  return {
+    ...(scope.target === "workspace" ? {} : { target: scope.target }),
+    ...(scope.sessionId === "" ? {} : { sessionId: scope.sessionId }),
+    ...(scope.readOnly ? { readOnly: true } : {}),
+  };
+}
+
+/** 契约 §60 的三个字段：会话分享带会话 id，只读才写 `readOnly`。 */
+function linkScopeFields(
+  target: ShareTarget,
+  sessionId: string,
+  readOnly: boolean,
+): Pick<ShareLink, "target" | "sessionId" | "readOnly"> {
+  return {
+    target,
+    ...(sessionId === "" ? {} : { sessionId }),
+    ...(readOnly ? { readOnly: true } : {}),
+  };
+}
+
+/** 一行链接的范围：本机存着的优先，其次远程服务记着的，都没有不写。 */
+function rowScope(
+  row: LinkSummary,
+  saved: SavedShareLink | undefined,
+): Pick<ShareLink, "target" | "sessionId" | "readOnly"> {
+  if (saved !== undefined) {
+    return linkScopeFields(
+      saved.target ?? "workspace",
+      saved.sessionId ?? "",
+      saved.readOnly === true,
+    );
+  }
+  const scope = row.scope;
+  if (scope === undefined) return {};
+  const target: ShareTarget =
+    scope.sessionId !== undefined
+      ? "session"
+      : scope.workspaceId !== undefined
+        ? "workspace"
+        : "host";
+  return linkScopeFields(
+    target,
+    scope.sessionId ?? "",
+    scope.readOnly === true,
+  );
 }
 
 /** 远程服务的一行 + 本机存着的那份 → 契约的链接摘要。 */
@@ -359,7 +543,8 @@ function shareLinkOf(
     linkId: row.linkId,
     label: row.label,
     role: row.role,
-    workspaceId: saved[row.linkId]?.workspaceId ?? "",
+    workspaceId: saved[row.linkId]?.workspaceId ?? row.scope?.workspaceId ?? "",
+    ...rowScope(row, saved[row.linkId]),
     createdAtMs: row.createdAtMs,
     expiresAtMs: row.expiresAtMs,
     uses: row.uses,

@@ -4046,6 +4046,37 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - 线上：§58（`GET /node/overlay` 的参数、来源与缓存头，横条规则，`ui.locale`），协议 1.30。
 - 工具：`claude-mod-launch.mjs` 第 6 步，`tools/vendor/claude-mod-api.d.ts` 补了 `$.state`、`clock.every`、`ui.toast`、`ui.resolve`、`h` 与 `ui.render` 的声明。
 
+## 分享三档：整台 / 工作空间 / 会话，断言范围与授予租约（A7-4，契约 §60，迁移 0045，Refs #229，2026-10-10）
+
+做了什么：
+
+- 协议包升到 0.3.0（平台协议 1.1）：vendored tgz、三处 `package.json`、锁文件、`compatibility.json` 的 `platform` 段（版本、协议、sha256、镜像 tag 0.3.0）、dev-stack 镜像 tag；core 的 `hello` 带 1.1。
+- 迁移 0045：`identity_grants` 加 `origin` / `expires_at_ms` / `target_kind` / `target_id`，唯一索引改按目标；`identity_invitations` 加 `target_session_id` / `target_host`。
+- 授权：scope 加可选的资源维度（`ResourceID`，不写进会话快照）；授予按目标编译（整台 = 不带工作空间的角色权限，会话 = `events:read@ws` + `terminal:read@ws#session`），租约到期不编译。路由门只在终端与 ACP 会话的读路径带会话 id 去问，会话查看者只读那一条，其余一切 403——判定点在 core，不依赖中继边缘的 `ro`。
+- 云登录（`identity/cloud/login.ts`、新 `identity/grant-sync.ts`）：断言带 `role` 时把这个人经本签发方的授予整份换成 `scp` 声明的范围（本地授予不动、同目标本地优先）；不带只续租；`ro` / `sess:` 压成只读；带邀请时 `scp` 与邀请终点对不上不兑换；SaaS 登记带 `org` + `role` 免邀请建成员；经云来的授予租约到断言 `exp` + 30 天，每次登录续；审计带 `jti` / `org` / `team` / `role` / `scp`。
+- 分享链接：`shareLinkCreate` 收 `target` / `sessionId` / `readOnly`，邀请按范围签，远程服务报 `links.scope` 才发 `scope`；撤链接连同 `guest:<linkId>:` 的访客停用并撤会话。本机 owner 没有请求身份时签邀请，签发人记成库里的 owner。
+- 页面：新建链接对话框加「范围」（整台 / 工作空间 / 会话）与「只读」开关，会话分享不给角色与开关；列表标出整台与会话。中英文案在 `i18n/sharing.ts`。
+
+实测（macOS arm64）：
+
+- 新单测：迁移 3（旧库升级缺省值与编译不变、按目标唯一索引、租约过期）；授权矩阵 9（资源维度、整台不含本机管理、会话授予只读；路由门四种授予 × 终端 / ACP 读、画布、文件、终端输入 / 附着 / ACP prompt、设置）；云登录 9（`scp` 空旧行为、`ro` 压只读、范围对不上不兑换、会话邀请、整台邀请、SaaS 免邀请与同步、个人中转无邀请仍拒、租约到期与续租、撤链接停用访客）；分享链接 5（只读压 viewer 并交范围、会话与整台、旧中继不发 `scope`、不合规 400、撤链接停用访客）；页面 1（整台只读、会话只读不给角色、列表徽标）。
+- 跨仓：armadra-cloud main（8c921db，0.3.0）源码起个人中转（隔离数据目录、端口 8112），`ARMADRA_PERSONAL_RELAY=1 vitest run src/core/identity/cloud/personal-relay.devstack.integration.test.ts` 8 过：新增的一条经 core `shareLinkCreate`（会话范围）→ 中继 `links.list` 记着 `scope` → 访客 `links.accept` 的断言 `scp = [ws:…, sess:…, ro]`、中继令牌 `ro: true` → core `cloud/login` 授予只读会话 → `shareLinkRevoke` 后访客已停用。联调后按 PID 停了中继。
+- `pnpm check` 过；desktop 单测 5541 过 / 78 跳；`passkey-cdp.live` 一条在本机 Chromium 上 409（main 上同样失败，与本包无关）。
+- `node tools/probes/link-join.mjs`（Docker 里的个人中转来自 armadra-cloud main 源码，协议包 0.3.0，报 `links.scope`；真 Electron，临时 HOME 与数据目录）：第二次全过 22 步（owner 7 次点击生成链接，此时中继收到 `scope.workspaceId`、访客断言带 `ws:`；两个访客各 1 次点击进画布；手机访客另存一槽；撤销后第三个访客被拒；日志无秘密）。第一次手机那一步 `links.accept` 请求被浏览器中止（`ERR_ABORTED`）超时，重跑即过，与范围无关。
+
+没做 / 限制：
+
+- 会话查看者还没有专门的只读页面：链接的落地仍进画布页，画布 403；看终端走现有的 `capture` / ACP 镜像读接口。`/ws` 附着按写判，查看者看不到实时流。
+- 会话授予按设计带 `events:read@ws`，那块工作空间的事件帧对会话查看者可见（不含画布正文接口）；没有按会话过滤事件。
+- 账号页的授予列表只列工作空间授予；整台与会话授予只能经撤链接 / 停用成员收回。
+- `link-join` 探针没有加会话范围那一段（需要页面上的只读查看流）；会话范围的跨仓覆盖在上面的联调用例里。SaaS 的定向邀请（邮箱 / 账号）没有做，等 C8-2。
+
+接口：
+
+- core：`hostRoleScopes` / `sessionViewerScopes` / `grantScopes` / `HOST_WORKSPACE` / `GrantTargetKind`（`roles.ts`）、`resourceOf` 与 `scope(…, resourceId)`（`scopes.ts`）、`compileGrants(accounts, id, nowMs)`、`grant-sync.ts` 的 `applyCloudGrants` / `disableLinkGuests` / `registerExternal` / `putGrantRow` / `GRANT_LEASE_MS`、`assertedGrants`（`cloud/login.ts`）、`shareScopeOf` / `linkScopeOf` / `LINK_SCOPE_CAPABILITY`（`share-links.ts`）；`issueInvitation` 收 `targetSessionId` / `targetHost`。
+- shared：`shareTargetSchema` / `ShareTarget`，`ShareLink` 的 `target` / `sessionId` / `readOnly`，`shareLinkCreate` 入参同名三项。
+- 线上：§60，协议 1.32，协议包 0.3.0。
+
 ## Claude Code mod M3：`/armadra-*` 斜杠命令与 ACP 挂载（契约 §59，2026-10-10）
 
 做了什么：
@@ -4053,7 +4084,7 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - 斜杠命令（`core/hook/install/claude-mod/commands.ts`）：`/armadra-post`、`-inbox`、`-ack`、`-send`、`-team`、`-open`（`open-agent`）、`-list` 七条，`session.start` 里逐条字面量 `$.command.register`（`immediate`），各自一个字面 matcher 的 `command.run` hook 自答、不读 `next`。执行就是 `$.process.run` 起 `armadra-hook canvas <动词> <词…>`：mod 只按 POSIX shell 规则切词，旗标、`ack` 的会话绑定、超时与答复全是客户端与 core 的，和模型经 Bash / 画布 MCP 调同一个动词一样；成功显示 stdout，失败显示客户端那一行 stderr。说明按 `ui.locale` 选中英，缺省英文，文案在 `apps/web/src/i18n/mod-commands.ts`，core 镜像由单测逐键比对。
 - 引擎只许一个不带 matcher 的 `session.start`：改为 `template.ts` 生成唯一的那一个，各段交一个调用（`STATUS_SESSION_START`、`COMMAND_SESSION_START`）；`claudeModSource(clientBin, { locale })`。`MOD_REVISION` 2 → 3（`INTEGRATION_REVISION` 50318）。
 - ACP（`agent/canvas-launch.ts::acpModEnvironment`、`acp/adapters.ts` 的 `injection.mods`、`acp/prestart.ts::bundledClaudeCodeVersion`）：Claude 适配器自带的 Claude Code（SDK 清单 `claudeCodeVersion`）≥ 2.1.293 时，适配器环境加 `CLAUDE_CODE_PLUGIN_DIRS`（接在原值后）与 `ARMADRA_MOD_PROFILE=acp`；只挂 mod 不挂技能。`profile=acp` 下 mod 不转发状态、不画状态栏（M1 已有），只注册命令并发 hello。挂了 mod 的 Claude 适配器不再预启动。
-- 契约 §59，协议 minor 30 → 31（M2 是 30）。
+- 契约 §59，协议 minor 32 → 33（M2 是 30，A7-4 是 32）。
 
 实测（macOS arm64；Claude Code 2.1.293 / 2.1.296 与 claude-agent-acp 0.89.0 用 `npm install --prefix /tmp/…` 装到临时目录，隔离 HOME、假 Messages API、假 key）：
 
@@ -4061,7 +4092,7 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - `ARMADRA_CLAUDE_PROBE=1` 下 2.1.293、2.1.296：`claude plugin validate` 通过，七条命令都是「answers its own command」；`claude plugin test` 全过（新增一条经 `$.command.run` 跑 `/armadra-post` → 客户端 argv）；与 M2 合并后重跑仍过。
 - `claude-mod-launch` 新增场景 7（M2 的横条是 6）：`claude -p '/armadra-list'` 打印的与同一节点 `armadra-hook canvas list` 的相同、假 API 没有新的主循环请求；2.1.293、2.1.296 全过，2.1.293 上模块对引擎自带类型检查通过。
 - 新探针 `claude-mod-acp`（`tools/ci/e2e.d/claude-mod-acp.json`，需求 `claude-acp`，CI 没有时记 skipped）：真 core + 真 claude-agent-acp 0.89.0（与本机 0.88.0）：hello 的 `profile` 为 `acp`；会话日志 `availableCommands` 有七条 `armadra-*`；发 `/armadra-list` 由 mod 答出画布列表（引擎在前面加 `armadra-mod:`）、不问模型；节点状态仍是 `acp` 来源；`~/.claude/settings.json` 前后一致。`$.process.run` 在 SDK 宿主下可用。
-- `pnpm libs:build && pnpm -r --if-present test`：desktop 5536 / 69 跳（首轮两条协议版本断言随 minor 31 更新后重跑通过）、web 4320、shared 384、server 98 / 4 跳、mobile 31、push-relay 9，`node --test scripts/*.test.mjs` 73；live 配置的 `passkey-cdp.live.integration.test.ts` 本机失败（同前几节）。`pnpm --filter @armadra/web typecheck`、`pnpm check` 通过。`--record-compat` 把 `claudeMods.verified` 扩到 2.1.293–2.1.296。
+- `pnpm libs:build && pnpm -r --if-present test`：desktop 5536 / 69 跳（首轮两条协议版本断言随 minor 更新后重跑通过）、web 4320、shared 384、server 98 / 4 跳、mobile 31、push-relay 9，`node --test scripts/*.test.mjs` 73；live 配置的 `passkey-cdp.live.integration.test.ts` 本机失败（同前几节）。`pnpm --filter @armadra/web typecheck`、`pnpm check` 通过。`--record-compat` 把 `claudeMods.verified` 扩到 2.1.293–2.1.296。
 
 没做 / 限制：
 
@@ -4074,5 +4105,5 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 
 - core：`MOD_COMMANDS`、`COMMAND_MESSAGES`、`commandMessages`、`commandDeclarations(locale)`、`COMMAND_REGISTRATIONS`、`COMMAND_SESSION_START`、`ModLocale`；`STATUS_SESSION_START`；`ClaudeModOptions`、`claudeModSource(clientBin, options)`；`acpModEnvironment`、`ACP_MOD_PROFILE`、`AcpInjectionOptions`、`acpInjection(..., options)`；`AcpAdapter.injection.mods`；`bundledClaudeCodeVersion`。
 - web：`i18n/mod-commands.ts`（`mod.command.*`，`REFERENCED_ELSEWHERE` 放行）。
-- 线上：§59，协议 1.31。
+- 线上：§59，协议 1.33。
 - 工具：`tools/probes/claude-mod-acp.mjs`（`findAdapter`、`bundledClaudeCode`）、`claude-mod-launch.mjs` 导出 `fakeApi`、e2e 需求 `claude-acp`、`tools/vendor/claude-mod-api.d.ts` 加 `command.register` / `command.run`。

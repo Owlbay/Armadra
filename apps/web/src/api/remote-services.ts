@@ -1,4 +1,4 @@
-import type { RelayPending, ShareLink } from "@armadra/shared";
+import type { RelayPending, ShareLink, ShareTarget } from "@armadra/shared";
 import { z } from "zod";
 
 import type { ShareRole } from "./accounts";
@@ -342,7 +342,7 @@ export function pendingCode(
 
 /* ------------------------------ 分享链接 ------------------------------- */
 
-export type { ShareLink, ShareLinkState } from "@armadra/shared";
+export type { ShareLink, ShareLinkState, ShareTarget } from "@armadra/shared";
 export { SHARE_LINK_MAX_USES } from "@armadra/shared";
 
 /**
@@ -359,16 +359,29 @@ export async function listShareLinks(serviceId: string): Promise<ShareLink[]> {
  */
 export function createShareLink(input: {
   serviceId: string;
+  /** 契约 §60：整台 / 工作空间 / 会话；缺省工作空间。 */
+  target?: ShareTarget;
+  /** 整台时为空串。 */
   workspaceId: string;
+  sessionId?: string;
+  readOnly?: boolean;
   role: ShareRole;
   ttlMs: number;
   maxUses: number;
   label: string;
 }) {
   const label = input.label.trim().slice(0, 128);
+  const target = input.target ?? "workspace";
   return localClient().sources.shareLinkCreate({
     serviceId: input.serviceId,
-    workspaceId: input.workspaceId,
+    workspaceId: target === "host" ? "" : input.workspaceId,
+    ...(target === "workspace" ? {} : { target }),
+    ...(target === "session" && input.sessionId
+      ? { sessionId: input.sessionId }
+      : {}),
+    ...(input.readOnly === true || target === "session"
+      ? { readOnly: true }
+      : {}),
     role: input.role,
     ttlMs: input.ttlMs,
     maxUses: input.maxUses,

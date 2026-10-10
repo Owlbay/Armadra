@@ -15,8 +15,9 @@ import { hostname } from "node:os";
 import { contract } from "@armadra/shared";
 
 import { AccountsService } from "../identity/accounts";
-import { cloudDomain } from "../identity/cloud";
+import { cloudDomain, cloudProvider } from "../identity/cloud";
 import { currentSubject } from "../identity/gate";
+import { disableLinkGuests } from "../identity/grant-sync";
 import { IdentityStore } from "../identity/store";
 import { CoreFailure, fail } from "../http/errors";
 import { type DomainHandlers, registerProcedures } from "../http/rpc";
@@ -181,6 +182,11 @@ export function install(
       issue: (input) => accounts.issueInvitation(currentSubject(), input),
       revoke: (invitationId) =>
         accounts.revokeInvitation(currentSubject(), invitationId),
+      disableGuests: (issuer, linkId) =>
+        disableLinkGuests(identity, Date.now(), currentSubject(), {
+          provider: cloudProvider(issuer),
+          linkId,
+        }),
     }),
     log: context.log,
     ...(options.now === undefined ? {} : { now: options.now }),

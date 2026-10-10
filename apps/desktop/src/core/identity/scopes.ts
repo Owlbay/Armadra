@@ -20,6 +20,13 @@ export interface Scope {
   readonly Permission: string;
   readonly WorkspaceID: string;
   readonly ExecutionHostID: string;
+  /**
+   * 资源维度（契约 §60）：工作空间里的一个具体对象，今天只有终端 / ACP 会话。
+   * 空 = 不限于某个对象。和工作空间维度同一条规则：受限的授权永远不满足一个
+   * 不带资源的请求，所以「只能看这一条会话」的人读不到画布、也读不到别的会话。
+   * 缺省不写进库（`identity_sessions.scopes` 的旧字节不变）。
+   */
+  readonly ResourceID?: string;
 }
 
 export const MAX_SCOPES = 64;
@@ -76,12 +83,25 @@ export function scope(
   permission: string,
   workspaceId = "",
   executionHostId = "",
+  resourceId = "",
 ): Scope {
-  return {
-    Permission: permission,
-    WorkspaceID: workspaceId,
-    ExecutionHostID: executionHostId,
-  };
+  return resourceId === ""
+    ? {
+        Permission: permission,
+        WorkspaceID: workspaceId,
+        ExecutionHostID: executionHostId,
+      }
+    : {
+        Permission: permission,
+        WorkspaceID: workspaceId,
+        ExecutionHostID: executionHostId,
+        ResourceID: resourceId,
+      };
+}
+
+/** 一条 scope 的资源维度；没写就是空串。 */
+export function resourceOf(value: Scope): string {
+  return value.ResourceID ?? "";
 }
 
 /** 本机壳配对时拿的全套授权。空授权不会悄悄扩张成全权，得这样写出来。 */
@@ -101,28 +121,35 @@ export function normalizeScopes(input: readonly Scope[]): Scope[] {
     if (
       !(PERMISSIONS as readonly string[]).includes(value.Permission) ||
       !validIdentifier(value.WorkspaceID) ||
-      !validIdentifier(value.ExecutionHostID)
+      !validIdentifier(value.ExecutionHostID) ||
+      !validIdentifier(resourceOf(value))
     ) {
+      throw new IdentityError("invalid");
+    }
+    // 对象总在某个工作空间里：一条只写了资源、没写工作空间的授权说不清在哪。
+    if (resourceOf(value) !== "" && value.WorkspaceID === "") {
       throw new IdentityError("invalid");
     }
     // 身份授权不可能只对一个工作空间成立：撤销一台设备是全局动作。
     if (
       value.Permission.startsWith("identity:") &&
-      (value.WorkspaceID !== "" || value.ExecutionHostID !== "")
+      (value.WorkspaceID !== "" ||
+        value.ExecutionHostID !== "" ||
+        resourceOf(value) !== "")
     ) {
       throw new IdentityError("invalid");
     }
   }
   const sorted = [...input]
     .map((value) =>
-      scope(value.Permission, value.WorkspaceID, value.ExecutionHostID),
+      scope(
+        value.Permission,
+        value.WorkspaceID,
+        value.ExecutionHostID,
+        resourceOf(value),
+      ),
     )
-    .sort(
-      (left, right) =>
-        compare(left.Permission, right.Permission) ||
-        compare(left.WorkspaceID, right.WorkspaceID) ||
-        compare(left.ExecutionHostID, right.ExecutionHostID),
-    );
+    .sort(compareScope);
   // Go 的 `slices.Compact`：只去掉相邻的重复项，排过序之后等同于全局去重。
   return sorted.filter(
     (value, index) =>
@@ -159,7 +186,14 @@ export function decodeScopes(wire: Uint8Array): Scope[] {
     // Go 侧用 `DisallowUnknownFields`：多出来的键是一份这个版本读不懂的授权，
     // 忽略它等于悄悄放宽。
     for (const key of Object.keys(record)) {
-      if (!["Permission", "WorkspaceID", "ExecutionHostID"].includes(key)) {
+      if (
+        ![
+          "Permission",
+          "WorkspaceID",
+          "ExecutionHostID",
+          "ResourceID",
+        ].includes(key)
+      ) {
         throw new IdentityError("unauthenticated");
       }
     }
@@ -168,7 +202,8 @@ export function decodeScopes(wire: Uint8Array): Scope[] {
       (record.WorkspaceID !== undefined &&
         typeof record.WorkspaceID !== "string") ||
       (record.ExecutionHostID !== undefined &&
-        typeof record.ExecutionHostID !== "string")
+        typeof record.ExecutionHostID !== "string") ||
+      (record.ResourceID !== undefined && typeof record.ResourceID !== "string")
     ) {
       throw new IdentityError("unauthenticated");
     }
@@ -177,6 +212,7 @@ export function decodeScopes(wire: Uint8Array): Scope[] {
         record.Permission,
         (record.WorkspaceID as string | undefined) ?? "",
         (record.ExecutionHostID as string | undefined) ?? "",
+        (record.ResourceID as string | undefined) ?? "",
       ),
     );
   }
@@ -199,7 +235,8 @@ export function permits(
         (grant.WorkspaceID === "" ||
           grant.WorkspaceID === request.WorkspaceID) &&
         (grant.ExecutionHostID === "" ||
-          grant.ExecutionHostID === request.ExecutionHostID),
+          grant.ExecutionHostID === request.ExecutionHostID) &&
+        (resourceOf(grant) === "" || resourceOf(grant) === resourceOf(request)),
     ),
   );
 }
@@ -213,6 +250,7 @@ function compareScope(left: Scope | undefined, right: Scope): number {
   return (
     compare(left.Permission, right.Permission) ||
     compare(left.WorkspaceID, right.WorkspaceID) ||
-    compare(left.ExecutionHostID, right.ExecutionHostID)
+    compare(left.ExecutionHostID, right.ExecutionHostID) ||
+    compare(resourceOf(left), resourceOf(right))
   );
 }

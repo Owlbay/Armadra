@@ -161,6 +161,7 @@ export {
   remoteSourceSummarySchema,
   SHARE_LINK_MAX_USES,
   shareLinkSchema,
+  shareTargetSchema,
   sourceSessionSchema,
 } from "./sources.js";
 export type {
@@ -174,6 +175,7 @@ export type {
   ShareLinkCreateInput,
   ShareLinkUpdateInput,
   ShareLinkState,
+  ShareTarget,
   SourceSession,
 } from "./sources.js";
 export {

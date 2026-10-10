@@ -39,8 +39,17 @@ let service: SourcesService;
 let links: ShareLinks;
 let logs: string[];
 let registered: boolean;
-let issued: { invitationId: string; maxUses: number; ttlMs: number }[];
+let issued: {
+  invitationId: string;
+  maxUses: number;
+  ttlMs: number;
+  role: string;
+  targetWorkspaceId: string;
+  targetSessionId?: string;
+  targetHost?: boolean;
+}[];
 let revoked: string[];
+let guestsDisabled: string[];
 let serviceId: string;
 
 function code(promise: Promise<unknown>): Promise<string> {
@@ -60,6 +69,7 @@ beforeEach(async () => {
   registered = true;
   issued = [];
   revoked = [];
+  guestsDisabled = [];
   const log = (message: string, fields?: Record<string, unknown>) =>
     logs.push(`${message} ${JSON.stringify(fields ?? {})}`);
   const secrets = new SourceSecrets(() => backend);
@@ -81,7 +91,7 @@ beforeEach(async () => {
     issue(input) {
       if (input.role === "nobody") throw new IdentityError("invalid");
       const invitationId = `inv${issued.length}`.padEnd(32, "0");
-      issued.push({ invitationId, maxUses: input.maxUses, ttlMs: input.ttlMs });
+      issued.push({ ...input, invitationId });
       return {
         invitationId,
         token: `${invitationId}.INVITE${issued.length}`,
@@ -90,6 +100,10 @@ beforeEach(async () => {
     },
     revoke(invitationId) {
       revoked.push(invitationId);
+    },
+    disableGuests(issuer, linkId) {
+      guestsDisabled.push(`${issuer} ${linkId}`);
+      return 1;
     },
   };
   links = new ShareLinks({
@@ -350,5 +364,95 @@ describe("契约 §33.10：改链接备注", () => {
         })
       ).link.label,
     ).toBe("x");
+  });
+});
+
+describe("契约 §60：分享范围", () => {
+  const sentScope = () =>
+    [...world.requests]
+      .reverse()
+      .find((one) => one.method === "POST" && one.url.endsWith("/v1/links"));
+  const bodyOf = (request: ReturnType<typeof sentScope>) =>
+    (request?.body ?? {}) as Record<string, unknown>;
+
+  it("工作空间只读：邀请压成 viewer，中继报 links.scope 时把范围交给它", async () => {
+    const created = await create({ role: "editor", readOnly: true });
+    expect(issued.at(-1)).toMatchObject({
+      role: "viewer",
+      targetWorkspaceId: "ws-1",
+    });
+    expect(bodyOf(sentScope()).scope).toEqual({
+      workspaceId: "ws-1",
+      readOnly: true,
+    });
+    expect(created.link).toMatchObject({
+      role: "viewer",
+      target: "workspace",
+      readOnly: true,
+    });
+    const [listed] = (await links.list(serviceId)).links;
+    expect(listed).toMatchObject({ target: "workspace", readOnly: true });
+  });
+
+  it("会话：邀请指向会话、总是只读；整台：邀请指向整台", async () => {
+    const session = await create({
+      target: "session",
+      sessionId: "t1",
+      role: "driver",
+    });
+    expect(issued.at(-1)).toMatchObject({
+      role: "viewer",
+      targetWorkspaceId: "ws-1",
+      targetSessionId: "t1",
+    });
+    expect(bodyOf(sentScope()).scope).toEqual({
+      workspaceId: "ws-1",
+      sessionId: "t1",
+      readOnly: true,
+    });
+    expect(session.link).toMatchObject({
+      target: "session",
+      sessionId: "t1",
+      readOnly: true,
+    });
+
+    const host = await create({
+      target: "host",
+      workspaceId: "",
+      role: "editor",
+    });
+    expect(issued.at(-1)).toMatchObject({
+      role: "editor",
+      targetWorkspaceId: "",
+      targetHost: true,
+    });
+    // 整台可写没有范围可交：请求里不出现 scope（与旧版同形）。
+    expect("scope" in bodyOf(sentScope())).toBe(false);
+    expect(host.link).toMatchObject({ target: "host", workspaceId: "" });
+  });
+
+  it("中继不报 links.scope：不发 scope，范围照样落在本机邀请上", async () => {
+    world.cloud.capabilities = ["auth.password", "links.source-invite"];
+    await service.remoteCapabilities(serviceId, { refresh: true });
+    const created = await create({ target: "session", sessionId: "t9" });
+    expect("scope" in bodyOf(sentScope())).toBe(false);
+    expect(issued.at(-1)).toMatchObject({ targetSessionId: "t9" });
+    expect(created.link.target).toBe("session");
+  });
+
+  it("范围不合规答 bad_request，不签邀请", async () => {
+    const before = issued.length;
+    expect(await code(create({ target: "session" }))).toBe("bad_request");
+    expect(await code(create({ workspaceId: "" }))).toBe("bad_request");
+    expect(
+      await code(create({ target: "host", workspaceId: "", sessionId: "t1" })),
+    ).toBe("bad_request");
+    expect(issued.length).toBe(before);
+  });
+
+  it("撤链接连同经它进来的访客一起停用", async () => {
+    const created = await create();
+    await links.revoke(serviceId, created.link.linkId);
+    expect(guestsDisabled).toEqual([`${ISSUER} ${created.link.linkId}`]);
   });
 });

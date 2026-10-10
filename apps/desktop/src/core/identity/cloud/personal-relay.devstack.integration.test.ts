@@ -84,12 +84,18 @@ async function call(
   };
 }
 
-async function rpc(procedure: string, input: unknown = {}) {
+async function rpc(procedure: string, input: unknown = {}, token?: string) {
   const response = await fetch(
     `${base}/api/rpc/${procedure.replaceAll(".", "/")}`,
     {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        // 签邀请要一个真的签发人（`issued_by` 外键）：带 owner 的会话。
+        ...(token === undefined
+          ? {}
+          : { origin: ORIGIN, authorization: `Bearer ${token}` }),
+      },
       body: JSON.stringify({ json: input }),
     },
   );
@@ -333,6 +339,102 @@ describe.skipIf(!enabled)("个人中转联调（契约 §31）", () => {
       expect.arrayContaining(["cloud.login", "invitation.accept.link"]),
     );
     await relay("DELETE", `/v1/links/${link.body.linkId as string}`);
+  });
+
+  /** JWS 的声明段（不验签，只看中继签了什么）。 */
+  function claimsOf(token: string): Record<string, unknown> {
+    return JSON.parse(
+      Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8"),
+    ) as Record<string, unknown>;
+  }
+
+  it("会话范围的链接（契约 §60）：经 core 建链接，中继签 scp 与 ro，core 授予只读会话；撤链接连同访客停用", async () => {
+    const { serviceId } = await remoteRow();
+    const created = await rpc(
+      "sources.shareLinkCreate",
+      {
+        serviceId,
+        target: "session",
+        workspaceId: "ws-devstack",
+        sessionId: "t-devstack",
+        role: "driver",
+        ttlMs: 60 * 60 * 1000,
+        maxUses: 2,
+        label: "session",
+      },
+      owner.accessToken,
+    );
+    expect(created.status, created.text).toBe(200);
+    const { link, url } = (
+      created.body as {
+        json: {
+          link: { linkId: string; role: string; target?: string };
+          url: string;
+        };
+      }
+    ).json;
+    expect(link).toMatchObject({ role: "viewer", target: "session" });
+    const fragment = new URL(url).hash.slice(1);
+    const dot = fragment.indexOf(".");
+    const secret = fragment.slice(0, dot);
+    const invitationToken = fragment.slice(dot + 1);
+    const listed = await relay("GET", `/v1/links?sourceId=${store.hostId()}`);
+    expect(
+      (listed.body.links as { linkId: string; scope?: unknown }[]).find(
+        (one) => one.linkId === link.linkId,
+      )?.scope,
+    ).toEqual({
+      workspaceId: "ws-devstack",
+      sessionId: "t-devstack",
+      readOnly: true,
+    });
+
+    const accepted = await relay(
+      "POST",
+      `/v1/links/${link.linkId}/accept`,
+      {
+        linkId: link.linkId,
+        secret,
+        device: { platform: "desktop", name: "guest" },
+      },
+      "",
+    );
+    expect(accepted.status, JSON.stringify(accepted.body)).toBe(200);
+    expect(claimsOf(accepted.body.assertion as string).scp).toEqual([
+      "ws:ws-devstack",
+      "sess:t-devstack",
+      "ro",
+    ]);
+    expect(claimsOf(accepted.body.relayToken as string).ro).toBe(true);
+    const login = await call("POST", "/api/identity/cloud/login", {
+      assertion: accepted.body.assertion,
+      invitationToken,
+    });
+    expect(login.status, login.text).toBe(200);
+    const principalId = (login.body.principal as { principalId: string })
+      .principalId;
+    const grants = store.transaction((tx) =>
+      tx.accounts.grantsFor(principalId),
+    );
+    expect(
+      grants.map((grant) => [
+        grant.targetKind,
+        grant.workspaceId,
+        grant.targetId,
+        grant.role,
+      ]),
+    ).toEqual([["session", "ws-devstack", "t-devstack", "viewer"]]);
+
+    const revoked = await rpc(
+      "sources.shareLinkRevoke",
+      { serviceId, linkId: link.linkId },
+      owner.accessToken,
+    );
+    expect(revoked.status, revoked.text).toBe(200);
+    expect(
+      store.transaction((tx) => tx.accounts.principal(principalId))
+        ?.disabledAtMs,
+    ).toBeGreaterThan(0);
   });
 
   /** 中继的源目录（owner 视角）里有没有这台 core。 */
