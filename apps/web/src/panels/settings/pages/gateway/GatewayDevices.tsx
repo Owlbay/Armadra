@@ -1,4 +1,5 @@
 import * as React from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 
 import { usePreferencesStore, useT } from "../../../../app/preferences-store";
 import type { IdentityDevicePage } from "../../../../api/identity";
@@ -39,6 +40,8 @@ export interface GatewayDevicesProps {
   hasMore?: boolean;
   loadingMore?: boolean;
   onMore?(): void;
+  /** 设备所属主体的来源名；没有中转来源时答 null，表不分组。 */
+  originOf?(principalId: string): string | null;
 }
 
 /**
@@ -61,6 +64,7 @@ export function GatewayDevices({
   hasMore = false,
   loadingMore = false,
   onMore,
+  originOf,
 }: GatewayDevicesProps) {
   const t = useT();
   const locale = usePreferencesStore((state) => state.locale);
@@ -78,8 +82,17 @@ export function GatewayDevices({
       }),
     [locale],
   );
+  const [folded, setFolded] = React.useState<ReadonlySet<string>>(new Set());
   const active = devices.filter((device) => device.revokedAtMs === 0);
   if (active.length === 0) return null;
+  const groups: { origin: string | null; devices: GatewayDevice[] }[] = [];
+  for (const device of active) {
+    const origin = originOf?.(device.principalId) ?? null;
+    const group = groups.find((one) => one.origin === origin);
+    if (group) group.devices.push(device);
+    else groups.push({ origin, devices: [device] });
+  }
+  const grouped = groups.some((group) => group.origin !== null);
 
   return (
     <section className="flex min-w-0 flex-col gap-2">
@@ -99,68 +112,104 @@ export function GatewayDevices({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {active.map((device) => (
-              <TableRow key={device.deviceId}>
-                <TableCell className="max-w-[16rem] truncate font-medium">
-                  {device.name || device.deviceId}
-                  {device.deviceId === currentDeviceId && (
-                    <Badge variant="secondary" className="ml-2">
-                      {t("gateway.devices.current")}
-                    </Badge>
-                  )}
-                </TableCell>
-                <TableCell className="text-muted-foreground">
-                  {device.platform
-                    ? t(`gateway.devices.platform.${device.platform}`)
-                    : "—"}
-                </TableCell>
-                <TableCell className="text-muted-foreground tabular-nums">
-                  {device.createdAtMs > 0
-                    ? date.format(device.createdAtMs)
-                    : "—"}
-                </TableCell>
-                <TableCell className="text-muted-foreground tabular-nums">
-                  {device.lastSeenAtMs !== undefined && device.lastSeenAtMs > 0
-                    ? dateTime.format(device.lastSeenAtMs)
-                    : "—"}
-                </TableCell>
-                <TableCell>
-                  <Badge
-                    variant={device.role === "owner" ? "secondary" : "outline"}
-                  >
-                    {t(
-                      device.role === "owner"
-                        ? "gateway.devices.role.owner"
-                        : "gateway.devices.role.member",
-                    )}
-                  </Badge>
-                </TableCell>
-                <TableCell className="text-right">
-                  {!canRevoke ? null : revoking === device.deviceId ? (
-                    <Spinner
-                      className="ml-auto"
-                      aria-label={t("gateway.devices.revoke")}
-                    />
-                  ) : (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      className="text-destructive"
-                      disabled={revoking !== null}
-                      aria-label={t("gateway.devices.revokeNamed", {
-                        name: device.name || device.deviceId,
-                      })}
-                      onClick={(event) => {
-                        trigger.current = event.currentTarget;
-                        setConfirm(device);
-                      }}
-                    >
-                      {t("gateway.devices.revoke")}
-                    </Button>
-                  )}
-                </TableCell>
-              </TableRow>
+            {groups.map((group) => (
+              <React.Fragment key={group.origin ?? ""}>
+                {grouped && group.origin !== null && (
+                  <TableRow>
+                    <TableCell colSpan={6} className="py-1">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="-ml-2 gap-1 text-[12px] text-muted-foreground"
+                        aria-expanded={!folded.has(group.origin)}
+                        onClick={() =>
+                          setFolded((previous) => {
+                            const next = new Set(previous);
+                            const origin = group.origin as string;
+                            if (!next.delete(origin)) next.add(origin);
+                            return next;
+                          })
+                        }
+                      >
+                        {folded.has(group.origin) ? (
+                          <ChevronRight />
+                        ) : (
+                          <ChevronDown />
+                        )}
+                        {group.origin} · {group.devices.length}
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                )}
+                {!(group.origin !== null && folded.has(group.origin)) &&
+                  group.devices.map((device) => (
+                    <TableRow key={device.deviceId}>
+                      <TableCell className="max-w-[16rem] truncate font-medium">
+                        {device.name || device.deviceId}
+                        {device.deviceId === currentDeviceId && (
+                          <Badge variant="secondary" className="ml-2">
+                            {t("gateway.devices.current")}
+                          </Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {device.platform
+                          ? t(`gateway.devices.platform.${device.platform}`)
+                          : "—"}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground tabular-nums">
+                        {device.createdAtMs > 0
+                          ? date.format(device.createdAtMs)
+                          : "—"}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground tabular-nums">
+                        {device.lastSeenAtMs !== undefined &&
+                        device.lastSeenAtMs > 0
+                          ? dateTime.format(device.lastSeenAtMs)
+                          : "—"}
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant={
+                            device.role === "owner" ? "secondary" : "outline"
+                          }
+                        >
+                          {t(
+                            device.role === "owner"
+                              ? "gateway.devices.role.owner"
+                              : "gateway.devices.role.member",
+                          )}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {!canRevoke ? null : revoking === device.deviceId ? (
+                          <Spinner
+                            className="ml-auto"
+                            aria-label={t("gateway.devices.revoke")}
+                          />
+                        ) : (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            className="text-destructive"
+                            disabled={revoking !== null}
+                            aria-label={t("gateway.devices.revokeNamed", {
+                              name: device.name || device.deviceId,
+                            })}
+                            onClick={(event) => {
+                              trigger.current = event.currentTarget;
+                              setConfirm(device);
+                            }}
+                          >
+                            {t("gateway.devices.revoke")}
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+              </React.Fragment>
             ))}
           </TableBody>
         </Table>
