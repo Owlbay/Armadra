@@ -26,6 +26,7 @@ import {
 } from "../../../../api/security";
 import { GatewayDevices, type GatewayDevice } from "./GatewayDevices";
 import { SettingsGroup } from "../../SettingsGroup";
+import { useOrigins } from "../origins";
 import { GatewayPanel } from "./GatewayPanel";
 
 const DEVICES_QUERY_KEY = [...GATEWAY_QUERY_KEY, "devices"] as const;
@@ -94,6 +95,7 @@ export function GatewayDevicesSection({
   }
 
   const list = devices.data?.pages.flatMap((page) => page.devices) ?? null;
+  const origins = useOrigins(list?.map((device) => device.principalId) ?? []);
   if (!list) return null;
   return (
     <GatewayDevices
@@ -101,6 +103,7 @@ export function GatewayDevicesSection({
       revoking={revoking}
       onRevoke={(device) => void revoke(device)}
       currentDeviceId={identity?.deviceId ?? null}
+      originOf={origins.label}
       // owner 一定能撤销；成员要会话里带管理权。
       canRevoke={owner || Boolean(identity?.canManage)}
       hasMore={devices.hasNextPage}

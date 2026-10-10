@@ -3984,6 +3984,37 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - 线上：§57（hook 的 `terminalBinding` 可缺 `sourceRevision`、`POST /node/mod`、`GET /node/overlay` 501、`agents.integration.mods`），协议 1.29。
 - 工具：`tools/probes/claude-mod-launch.mjs`（`findClaude`、`--record-compat`）、e2e 需求 `claude`、`compatibility.json` 的 `claudeMods`、`tools/vendor/claude-mod-api.d.ts`。
 
+## A7-3 签发方与设备分组（Refs #229）
+
+做了什么：
+
+- 设置「账号与共享」的成员行与待用邀请行标出签发方（来自哪个中转 / 本机）；「设备与会话」的已配对设备按来源分组，组头可折叠，显示来源与台数。
+- 来源只读现有字段：本机 `sources.list` 的 `remotes[].issuer` 算出 `cloud:<SHA-256 前 16 位>`，与 `accounts.credentials.list` 里未撤销凭据的 `provider` 比对；对不上或读不到都算本机。邀请取 `issuedBy` 的来源，设备取 `principalId` 的来源。
+- 全是本机来源时不多出任何一列或分组，界面与以前一致。不改 core 与契约。
+
+实测：`pnpm --filter @armadra/web typecheck`；`src/panels/settings/pages` 下 39 个测试文件 276 条通过（新增：成员签发方显示 / 隐藏、设备分组与折叠、无中转不分组）。
+
+没做 / 偏离：
+
+- 邀请本身没有来源字段，显示的是签发者的来源；设备按来源分组，没有按 `(来源, 名字)` 合并同名设备（合并会藏起可撤销的行）。
+- `listOrigins` 的摘要比对没有单测（依赖 WebCrypto），由页面测试替身覆盖。
+
+接口：`api/accounts.ts` 的 `listOrigins`、`Origin`；`GatewayDevices` 的可选 `originOf`；i18n `sharing.origin.local`。
+
+## 三端统一版本线（#245）
+
+做了什么：
+
+- `version.mjs` 只剩 `check / set / print`；`VERSION_SITES` 重新纳入 `apps/mobile/package.json`，删除 `mobile` 子命令与 `mobile-v*` 标签；`check` 一并校验原生工程派生、协议门槛（`compatibility.json` 的 `mobile.minimumHostProtocol`）与根 `CHANGELOG.md` 有本版本一节。`release:check` 只剩一条。
+- `apps/mobile/package.json` 由 1.1.0 对齐到 0.2.6（本 PR 不改套件版本）；构建号仍是 `git rev-list --count HEAD`，单调递增、不回退。`app-version.mjs` 对预发布版本取 `X.Y.Z` 核心作商店版本名。
+- `apps/mobile/CHANGELOG.md` 并回根 `CHANGELOG.md`（0.2.5、0.2.6 下的「手机与平板」小节）；nightly 的移动端产物名用统一版本；文档 `ci-release.md` §2.8 与 `.github/CONTRIBUTING.md` 写明版本规则。
+
+实测：`version.test.mjs`、`app-version.test.mjs`、`pnpm release:test`、`release:check`、`ci:workflows`、`pnpm check`。
+
+没做：下一次统一发版 0.3.0 由发布时 `version.mjs set 0.3.0` 完成。
+
+接口：`version.mjs` 导出 `checkMobile({base, mobile})`（不再收 `tag`）、`checkChangelog`；移除 `mobileVersion`、`setMobileVersion`、`MOBILE_CHANGELOG`、`MOBILE_TAG_PREFIX`。
+
 ## Claude Code mod M3：`/armadra-*` 斜杠命令与 ACP 挂载（契约 §59，2026-10-10）
 
 做了什么：

@@ -6,6 +6,7 @@ import {
   rememberCsrf,
   type IdentitySession,
 } from "./identity";
+import { localClient } from "./client";
 import { identityRpc } from "./identity-rpc";
 
 /**
@@ -315,4 +316,68 @@ export async function revokeGrant(input: {
   subjectId: string;
 }): Promise<void> {
   await identityRpc((client) => client.accounts.grants.revoke(input));
+}
+
+/* --------------------------------- 签发方 --------------------------------- */
+
+/** 主体来自哪里：本机，或某个中转（按登记的服务标签）。 */
+export type Origin =
+  | { readonly kind: "local" }
+  | { readonly kind: "relay"; readonly label: string };
+
+const LOCAL: Origin = { kind: "local" };
+
+async function providerOf(issuer: string): Promise<string> {
+  const bytes = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(issuer),
+  );
+  const hex = Array.from(new Uint8Array(bytes), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+  // 与 core 的映射凭据 provider 同一写法（契约 §31）。
+  return `cloud:${hex.slice(0, 16)}`;
+}
+
+/**
+ * 每个主体的来源：映射凭据 `provider` 是 `cloud:<issuer 摘要>` 的，来自对应
+ * 中转；其余（口令、本机建的）算本机。只读现有字段，任一步读不到都按本机。
+ */
+export async function listOrigins(
+  principalIds: readonly string[],
+): Promise<Record<string, Origin>> {
+  const labels = new Map<string, string>();
+  try {
+    const { remotes } = await localClient().sources.list({});
+    for (const remote of remotes) {
+      labels.set(
+        await providerOf(remote.issuer),
+        remote.label || remote.issuer,
+      );
+    }
+  } catch {
+    // 没有本机 core 的页面（托管）：全部算本机。
+  }
+  const result: Record<string, Origin> = {};
+  await Promise.all(
+    principalIds.map(async (principalId) => {
+      result[principalId] = LOCAL;
+      if (labels.size === 0) return;
+      try {
+        const { credentials } = await identityRpc((client) =>
+          client.accounts.credentials.list({ principalId }),
+        );
+        for (const credential of credentials) {
+          const label = labels.get(credential.provider);
+          if (credential.revokedAtMs === 0 && label !== undefined) {
+            result[principalId] = { kind: "relay", label };
+            return;
+          }
+        }
+      } catch {
+        // 读不到按本机。
+      }
+    }),
+  );
+  return result;
 }

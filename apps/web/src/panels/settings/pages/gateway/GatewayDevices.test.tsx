@@ -1,4 +1,10 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { usePreferencesStore } from "../../../../app/preferences-store";
@@ -70,5 +76,56 @@ describe("GatewayDevices", () => {
     expect(screen.getByText("Platform")).toBeTruthy();
     expect(screen.getByText("Last seen")).toBeTruthy();
     expect(screen.getByText("Web")).toBeTruthy();
+  });
+
+  it("有中转来源时按来源分组，组头可折叠", () => {
+    const origins: Record<string, string> = {
+      ["a".repeat(32)]: "LAN 中转",
+      ["b".repeat(32)]: "本机",
+    };
+    render(
+      <GatewayDevices
+        devices={[
+          device({
+            deviceId: "1".repeat(32),
+            principalId: "a".repeat(32),
+            name: "手机A",
+          }),
+          device({
+            deviceId: "2".repeat(32),
+            principalId: "a".repeat(32),
+            name: "手机B",
+          }),
+          device({
+            deviceId: "3".repeat(32),
+            principalId: "b".repeat(32),
+            name: "笔记本",
+          }),
+        ]}
+        revoking={null}
+        onRevoke={vi.fn()}
+        originOf={(id) => origins[id] ?? null}
+      />,
+    );
+    const head = screen.getByRole("button", { name: "LAN 中转 · 2" });
+    expect(screen.getByRole("button", { name: "本机 · 1" })).toBeTruthy();
+    expect(screen.getByText("手机A")).toBeTruthy();
+    fireEvent.click(head);
+    expect(screen.queryByText("手机A")).toBeNull();
+    expect(screen.getByText("笔记本")).toBeTruthy();
+    fireEvent.click(head);
+    expect(screen.getByText("手机B")).toBeTruthy();
+  });
+
+  it("没有中转来源时不分组", () => {
+    render(
+      <GatewayDevices
+        devices={[device({ name: "手机" })]}
+        revoking={null}
+        onRevoke={vi.fn()}
+        originOf={() => null}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /·/ })).toBeNull();
   });
 });

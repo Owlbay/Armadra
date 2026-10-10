@@ -145,7 +145,7 @@ TOKEN / SECRET / PASSWORD / CREDENTIAL 字样一律拒绝。
 | 服务器壳           | `pnpm --filter @armadra/server test`、`pnpm --filter @armadra/server typecheck`                                       |
 | 全部包             | `pnpm test`                                                                                                           |
 | 格式 / 类型        | `pnpm format:check`、`pnpm typecheck`                                                                                 |
-| 发布与 CI 脚本     | `pnpm release:test`、`pnpm ci:workflows`、`pnpm release:check`（桌面套件与移动端版本线各查一遍）                      |
+| 发布与 CI 脚本     | `pnpm release:test`、`pnpm ci:workflows`、`pnpm release:check`（三端版本一并查）                                      |
 | 手机壳             | `pnpm --filter @armadra/mobile test`；版本与构建号 `node apps/mobile/scripts/app-version.mjs print`（CI 与发布 §2.8） |
 | 桌面构建（不打包） | `pnpm --filter @armadra/desktop build`                                                                                |
 | 桌面打包           | `pnpm --filter @armadra/desktop dist`                                                                                 |

@@ -1,6 +1,6 @@
 apply plugin: 'com.android.application'
 
-// 移动端有自己的版本线（docs/guides/ci-release.md「移动端版本」）：版本名与版本号都来自
+// 移动端与桌面同一条版本线（docs/guides/ci-release.md「版本规则」）：版本名与版本号都来自
 // apps/mobile/scripts/app-version.mjs 写出的 version.properties（不入库）——版本名是
 // apps/mobile/package.json 的 version，版本号是单调递增的构建号（ARMADRA_BUILD_NUMBER 或提交数），
 // 与 iOS 的 MARKETING_VERSION / CURRENT_PROJECT_VERSION 同出一处。
