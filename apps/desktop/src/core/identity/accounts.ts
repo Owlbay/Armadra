@@ -572,9 +572,17 @@ export class AccountsService {
         throw new IdentityError("notFound");
       }
       const expiresAtMs = now + invitationTtl(input.ttlMs);
+      // 没有请求身份时的本机 owner（桌面壳、core 自己的动作）主体 id 是空串：签发人
+      // 记成库里那一个 owner（`issued_by` 是外键）。
+      const issuedBy =
+        actor.principalId !== ""
+          ? actor.principalId
+          : actor.kind === "owner"
+            ? (tx.accounts.owner()?.principalId ?? "")
+            : "";
       tx.accounts.createInvitation({
         invitationId,
-        issuedBy: actor.principalId,
+        issuedBy,
         targetGroupId,
         targetWorkspaceId,
         role,
