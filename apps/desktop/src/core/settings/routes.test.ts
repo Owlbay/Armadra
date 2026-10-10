@@ -97,6 +97,7 @@ describe("GET /api/settings", () => {
       "push.apns.keyFile",
       "push.fcm.serviceAccountFile",
       "cloud.relay",
+      "ui.locale",
     ]);
   });
 });

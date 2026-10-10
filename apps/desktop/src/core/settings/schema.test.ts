@@ -457,3 +457,17 @@ describe("custom agents", () => {
     expect(validAgentId("invented")).toBe(false);
   });
 });
+
+describe("ui.locale (contract §57.6)", () => {
+  it("is kept when it is a language the mod has, dropped otherwise, never created", () => {
+    expect(normalize({}).ui).toBeUndefined();
+    expect(object(normalize({ ui: { locale: "en" } }).ui).locale).toBe("en");
+    expect(object(normalize({ ui: { locale: "zh-CN" } }).ui).locale).toBe(
+      "zh-CN",
+    );
+    expect(object(normalize({ ui: { locale: "fr" } }).ui)).toEqual({});
+    expect(object(normalize({ ui: { locale: 3, other: 1 } }).ui)).toEqual({
+      other: 1,
+    });
+  });
+});
