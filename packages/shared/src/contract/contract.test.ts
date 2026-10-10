@@ -236,7 +236,6 @@ describe("§33 与协议包同一份", () => {
       ],
       ["sources.update", "inputSchema", protocol.sourcesUpdateInputSchema],
       ["sources.session", "outputSchema", protocol.sourcesSessionOutputSchema],
-      ["sources.remoteAdd", "inputSchema", protocol.remoteAddInputSchema],
       [
         "sources.remoteSources",
         "outputSchema",
@@ -257,8 +256,24 @@ describe("§33 与协议包同一份", () => {
   });
 });
 
+describe("§62 个人中转登录入参在协议包的形状上追加 challengeToken", () => {
+  it("sources.remoteAdd 的 personal 支是协议包那支的超集", async () => {
+    const protocol = await import("@armadra/platform-protocol/core-api");
+    type Shaped = { shape: Record<string, unknown> };
+    const entry = entries.find((one) => one.name === "sources.remoteAdd");
+    const ours = (def(entry!).inputSchema as unknown as { options: Shaped[] })
+      .options[0]!.shape;
+    const theirs = (protocol.remoteAddInputSchema.options[0] as Shaped).shape;
+    for (const key of Object.keys(theirs))
+      expect(ours[key], key).toBe(theirs[key]);
+    expect(Object.keys(ours).filter((key) => !(key in theirs))).toEqual([
+      "challengeToken",
+    ]);
+  });
+});
+
 describe("§55 在协议包的形状上追加", () => {
-  // 协议包（cloud 仓，0.3.1）还没有 `routes` 与 `defaultLabel`（§61）：这几个
+  // 协议包（cloud 仓，0.3.5）还没有 `routes` 与 `defaultLabel`（§61）：这几个
   // schema 是它的 `extend`，协议包的每个字段逐个沿用同一个对象，只多这两节的字段。
   it("源表行、列表与 session 入参是协议包形状的超集", async () => {
     const protocol = await import("@armadra/platform-protocol/core-api");

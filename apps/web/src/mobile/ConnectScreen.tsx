@@ -27,6 +27,7 @@ import type {
   RelayOutcome,
   RelaySourceChoice,
 } from "./connect";
+import { ChallengeSheet } from "./ChallengeSheet";
 import { FingerprintStep, RelayForm, SourcesStep } from "./ConnectRelay";
 import type { ServiceStatus } from "../services/probe";
 import type { ServiceRow } from "../services/rows";
@@ -55,6 +56,7 @@ export type ConnectFailure =
   | "fingerprint"
   | "offline"
   | "noSources"
+  | "challengeInvalid"
   | "address";
 
 /** 原生 App 里「添加连接」的几个视图（多连接）。 */
@@ -146,6 +148,7 @@ const SHARED_FAILURE_KEY: Partial<Record<ConnectFailure, string>> = {
   linkSecret: "error.linkSecretInvalid",
   invitation: "error.invitationInvalid",
   fingerprint: "error.fingerprintMismatch",
+  challengeInvalid: "error.challengeInvalid",
 };
 
 /** 输入或链接里的主机（带端口），认不出是 `null`。 */
@@ -272,8 +275,39 @@ export function ConnectScreen({
     setFailure(null);
   };
 
+  // 个人中转登录要过人机验证（契约 §62）：记着刚提交的账号口令，令牌到了重提交。
+  const [challenge, setChallenge] = React.useState<{
+    readonly siteKey: string;
+    readonly issuer: string;
+    readonly input: {
+      readonly issuer: string;
+      readonly account: string;
+      readonly password: string;
+    };
+  } | null>(null);
+  const lastRelayInput = React.useRef<{
+    readonly issuer: string;
+    readonly account: string;
+    readonly password: string;
+  } | null>(null);
+
   const apply = (outcome: RelayOutcome) => {
     switch (outcome.kind) {
+      case "challenge": {
+        const input = lastRelayInput.current;
+        const issuerAddress =
+          input === null ? null : issuerOrigin(input.issuer);
+        if (input === null || issuerAddress === null) {
+          setFailure("failed");
+          break;
+        }
+        setChallenge({
+          siteKey: outcome.siteKey,
+          issuer: issuerAddress,
+          input,
+        });
+        break;
+      }
       case "fingerprint":
         setFingerprint(outcome.fingerprint);
         setView("fingerprint");
@@ -564,9 +598,25 @@ export function ConnectScreen({
                 onEdit={() => setFailure(null)}
                 onSubmit={(input) => {
                   setRelayHost(hostOf(input.issuer) ?? "");
+                  lastRelayInput.current = input;
                   void step(() => relay.begin(input));
                 }}
               />
+              {challenge !== null && (
+                <ChallengeSheet
+                  open
+                  issuer={challenge.issuer}
+                  siteKey={challenge.siteKey}
+                  onCancel={() => setChallenge(null)}
+                  onToken={(token) => {
+                    const { input } = challenge;
+                    setChallenge(null);
+                    void step(() =>
+                      relay.begin({ ...input, challengeToken: token }),
+                    );
+                  }}
+                />
+              )}
               <Button
                 type="button"
                 size="lg"

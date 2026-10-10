@@ -52,6 +52,7 @@ import {
   shellCanShare,
   isPairLink,
   listShareLinks,
+  presentedChallenge,
   presentedFingerprint,
   remoteFetch,
   revokeShareLink,
@@ -147,6 +148,50 @@ describe("首次指纹（契约 §33.6）", () => {
     expect(isPairLink("https://gw.test:8443/#pair=abc&fp=x")).toBe(true);
     expect(isPairLink("armadra://pair?host=a&ticket=b")).toBe(true);
     expect(isPairLink("https://gw.test:8443")).toBe(false);
+  });
+});
+
+describe("人机验证（契约 §62）", () => {
+  it("challenge_required 带 siteKey → 转成挑战；带着令牌重调就成功", async () => {
+    rpc.sources.remoteAdd.mockRejectedValueOnce(
+      new RuntimeRequestError(400, "x", "challenge_required", {
+        code: "challenge_required",
+        details: { provider: "turnstile", siteKey: "0xSITE" },
+      }),
+    );
+    const first = await addPersonalRelay({
+      issuer: ISSUER,
+      account: "dev",
+      password: "pw",
+    });
+    expect(first).toEqual({ kind: "challenge", siteKey: "0xSITE" });
+    expect(rpc.sources.remoteAdd.mock.calls[0]![0]).not.toHaveProperty(
+      "challengeToken",
+    );
+    rpc.sources.remoteAdd.mockResolvedValueOnce({ remote: {}, next: "ready" });
+    const second = await addPersonalRelay({
+      issuer: ISSUER,
+      account: "dev",
+      password: "pw",
+      challengeToken: "tk",
+    });
+    expect(second.kind).toBe("done");
+    expect(rpc.sources.remoteAdd.mock.calls[1]![0]).toMatchObject({
+      challengeToken: "tk",
+    });
+  });
+
+  it("没有 siteKey 的 challenge_required、别的码：不当作挑战，原样抛", async () => {
+    const bare = new RuntimeRequestError(400, "x", "challenge_required", {
+      code: "challenge_required",
+    });
+    expect(presentedChallenge(bare)).toBeNull();
+    const invalid = new RuntimeRequestError(400, "x", "challenge_invalid", {});
+    expect(presentedChallenge(invalid)).toBeNull();
+    rpc.sources.remoteAdd.mockRejectedValueOnce(invalid);
+    await expect(
+      addPersonalRelay({ issuer: ISSUER, account: "a", password: "b" }),
+    ).rejects.toBe(invalid);
   });
 });
 

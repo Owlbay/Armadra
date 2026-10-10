@@ -1,7 +1,7 @@
 import {
   clientSourceSchema as protocolClientSourceSchema,
   mountInputSchema,
-  remoteAddInputSchema,
+  remoteAddInputSchema as protocolRemoteAddInputSchema,
   remoteAddOutputSchema as protocolRemoteAddOutputSchema,
   remoteDevicePollOutputSchema,
   remoteServiceSchema as protocolRemoteServiceSchema,
@@ -64,6 +64,17 @@ export const remoteServiceSchema = protocolRemoteServiceSchema.extend({
   defaultLabel: z.string(),
 });
 
+const [personalAddInput, saasAddInput] = protocolRemoteAddInputSchema.options;
+
+/**
+ * `sources.remoteAdd` 的入参：协议包的形状，个人中转那支加可选的 `challengeToken`
+ * （§62）——远程服务的 `platform.info.challenge` 要求挑战时，挑战组件交回的一次性令牌。
+ */
+export const remoteAddInputSchema = z.discriminatedUnion("kind", [
+  personalAddInput.extend({ challengeToken: z.string().max(2048).optional() }),
+  saasAddInput,
+]);
+
 export const remoteAddOutputSchema = protocolRemoteAddOutputSchema.extend({
   remote: remoteServiceSchema,
 });
@@ -95,7 +106,7 @@ export const sourceRouteInputSchema = sourceRouteRefSchema.extend({
   sourceId: sourceIdInputSchema.shape.sourceId,
 });
 
-export { remoteAddInputSchema, remoteSourceSummarySchema };
+export { remoteSourceSummarySchema };
 export const sourceSessionSchema = sourcesSessionOutputSchema;
 
 const empty = z.object({});
@@ -317,6 +328,8 @@ export const sources = {
         "account_locked",
         "rate_limited",
         "fingerprint_mismatch",
+        "challenge_required",
+        "challenge_invalid",
         "source_unreachable",
         "not_implemented",
       ),

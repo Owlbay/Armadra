@@ -465,6 +465,81 @@ describe("添加连接 · 个人中转", () => {
     ).resolves.toEqual({ kind: "failure", failure: "unreachable" });
   });
 
+  it("远程服务要求人机验证：先给 siteKey，带令牌重试才登录；令牌无效有自己的原因（契约 §62）", async () => {
+    const pinned = fakeBridge({
+      peek: { fingerprint: RELAY_FP, trusted: false, pinned: true },
+    });
+    const info = () => ({
+      body: {
+        mode: "personal",
+        issuer: ISSUER,
+        challenge: {
+          provider: "turnstile",
+          siteKey: "0xSITE",
+          scope: ["auth.login"],
+        },
+      },
+    });
+    const net = routedFetch({
+      "GET /.well-known/armadra-platform": info,
+      "POST /v1/auth/login": (init) => {
+        const body = JSON.parse(String(init.body)) as {
+          challenge?: { provider: string; token: string };
+        };
+        if (body.challenge === undefined)
+          return {
+            status: 400,
+            body: { code: "challenge_required", message: "" },
+          };
+        if (body.challenge.token !== "tk-ok")
+          return {
+            status: 400,
+            body: { code: "challenge_invalid", message: "" },
+          };
+        expect(body.challenge.provider).toBe("turnstile");
+        return login();
+      },
+      "GET /v1/me/sources": sourceList,
+    });
+    const enroll = createRelayEnrollment({
+      bridge: pinned.bridge,
+      cloud: { fetch: net.fetch },
+      reload: vi.fn(),
+    });
+    const input = { issuer: ISSUER, account: "owner", password: "pw" };
+    await expect(enroll.begin(input)).resolves.toEqual({
+      kind: "challenge",
+      siteKey: "0xSITE",
+    });
+    await expect(
+      enroll.begin({ ...input, challengeToken: "stale" }),
+    ).resolves.toEqual({ kind: "failure", failure: "challengeInvalid" });
+    const done = await enroll.begin({ ...input, challengeToken: "tk-ok" });
+    expect(done.kind).toBe("sources");
+  });
+
+  it("对端要求挑战却不报 siteKey：当作失败，不弹空面板", async () => {
+    const pinned = fakeBridge({
+      peek: { fingerprint: RELAY_FP, trusted: false, pinned: true },
+    });
+    const net = routedFetch({
+      "GET /.well-known/armadra-platform": () => ({
+        body: { mode: "personal", issuer: ISSUER },
+      }),
+      "POST /v1/auth/login": () => ({
+        status: 400,
+        body: { code: "challenge_required", message: "" },
+      }),
+    });
+    await expect(
+      createRelayEnrollment({
+        bridge: pinned.bridge,
+        cloud: { fetch: net.fetch },
+        reload: vi.fn(),
+      }).begin({ issuer: ISSUER, account: "o", password: "p" }),
+    ).resolves.toEqual({ kind: "failure", failure: "challengeInvalid" });
+  });
+
   it("钉扎失败不往下登录", async () => {
     const store = fakeBridge({
       peek: { fingerprint: RELAY_FP, trusted: false, pinned: false },

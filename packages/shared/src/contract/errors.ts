@@ -95,6 +95,10 @@ export const ERROR_CODES = {
     i18n: "error.cloudAccountUnlinked",
   },
   fingerprint_mismatch: { status: 400, i18n: "error.fingerprintMismatch" },
+  // 远程服务要求客户端挑战令牌（契约 §62，cloud-api §16）：`challenge_required` 的
+  // `details` 带 `{ provider, siteKey }`，页面据此渲染挑战组件后带 `challengeToken` 重调。
+  challenge_required: { status: 400, i18n: "error.challengeRequired" },
+  challenge_invalid: { status: 400, i18n: "error.challengeInvalid" },
   // 远程服务地址与指纹的写法（契约 §33.8）：core 校验时答，页面按码取文案。
   address_invalid: { status: 400, i18n: "error.addressInvalid" },
   address_https_only: { status: 400, i18n: "error.addressHttpsOnly" },

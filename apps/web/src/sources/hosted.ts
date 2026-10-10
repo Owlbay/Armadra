@@ -307,6 +307,7 @@ export type HostedFailure =
   | "credentials"
   | "locked"
   | "rateLimited"
+  | "challengeInvalid"
   | "unreachable"
   | "offline"
   | "unlinked"
@@ -321,6 +322,8 @@ export function hostedFailureOf(error: unknown): HostedFailure {
     if (code === "credentials_invalid") return "credentials";
     if (code === "account_locked") return "locked";
     if (code === "rate_limited") return "rateLimited";
+    if (code === "challenge_invalid" || code === "challenge_required")
+      return "challengeInvalid";
   }
   if (code === SOURCE_ERROR.offline) return "offline";
   if (code === "cloud_account_unlinked" || code === "cloud_not_registered")
@@ -374,8 +377,15 @@ function relayedDescriptor(
 export interface HostedRelay {
   readonly issuer: string;
   readonly provider: CredentialProvider;
-  /** 口令登录远程服务，答它目录里的主机。 */
-  signIn(account: string, password: string): Promise<CloudSource[]>;
+  /**
+   * 口令登录远程服务，答它目录里的主机。远程服务要求挑战而没带令牌时抛
+   * `CloudChallengeRequired`（带 siteKey）；`challengeToken` 是挑战组件交回的令牌。
+   */
+  signIn(
+    account: string,
+    password: string,
+    challengeToken?: string,
+  ): Promise<CloudSource[]>;
   /**
    * 把这台主机装成页面的本机源；失败抛（按 {@link hostedFailureOf} 显示）。
    * 登录时目录里的其余主机随后作为远程源挂进页面源表（同一个标签页同时挂多台）。
@@ -625,13 +635,14 @@ export function createHostedRelay(options: HostedRelayOptions): HostedRelay {
       await hosted.enter({ sourceId: accepted.sourceId, name });
       return accepted.sourceId;
     },
-    async signIn(account, password) {
+    async signIn(account, password, challengeToken) {
       const session = await cloudLogin(
         issuer,
         account,
         password,
         browserDevice(),
         options.cloud,
+        challengeToken,
       );
       if (session.refreshToken === undefined)
         throw new CloudError(502, "bad_response");

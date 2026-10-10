@@ -8,7 +8,11 @@ import {
 } from "@testing-library/react";
 
 import { usePreferencesStore } from "../app/preferences-store";
-import { CloudError, type CloudSource } from "../sources/cloud-client";
+import {
+  CloudChallengeRequired,
+  CloudError,
+  type CloudSource,
+} from "../sources/cloud-client";
 import { SourceError } from "../sources/types";
 import { RelaySignIn } from "./RelaySignIn";
 
@@ -49,6 +53,64 @@ beforeEach(() => {
   usePreferencesStore.setState({ locale: "zh-CN" });
 });
 afterEach(cleanup);
+
+describe("人机验证（契约 §62）", () => {
+  const widget = () => {
+    let deliver: (token: string) => void = () => undefined;
+    const render = vi.fn(
+      (_el: HTMLElement, options: { callback(token: string): void }) => {
+        deliver = options.callback;
+        return "w1";
+      },
+    );
+    window.turnstile = { render, remove: vi.fn() };
+    return { render, deliver: (token: string) => deliver(token) };
+  };
+  afterEach(() => {
+    delete window.turnstile;
+  });
+
+  it("要挑战：不带令牌先升起面板，令牌到了带着账号口令再登录一次", async () => {
+    const turnstile = widget();
+    const target = relay([host(A, "laptop")]);
+    target.signIn.mockImplementationOnce(async () => {
+      throw new CloudChallengeRequired({
+        provider: "turnstile",
+        siteKey: "0xSITE",
+        scope: ["auth.login"],
+      });
+    });
+    // 页面就在中继来源上：直接渲染组件（不内嵌挑战页）。
+    const here = vi
+      .spyOn(globalThis, "location", "get")
+      .mockReturnValue({ origin: ISSUER } as Location);
+    const onEntered = vi.fn();
+    render(<RelaySignIn relay={target} onEntered={onEntered} />);
+    signIn();
+    await waitFor(() => expect(turnstile.render).toHaveBeenCalled());
+    expect(turnstile.render.mock.calls[0]![1]).toMatchObject({
+      sitekey: "0xSITE",
+    });
+    expect(target.signIn).toHaveBeenCalledTimes(1);
+    turnstile.deliver("tk-1");
+    await waitFor(() => expect(onEntered).toHaveBeenCalled());
+    expect(target.signIn).toHaveBeenLastCalledWith("dev", "pw", "tk-1");
+    here.mockRestore();
+  });
+
+  it("令牌无效：提示重试，不再自动弹面板", async () => {
+    const target = relay([host(A, "laptop")]);
+    target.signIn.mockRejectedValueOnce(
+      new CloudError(400, "challenge_invalid"),
+    );
+    render(<RelaySignIn relay={target} onEntered={vi.fn()} />);
+    signIn();
+    await waitFor(() =>
+      expect(screen.getByText("人机验证没有通过，请重试")).toBeTruthy(),
+    );
+    expect(window.turnstile).toBeUndefined();
+  });
+});
 
 describe("中继托管页面的登录", () => {
   it("地址是中转自己，不显示地址栏；口令不对给原因", async () => {
