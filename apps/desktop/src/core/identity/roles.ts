@@ -86,3 +86,58 @@ export function rolePermissions(role: ShareRole): readonly string[] {
     .map((value) => value.Permission)
     .sort();
 }
+
+/**
+ * 整台主机上的一个角色（契约 §60，`target_kind = 'host'`）：和 {@link roleScopes}
+ * 同一张表，只是工作空间维度留空——空的 `WorkspaceID` 就是「所有工作空间，含以后
+ * 建的」。单独成一个函数，免得 {@link roleScopes} 的「工作空间必须写出来」那道闸
+ * 被一个空串悄悄绕过。
+ *
+ * 角色表里没有本机管理（`settings:*`、`identity:*`、`workspace:share`），路由门对
+ * 全局要求的路由照旧只放 owner，所以整台授予不会顺带拿到设置与账号。
+ */
+export function hostRoleScopes(role: ShareRole): readonly Scope[] {
+  if (!isShareRole(role)) throw new IdentityError("invalid");
+  return roleScopes(role, "x").map((value) => scope(value.Permission));
+}
+
+/**
+ * 只看一个会话（契约 §60，`target_kind = 'session'`）：那块工作空间的事件流，
+ * 加那一条会话的终端读（ACP 的读也走 `terminal:read`）。画布、文件、别的会话都
+ * 不在里面；没有任何写。
+ */
+export function sessionViewerScopes(
+  workspaceId: string,
+  sessionId: string,
+): readonly Scope[] {
+  if (workspaceId === "" || sessionId === "") {
+    throw new IdentityError("invalid");
+  }
+  return [
+    scope("events:read", workspaceId),
+    scope("terminal:read", workspaceId, "", sessionId),
+  ];
+}
+
+/** 授予指向什么（迁移 0045）。 */
+export type GrantTargetKind = "host" | "workspace" | "session";
+
+/** 整台授予在 `workspace_id` 列里记的占位：不是任何合法的工作空间 id（`validIdentifier` 拒 `*`）。 */
+export const HOST_WORKSPACE = "*";
+
+/** 一条授予编译出来的 scope。会话授予不论记的角色是什么，一律只读。 */
+export function grantScopes(grant: {
+  readonly targetKind: GrantTargetKind;
+  readonly workspaceId: string;
+  readonly targetId: string;
+  readonly role: ShareRole;
+}): readonly Scope[] {
+  switch (grant.targetKind) {
+    case "host":
+      return hostRoleScopes(grant.role);
+    case "session":
+      return sessionViewerScopes(grant.workspaceId, grant.targetId);
+    default:
+      return roleScopes(grant.role, grant.workspaceId);
+  }
+}

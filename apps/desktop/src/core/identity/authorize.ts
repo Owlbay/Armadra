@@ -1,6 +1,6 @@
 import type { AccountsTx, PrincipalKind } from "./accounts-store";
 import { IdentityError } from "./errors";
-import { type ShareRole, roleScopes } from "./roles";
+import { type ShareRole, grantScopes } from "./roles";
 import { type Scope, permits } from "./scopes";
 import type { IdentityStore } from "./store";
 
@@ -34,14 +34,25 @@ export function isOwner(subject: AuthorizationSubject): boolean {
  *
  * 个人授予与组授予是并集：两者给的都是 scope，而 scope 只有「有」和「没有」，
  * 没有优先级，也就没有「组把个人覆盖掉」这种需要解释的行为。
+ *
+ * 授予按目标编译（契约 §60）：整台 = 不带工作空间的角色 scope，工作空间 = 那块
+ * 工作空间上的角色 scope，会话 = 只读那一条会话。租约到期的不算（库里就滤掉了）。
  */
 export function compileGrants(
   accounts: AccountsTx,
   principalId: string,
+  nowMs = Date.now(),
 ): Scope[] {
   const scopes: Scope[] = [];
-  for (const grant of accounts.grantsFor(principalId)) {
-    scopes.push(...roleScopes(grant.role as ShareRole, grant.workspaceId));
+  for (const grant of accounts.grantsFor(principalId, nowMs)) {
+    scopes.push(
+      ...grantScopes({
+        targetKind: grant.targetKind,
+        workspaceId: grant.workspaceId,
+        targetId: grant.targetId,
+        role: grant.role as ShareRole,
+      }),
+    );
   }
   return scopes;
 }
