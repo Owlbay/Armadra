@@ -28,11 +28,13 @@ import {
 } from "@armadra/platform-protocol/assertion";
 
 import { fail } from "../../http/errors";
+import type { AccountsService } from "../accounts";
 import {
-  type AccountsService,
   type AssertedGrant,
   GRANT_LEASE_MS,
-} from "../accounts";
+  applyCloudGrants,
+  registerExternal,
+} from "../grant-sync";
 import { IdentityError } from "../errors";
 import type { ShareRole } from "../roles";
 import type { IdentityService, SessionCredentials } from "../service";
@@ -174,7 +176,7 @@ export class CloudLogin {
     ) {
       // SaaS：组织就是准入，授予随后按声明同步。
       try {
-        principalId = accounts.registerExternal({
+        principalId = registerExternal(store, this.now(), {
           displayName: clipName(claims.name, claims.sub.slice(0, 64)),
           provider,
           subject: claims.sub,
@@ -233,7 +235,7 @@ export class CloudLogin {
       invitationId = parsed;
     }
 
-    accounts.applyCloudGrants({
+    applyCloudGrants(store, this.now(), {
       principalId,
       provenance,
       ...(claims.role === undefined

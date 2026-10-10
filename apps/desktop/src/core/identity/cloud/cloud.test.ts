@@ -7,6 +7,7 @@ import { type Fixture, fixture } from "../../workspaces/fixture";
 import { AccountsService } from "../accounts";
 import { type AuditEvent, installAuditSink, resetAuditSink } from "../audit";
 import { Authorizer } from "../authorize";
+import { disableLinkGuests } from "../grant-sync";
 import { roleScopes, sessionViewerScopes } from "../roles";
 import { allScopes, scope } from "../scopes";
 import { IdentityService } from "../service";
@@ -1166,7 +1167,7 @@ describe("cloud/login 的范围、角色同步与租约（契约 §60）", () =>
     );
     expect(other.status).toBe(200);
     expect(
-      accounts.disableLinkGuests(ownerSubject(), {
+      disableLinkGuests(store, Date.now(), ownerSubject(), {
         provider: cloudProvider(ISSUER),
         linkId: "lnk_rv",
       }),
@@ -1174,7 +1175,9 @@ describe("cloud/login 的范围、角色同步与租约（契约 §60）", () =>
     expect((await login("guest:lnk_rv:a", {})).status).toBe(403);
     expect((await login("guest:lnk_keep:a", {})).status).toBe(200);
     expect(() =>
-      accounts.disableLinkGuests(
+      disableLinkGuests(
+        store,
+        Date.now(),
         { principalId: principalOf(other), kind: "member", scopes: [] },
         { provider: cloudProvider(ISSUER), linkId: "lnk_keep" },
       ),
