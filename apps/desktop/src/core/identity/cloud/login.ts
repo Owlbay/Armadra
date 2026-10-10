@@ -11,16 +11,28 @@
  * 2. 有映射 → 那个 principal（停用了答 `forbidden`）。
  * 3. 没有映射：带邀请令牌 → 建成员 + 映射 + 兑换邀请（一笔事务）→ `created`；
  *    不带 → `cloud_account_unlinked`。
- * 4. 新建的人带 `org` 声明且设了组织默认角色 → 对每块画布逐条授予。
- * 5. 建设备与会话（`method = "cloud"`），审计 `cloud.login`。
+ * 4. 新建的人带 `org` 声明且设了组织默认角色 → 对每块画布逐条授予（断言不带
+ *    `role` 时的旧行为）。
+ * 5. 契约 §60：断言带 `role` → 这个人经本签发方来的授予整份换成声明的范围（`scp`
+ *    的会话 / 工作空间，都没有 = 整台），本地授予不动；不带 → 只续租。`ro` 或会话
+ *    范围一律压成只读。SaaS 登记的签发方带 `org` + `role` 时不需要邀请就建成员。
+ *    经云来的授予都有租约（断言到期后 30 天），每次登录续。
+ * 6. 建设备与会话（`method = "cloud"`），审计 `cloud.login`（带 `jti` / `org` / `team`）。
  */
 
 import { createHash } from "node:crypto";
 
-import type { AssertionClaims } from "@armadra/platform-protocol/assertion";
+import {
+  type AssertionClaims,
+  parseScopeClaims,
+} from "@armadra/platform-protocol/assertion";
 
 import { fail } from "../../http/errors";
-import type { AccountsService } from "../accounts";
+import {
+  type AccountsService,
+  type AssertedGrant,
+  GRANT_LEASE_MS,
+} from "../accounts";
 import { IdentityError } from "../errors";
 import type { ShareRole } from "../roles";
 import type { IdentityService, SessionCredentials } from "../service";
@@ -57,6 +69,35 @@ export interface CloudLoginOptions {
   /** 组织默认角色（设置 `cloud.orgDefaultRole`，A3-2）；缺省 `null` = 不授予。 */
   readonly orgDefaultRole?: () => ShareRole | null;
   readonly now?: () => number;
+}
+
+/**
+ * 断言的 `role` 与 `scp` → 要同步的授予（契约 §60）。会话要知道它在哪块工作空间：
+ * 取 `scp` 里的第一个 `ws:`，没有就不授予（会话范围必须连同工作空间一起声明）。
+ */
+export function assertedGrants(
+  role: ShareRole,
+  scope: { workspaceIds: readonly string[]; sessionIds: readonly string[] },
+): AssertedGrant[] {
+  if (scope.sessionIds.length > 0) {
+    const workspaceId = scope.workspaceIds[0] ?? "";
+    if (workspaceId === "") return [];
+    return scope.sessionIds.map((sessionId) => ({
+      targetKind: "session",
+      workspaceId,
+      targetId: sessionId,
+      role: "viewer",
+    }));
+  }
+  if (scope.workspaceIds.length > 0) {
+    return scope.workspaceIds.map((workspaceId) => ({
+      targetKind: "workspace",
+      workspaceId,
+      targetId: "",
+      role,
+    }));
+  }
+  return [{ targetKind: "host", workspaceId: "", targetId: "", role }];
 }
 
 function clipName(value: string | undefined, fallback: string): string {
@@ -110,13 +151,43 @@ export class CloudLogin {
       return principal;
     });
 
+    const scope = parseScopeClaims(claims.scp);
+    const provenance = {
+      origin: provider,
+      leaseUntilMs: claims.exp * 1000 + GRANT_LEASE_MS,
+      readOnly: scope.readOnly || scope.sessionIds.length > 0,
+    };
+    const declaresScope =
+      scope.workspaceIds.length > 0 || scope.sessionIds.length > 0;
+
     let principalId: string;
     let created = false;
     let invitationId: string | undefined;
+    const token = input.invitationToken?.trim() ?? "";
     if (mapped !== undefined) {
       principalId = mapped.principalId;
+    } else if (
+      token === "" &&
+      registration.mode === "saas" &&
+      claims.org !== undefined &&
+      claims.role !== undefined
+    ) {
+      // SaaS：组织就是准入，授予随后按声明同步。
+      try {
+        principalId = accounts.registerExternal({
+          displayName: clipName(claims.name, claims.sub.slice(0, 64)),
+          provider,
+          subject: claims.sub,
+          createdVia: "cloud",
+        }).principalId;
+      } catch (error) {
+        if (error instanceof IdentityError) {
+          throw fail("conflict", "这个远程服务账号已经关联到别人");
+        }
+        throw error;
+      }
+      created = true;
     } else {
-      const token = input.invitationToken?.trim() ?? "";
       if (token === "") {
         throw fail("cloud_account_unlinked", "这个账号还没有关联到这台机器");
       }
@@ -128,7 +199,11 @@ export class CloudLogin {
       ) {
         throw fail("invitation_invalid", "邀请无效或已用完");
       }
-      const role = this.options.orgDefaultRole?.() ?? null;
+      // 断言带 `role` 时由它说了算（第 5 步），组织默认角色只是旧签发方的兜底。
+      const role =
+        claims.role === undefined
+          ? (this.options.orgDefaultRole?.() ?? null)
+          : null;
       try {
         principalId = accounts.registerExternalWithInvitation({
           invitationId: parsed,
@@ -137,6 +212,8 @@ export class CloudLogin {
           provider,
           subject: claims.sub,
           createdVia: "cloud",
+          provenance,
+          ...(declaresScope ? { scope } : {}),
           ...(claims.org !== undefined && role !== null
             ? {
                 defaultRole: {
@@ -155,6 +232,14 @@ export class CloudLogin {
       created = true;
       invitationId = parsed;
     }
+
+    accounts.applyCloudGrants({
+      principalId,
+      provenance,
+      ...(claims.role === undefined
+        ? {}
+        : { asserted: assertedGrants(claims.role, scope) }),
+    });
 
     const credentials = (() => {
       try {
@@ -190,7 +275,14 @@ export class CloudLogin {
           sub: claims.sub,
           principalId,
           created,
+          jti: claims.jti,
           ...(claims.link === undefined ? {} : { link: claims.link.linkId }),
+          ...(claims.org === undefined ? {} : { org: claims.org.orgId }),
+          ...(claims.team === undefined ? {} : { team: claims.team.teamId }),
+          ...(claims.role === undefined ? {} : { role: claims.role }),
+          ...(claims.scp === undefined || claims.scp.length === 0
+            ? {}
+            : { scp: claims.scp }),
         }),
       });
       if (created && claims.link !== undefined) {
