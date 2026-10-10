@@ -280,6 +280,10 @@ node tools/ci/e2e.mjs --tier a --only personal-roundtrip
 
 验证：中继 init（CA 指纹、口令不进输出、已初始化再 init 被拒）；core 登记、隧道 ready、绑定主人；`/app/` 账号口令登录、终端收发、实时板双向同步；分享链接 `/j/` 落地（片段被抹掉）、访客加入、开终端；桌面 Electron 粘贴链接并核对指纹、开终端；手机 390 宽模拟（来源 `https://localhost`、扫码结果注入）扫码挂载、开终端；撤销链接（accept 与落地页报错、已加入的访客被断开）、撤销登记（隧道停、中继答 `source_offline`、主人页面收到下线通知、中继侧撤销后不再签断言）；中继、core、Electron 与探针输出里没有口令、令牌与链接秘密。中继边缘对每个 IP 每分钟只放 200 次，所有客户端都来自回环，手机一步之前先等一个窗口。产物默认在 `target/personal-roundtrip/`（经运行器时在 `target/e2e/a/personal-roundtrip/`）。
 
+指向别的中继（平台计划 V4，Workers 中继探针）：`personal-roundtrip.mjs --workerd` 用 armadra-cloud 检出里的 `apps/relay-workers` 起本地 workerd（`wrangler dev --local`，不连 Cloudflare 账号，页面产物取 `apps/web/dist`，`tools/probes/workerd-relay.mjs`），`--issuer <地址>` 对已经在跑的中继跑（账号与口令取环境变量 `ARMADRA_PROBE_RELAY_ACCOUNT` / `ARMADRA_PROBE_RELAY_PASSWORD`）。这两种模式没有 init/serve、自签 CA、Electron 与手机，core 以 `ARMADRA_RELAY_ALLOW_INSECURE=1` 放行明文 `ws://`；多出「只读分享」（只读工作空间链接与会话链接，访客会话是 viewer：看得到、建终端 403）与「媒体票 Range」（206、Content-Range、不认识的票 404）。清单 `personal-roundtrip-workers`（B 档，依赖 `cloud`，没有检出时 skipped）。
+
+线上只读探针 `relay-live-readonly.mjs`：部署后对 `https://relay.armadra.com` 只发 GET `/health` 与 `/.well-known/*`（平台信息、公钥集无私钥分量、不种 Cookie），不登录、不登记；默认不在 CI 跑，没有清单条目：`node tools/probes/relay-live-readonly.mjs [--issuer 地址] [--json]`。
+
 ## 多源并存与 WebKit 跑法（经中继的数据流）
 
 `multi-source`（A 档，要 Docker 与 armadra-cloud 检出）：两台 core（NAT 后的宿主 core 与第二台不带壳的 core）都登记到容器里的个人中转，桌面 Electron 经中继挂载两台（`relayed`）。除侧栏分组、三个源各开终端、NAT 源下线灰显与恢复之外，补经中继的三条数据流：编辑器 `<video src>` 是中继的媒体票地址、按 Range 取到元数据，探针自己不带头按票取 `Range: bytes=0-1023` 回 206（契约 §37.4、armadra-cloud cloud-api §12）；语言会话经中继 `initialize` + `didOpen` 后 mock 语言服务器的诊断回来，流断开后新开一条会话照样往返；浏览器节点的画面流经中继到达，点一下页面、重画后的新帧再回来。中继镜像可用 `ARMADRA_PROBE_RELAY_IMAGE` 指定（并行的工作树各用自己的标签，免得互相覆盖 `armadra-probe-relay:local`）。

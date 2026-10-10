@@ -29,8 +29,17 @@
 //   node tools/probes/personal-roundtrip.mjs [输出目录]
 //
 // 产物默认在 target/personal-roundtrip/：result.json、每一步的截图与失败时的现场。
+//
+// 指向别的中继（平台计划 V4，Workers 中继探针）：
+//   --workerd         用 armadra-cloud 检出里的 apps/relay-workers 起本地 workerd（wrangler dev
+//                     --local，不连 Cloudflare 账号），页面产物取 apps/web/dist
+//   --issuer <地址>   对已经在跑的中继（http:// 或 https:// 系统信任）跑；账号与口令取环境变量
+//                     ARMADRA_PROBE_RELAY_ACCOUNT / ARMADRA_PROBE_RELAY_PASSWORD
+// 这两种模式没有 init/serve 与自签 CA，也不开 Electron 和手机；多出「只读分享链接」与
+// 「媒体票 Range」两步。
 import { randomBytes } from "node:crypto";
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -52,12 +61,14 @@ import {
   ownerClient,
   registerSource,
   relayClient,
+  relayedRoute,
   secretLedger,
   spawnRelay as spawnRelayIn,
   terminalInPage,
   terminalRoundTrip,
 } from "./platform-lib.mjs";
 import { probeSession } from "./probe-session.mjs";
+import { startWorkerd } from "./workerd-relay.mjs";
 import {
   freePort,
   makeNode,
@@ -69,15 +80,26 @@ import {
   writeResult,
 } from "./ui-features/harness.mjs";
 
+const argv = process.argv.slice(2);
+const flagValue = (name) => {
+  const at = argv.indexOf(name);
+  return at >= 0 ? argv[at + 1] : undefined;
+};
+const useWorkerd = argv.includes("--workerd");
+const externalIssuer = flagValue("--issuer")?.replace(/\/+$/, "");
+/** 对别家中继（本地 workerd 或已经在跑的）跑：没有 init/serve、自签 CA、Electron 与手机。 */
+const external = useWorkerd || externalIssuer !== undefined;
+const positional = argv.filter(
+  (arg, at) => !arg.startsWith("--") && argv[at - 1] !== "--issuer",
+);
 const output = resolve(
-  process.argv.slice(2).find((arg) => !arg.startsWith("--")) ??
-    join(root, "target/personal-roundtrip"),
+  positional[0] ?? join(root, "target/personal-roundtrip"),
 );
 rmSync(output, { recursive: true, force: true });
 mkdirSync(output, { recursive: true });
 
 const cloudHome = findCloudSource();
-if (!cloudHome) {
+if (!cloudHome && (!external || useWorkerd)) {
   console.error(
     `没有 armadra-cloud 的本地检出（${CLOUD_ENTRY}）：设 ARMADRA_DEV_STACK_CLOUD_SRC 或放在仓库旁的 ../armadra-cloud`,
   );
@@ -100,6 +122,7 @@ const report = { status: "failed", output, scenarios: [], timings: {} };
 const started = Date.now();
 let stack;
 let relay;
+let workerd;
 let electron;
 const opened = [];
 
@@ -157,7 +180,13 @@ const waitAt = (page, id, at, what) =>
 try {
   stack = await startStack({
     log: "info",
-    env: { ARMADRA_SECRET_BACKEND: "file" },
+    env: {
+      ARMADRA_SECRET_BACKEND: "file",
+      // 本地 workerd 是明文 ws://；核心只在探针里放行（线上中继一律 wss://）。
+      ...(external && !externalIssuer?.startsWith("https:")
+        ? { ARMADRA_RELAY_ALLOW_INSECURE: "1" }
+        : {}),
+    },
     // 手机模拟的页面来源是拦截出来的 https://localhost，Chrome 把它当公网页面，访问
     // 回环上的中继会被本地网络访问检查拦下；原生 WebView 没有这一层。
     chromeArgs: ["--disable-features=LocalNetworkAccessChecks"],
@@ -166,16 +195,93 @@ try {
   const run = scenario(report, "个人中转全流程（V1 / M1）", output);
   const shotAt = (page, name) => run.shot(page, name);
 
-  /* ------------------------------ 1. 中继 init ------------------------------ */
-  const relayData = join(stack.scratch, "relay");
-  const passwordFile = join(stack.scratch, "relay.password");
-  const password = secret("中继口令", randomBytes(18).toString("base64url"));
-  writeFileSync(passwordFile, password, { mode: 0o600 });
-  const relayPort = await freePort();
-  const issuer = `https://127.0.0.1:${relayPort}`;
+  /** 本次探针里的中继：Node 个人中转（缺省）、本地 workerd 或已经在跑的 issuer。 */
+  let issuer;
+  let relayPort;
+  let password;
+  let caPem = null;
+  let fingerprint = "";
+  let account = "dev";
+  let call;
+  let must;
+  if (external) {
+    if (useWorkerd) {
+      workerd = await timed("1-workerd", () =>
+        startWorkerd({ cloudHome, webRoot, onSecret: secret }),
+      );
+      ({ issuer, account, password } = workerd);
+      relay = { child: { exitCode: null, kill() {} }, log: workerd.log };
+    } else {
+      issuer = externalIssuer;
+      account = process.env.ARMADRA_PROBE_RELAY_ACCOUNT ?? "";
+      password = secret(
+        "中继口令",
+        process.env.ARMADRA_PROBE_RELAY_PASSWORD ?? "",
+      );
+      if (!account || !password)
+        throw new Error(
+          "--issuer 需要环境变量 ARMADRA_PROBE_RELAY_ACCOUNT 与 ARMADRA_PROBE_RELAY_PASSWORD",
+        );
+      relay = { child: { exitCode: null, kill() {} }, log: () => "" };
+    }
+    ({ call, must } = relayClient(issuer, null));
+    const info = await call("GET", "/.well-known/armadra-platform");
+    run.check(
+      info.status === 200 && info.body?.mode === "personal",
+      "/.well-known 答 personal",
+      { status: info.status, mode: info.body?.mode },
+    );
+    const served = await call("GET", "/app/");
+    run.check(
+      served.status === 200 && String(served.body).includes('<div id="root"'),
+      "/app/ 托管 apps/web 的构建产物",
+      served.status,
+    );
+  } else {
+    /* ------------------------------ 1. 中继 init ------------------------------ */
+    const relayData = join(stack.scratch, "relay");
+    const passwordFile = join(stack.scratch, "relay.password");
+    password = secret("中继口令", randomBytes(18).toString("base64url"));
+    writeFileSync(passwordFile, password, { mode: 0o600 });
+    relayPort = await freePort();
+    issuer = `https://127.0.0.1:${relayPort}`;
 
-  const initOutput = await timed("1-init", async () => {
-    const init = spawnRelay([
+    const initOutput = await timed("1-init", async () => {
+      const init = spawnRelay([
+        "init",
+        "--data-dir",
+        relayData,
+        "--account",
+        "dev",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        String(relayPort),
+        "--tls",
+        "self-signed",
+        "--password-file",
+        passwordFile,
+      ]);
+      const code = await new Promise((done) => init.child.once("exit", done));
+      return { code, text: init.log() };
+    });
+    run.check(initOutput.code === 0, "personal init 退出码 0", initOutput.text);
+    const initFingerprint = /CA 指纹：([0-9a-f]{64})/.exec(
+      initOutput.text,
+    )?.[1];
+    run.check(
+      initOutput.text.includes("账号：dev") &&
+        initOutput.text.includes(`对外地址：${issuer}`) &&
+        initFingerprint,
+      "init 输出账号、对外地址与 64 位 CA 指纹",
+    );
+    run.check(!initOutput.text.includes(password), "init 的输出里没有口令");
+    run.check(
+      existsSync(join(relayData, "state.json")) &&
+        existsSync(join(relayData, "tls", "ca.crt")),
+      "状态目录里有 state.json 与自签 CA",
+    );
+    const reinit = spawnRelay([
       "init",
       "--data-dir",
       relayData,
@@ -190,106 +296,75 @@ try {
       "--password-file",
       passwordFile,
     ]);
-    const code = await new Promise((done) => init.child.once("exit", done));
-    return { code, text: init.log() };
-  });
-  run.check(initOutput.code === 0, "personal init 退出码 0", initOutput.text);
-  const initFingerprint = /CA 指纹：([0-9a-f]{64})/.exec(initOutput.text)?.[1];
-  run.check(
-    initOutput.text.includes("账号：dev") &&
-      initOutput.text.includes(`对外地址：${issuer}`) &&
-      initFingerprint,
-    "init 输出账号、对外地址与 64 位 CA 指纹",
-  );
-  run.check(!initOutput.text.includes(password), "init 的输出里没有口令");
-  run.check(
-    existsSync(join(relayData, "state.json")) &&
-      existsSync(join(relayData, "tls", "ca.crt")),
-    "状态目录里有 state.json 与自签 CA",
-  );
-  const reinit = spawnRelay([
-    "init",
-    "--data-dir",
-    relayData,
-    "--account",
-    "dev",
-    "--host",
-    "127.0.0.1",
-    "--port",
-    String(relayPort),
-    "--tls",
-    "self-signed",
-    "--password-file",
-    passwordFile,
-  ]);
-  run.check(
-    (await new Promise((done) => reinit.child.once("exit", done))) !== 0,
-    "已初始化的目录再 init 被拒，不覆盖",
-  );
+    run.check(
+      (await new Promise((done) => reinit.child.once("exit", done))) !== 0,
+      "已初始化的目录再 init 被拒，不覆盖",
+    );
 
-  const caPem = readFileSync(join(relayData, "tls", "ca.crt"), "utf8");
-  const fingerprint = caFingerprint(caPem);
-  run.check(
-    fingerprint === initFingerprint,
-    "磁盘上的 CA 指纹与 init 打印的一致",
-  );
-  const { call, must } = relayClient(issuer, caPem);
+    caPem = readFileSync(join(relayData, "tls", "ca.crt"), "utf8");
+    fingerprint = caFingerprint(caPem);
+    run.check(
+      fingerprint === initFingerprint,
+      "磁盘上的 CA 指纹与 init 打印的一致",
+    );
+    ({ call, must } = relayClient(issuer, caPem));
 
-  const startServe = () => {
-    const serve = spawnRelay([
-      "serve",
-      "--data-dir",
-      relayData,
-      "--host",
-      "127.0.0.1",
-      "--port",
-      String(relayPort),
-      "--tls",
-      "self-signed",
-      "--web-root",
-      webRoot,
-      "--log-level",
-      "info",
-    ]);
-    return serve;
-  };
-  relay = startServe();
-  const info = await until(
-    async () => {
-      if (relay.child.exitCode !== null)
-        throw new Error(`中继退出：${relay.log()}`);
-      try {
-        const answer = await call("GET", "/.well-known/armadra-platform");
-        return answer.status === 200 ? answer.body : null;
-      } catch {
-        return null;
-      }
-    },
-    "个人中转起来",
-    { timeout: 30_000 },
-  );
-  run.check(
-    info.mode === "personal" && info.webApp === `${issuer}/app/`,
-    "serve 起来：/.well-known 答 personal、webApp 指向 /app/",
-    { mode: info.mode, webApp: info.webApp },
-  );
-  const served = await call("GET", "/app/");
-  run.check(
-    served.status === 200 && String(served.body).includes('<div id="root"'),
-    "/app/ 托管 apps/web 的构建产物",
-    served.status,
-  );
-  const wrong = await call("POST", "/v1/auth/login", {
-    body: {
-      account: "dev",
-      password: "not-the-password-0",
-      device: { platform: "desktop", name: "probe-wrong" },
-    },
-  });
-  run.check(wrong.status === 401 || wrong.status === 400, "错口令登录被拒", {
-    status: wrong.status,
-    code: wrong.body?.code,
-  });
+    const startServe = () => {
+      const serve = spawnRelay([
+        "serve",
+        "--data-dir",
+        relayData,
+        "--host",
+        "127.0.0.1",
+        "--port",
+        String(relayPort),
+        "--tls",
+        "self-signed",
+        "--web-root",
+        webRoot,
+        "--log-level",
+        "info",
+      ]);
+      return serve;
+    };
+    relay = startServe();
+    const info = await until(
+      async () => {
+        if (relay.child.exitCode !== null)
+          throw new Error(`中继退出：${relay.log()}`);
+        try {
+          const answer = await call("GET", "/.well-known/armadra-platform");
+          return answer.status === 200 ? answer.body : null;
+        } catch {
+          return null;
+        }
+      },
+      "个人中转起来",
+      { timeout: 30_000 },
+    );
+    run.check(
+      info.mode === "personal" && info.webApp === `${issuer}/app/`,
+      "serve 起来：/.well-known 答 personal、webApp 指向 /app/",
+      { mode: info.mode, webApp: info.webApp },
+    );
+    const served = await call("GET", "/app/");
+    run.check(
+      served.status === 200 && String(served.body).includes('<div id="root"'),
+      "/app/ 托管 apps/web 的构建产物",
+      served.status,
+    );
+    const wrong = await call("POST", "/v1/auth/login", {
+      body: {
+        account: "dev",
+        password: "not-the-password-0",
+        device: { platform: "desktop", name: "probe-wrong" },
+      },
+    });
+    run.check(wrong.status === 401 || wrong.status === 400, "错口令登录被拒", {
+      status: wrong.status,
+      code: wrong.body?.code,
+    });
+  }
 
   /* ------------------------------ 2. core 登记 ------------------------------ */
   const session = await probeSession({
@@ -301,7 +376,13 @@ try {
 
   const registered = await timed("2-tunnel", () =>
     registerSource({
-      relay: { issuer, fingerprint, account: "dev", password, must },
+      relay: {
+        issuer,
+        fingerprint: fingerprint || undefined,
+        account,
+        password,
+        must,
+      },
       core: { owner, rpc },
       label: "roundtrip-host",
       device: { platform: "desktop", name: "personal-roundtrip" },
@@ -328,60 +409,66 @@ try {
   );
   run.ok("中继账号绑定为这台 core 的主人");
 
-  // 空闲 keep-alive：Node 缺省 5 秒就关空闲连接，iOS WebKit 复用它发 POST 时不重试，
-  // 直接「加载失败」——Agent 的这一轮就没完成。照 iOS App 的路子（来源
-  // `capacitor://localhost`）：经中继用断言换 core 会话，空闲 6.5 秒后在同一条连接上
-  // 再 POST `system.hello`，连接不许被服务端先关掉，两次都要 200。
-  const idle = await timed("2-keepalive", async () => {
-    const assertion = await must("POST", `/v1/sources/${sourceId}/assertion`, {
-      body: { device },
-      token: cloudToken,
+  if (!external) {
+    // 空闲 keep-alive：Node 缺省 5 秒就关空闲连接，iOS WebKit 复用它发 POST 时不重试，
+    // 直接「加载失败」——Agent 的这一轮就没完成。照 iOS App 的路子（来源
+    // `capacitor://localhost`）：经中继用断言换 core 会话，空闲 6.5 秒后在同一条连接上
+    // 再 POST `system.hello`，连接不许被服务端先关掉，两次都要 200。
+    const idle = await timed("2-keepalive", async () => {
+      const assertion = await must(
+        "POST",
+        `/v1/sources/${sourceId}/assertion`,
+        {
+          body: { device },
+          token: cloudToken,
+        },
+      );
+      secret("中继令牌", assertion.relayToken);
+      secret("源访问断言", assertion.assertion);
+      const headers = {
+        origin: "capacitor://localhost",
+        "armadra-relay-token": assertion.relayToken,
+      };
+      const answer = await idleKeepAlivePost(
+        issuer,
+        caPem,
+        {
+          path: `/s/${sourceId}/api/identity/cloud/login`,
+          body: { assertion: assertion.assertion },
+          headers,
+        },
+        (login) => {
+          const session = login.body?.session;
+          if (session?.native?.accessToken)
+            secret("core 访问令牌", session.native.accessToken);
+          if (session?.native?.refreshToken)
+            secret("core 刷新令牌", session.native.refreshToken);
+          return {
+            path: `/s/${sourceId}/api/rpc/system/hello`,
+            body: { json: {} },
+            headers: {
+              ...headers,
+              authorization: `Bearer ${session?.native?.accessToken ?? ""}`,
+            },
+          };
+        },
+      );
+      return {
+        statuses: answer.answers.map((one) => one.status),
+        codes: answer.answers.map((one) => one.body?.code ?? null),
+        reused: answer.reused,
+        closedByServer: answer.closedByServer,
+        idleMs: answer.idleMs,
+      };
     });
-    secret("中继令牌", assertion.relayToken);
-    secret("源访问断言", assertion.assertion);
-    const headers = {
-      origin: "capacitor://localhost",
-      "armadra-relay-token": assertion.relayToken,
-    };
-    const answer = await idleKeepAlivePost(
-      issuer,
-      caPem,
-      {
-        path: `/s/${sourceId}/api/identity/cloud/login`,
-        body: { assertion: assertion.assertion },
-        headers,
-      },
-      (login) => {
-        const session = login.body?.session;
-        if (session?.native?.accessToken)
-          secret("core 访问令牌", session.native.accessToken);
-        if (session?.native?.refreshToken)
-          secret("core 刷新令牌", session.native.refreshToken);
-        return {
-          path: `/s/${sourceId}/api/rpc/system/hello`,
-          body: { json: {} },
-          headers: {
-            ...headers,
-            authorization: `Bearer ${session?.native?.accessToken ?? ""}`,
-          },
-        };
-      },
+    run.check(
+      idle.statuses.every((status) => status === 200) &&
+        idle.reused &&
+        !idle.closedByServer,
+      "iOS 来源经中继换会话后空闲 6.5 秒，同一条 keep-alive 连接再 POST：连接还在、两次都 200",
+      idle,
     );
-    return {
-      statuses: answer.answers.map((one) => one.status),
-      codes: answer.answers.map((one) => one.body?.code ?? null),
-      reused: answer.reused,
-      closedByServer: answer.closedByServer,
-      idleMs: answer.idleMs,
-    };
-  });
-  run.check(
-    idle.statuses.every((status) => status === 200) &&
-      idle.reused &&
-      !idle.closedByServer,
-    "iOS 来源经中继换会话后空闲 6.5 秒，同一条 keep-alive 连接再 POST：连接还在、两次都 200",
-    idle,
-  );
+  }
 
   // 主人的画布：一张便签、一个终端。
   const ownerProject = join(stack.scratch, "owner-project");
@@ -466,7 +553,7 @@ try {
       `return document.querySelector('[data-slot="relay-sign-in"]').innerText;`,
     );
     run.check(
-      signInText.includes(`127.0.0.1:${relayPort}`),
+      signInText.includes(new URL(issuer).host),
       "/app/ 认出自己由中继托管：登录页写着中转的地址",
     );
     await shotAt(page, "03-sign-in-1440");
@@ -474,7 +561,7 @@ try {
       `return document.querySelector('[data-slot="relay-sign-in"] input[autocomplete="username"]')`,
       "账号框",
     );
-    await page.type("dev");
+    await page.type(account);
     await page.clickOn(
       `return document.querySelector('[data-slot="relay-sign-in"] input[type="password"]')`,
       "口令框",
@@ -688,82 +775,83 @@ try {
     );
   });
 
-  /* --------------------------- 5. 桌面 Electron --------------------------- */
-  const desktopShare = await newShare("guest-desktop");
-  await timed("5-desktop", async () => {
-    electron = await launchElectron({
-      scratch: stack.scratch,
-      tag: "roundtrip",
-    });
-    const win = electron.page;
-    const click = (texts, what, selector) =>
-      clickText(win, texts, what, selector);
-    const fill = (selector, value) =>
-      win.until(
-        `const el = document.querySelector(${JSON.stringify(selector)});
+  if (!external) {
+    /* --------------------------- 5. 桌面 Electron --------------------------- */
+    const desktopShare = await newShare("guest-desktop");
+    await timed("5-desktop", async () => {
+      electron = await launchElectron({
+        scratch: stack.scratch,
+        tag: "roundtrip",
+      });
+      const win = electron.page;
+      const click = (texts, what, selector) =>
+        clickText(win, texts, what, selector);
+      const fill = (selector, value) =>
+        win.until(
+          `const el = document.querySelector(${JSON.stringify(selector)});
          if (!el) return null;
          el.focus();
          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, ${JSON.stringify(value)});
          el.dispatchEvent(new Event("input", { bubbles: true }));
          return true;`,
-        `填 ${selector}`,
+          `填 ${selector}`,
+        );
+      // 粘贴链接：设置 → 远程服务 → 通过链接加入。
+      await click(["设置", "Settings"], "设置");
+      await click(
+        ["远程访问", "Remote access"],
+        "远程访问",
+        "button, a, [role=tab], [role=link]",
       );
-    // 粘贴链接：设置 → 远程服务 → 通过链接加入。
-    await click(["设置", "Settings"], "设置");
-    await click(
-      ["远程访问", "Remote access"],
-      "远程访问",
-      "button, a, [role=tab], [role=link]",
-    );
-    await click(["通过链接加入", "Join by link"], "通过链接加入");
-    await fill("#join-link", desktopShare.url);
-    await win.capture(join(output, "05-desktop-pasted.png"));
-    await click(["加入", "Join"], "加入");
-    await win.until(
-      `return document.body.innerText.includes("核对证书指纹") ? true : null;`,
-      "核对签发方指纹",
-      { timeout: 30_000 },
-    );
-    const shown = await win.evaluate(
-      `return document.querySelector('[data-slot="fingerprint"]')?.innerText.toLowerCase().replace(/[^0-9a-f]/g, "") ?? "";`,
-    );
-    run.check(shown === fingerprint, "桌面首次挂载核对的指纹与中继 CA 一致");
-    await win.capture(join(output, "05-desktop-fingerprint.png"));
-    await click(
-      ["指纹一致，继续", "Fingerprint matches, continue"],
-      "确认指纹",
-    );
-    // 挂载 → 壳放行新来源后重载 → 自动打开链接指向的工作空间。
-    await terminalInPage(win, desktopShare.terminal.id, "desktop");
-    run.ok("桌面粘贴链接挂载、打开工作空间、开终端并收发（42desktop）");
-    await win.capture(join(output, "05-desktop-terminal.png"));
-    const sourcesAnswer = await electron.session.fetch("/api/sources");
-    const sources = await sourcesAnswer.json();
-    const mounted = (sources.sources ?? []).find(
-      (row) => row.sourceId === sourceId,
-    );
-    run.check(
-      mounted?.kind === "relayed",
-      "桌面 core 的源表里有经中继挂载的源（relayed）",
-      mounted && { kind: mounted.kind },
-    );
-    run.check(
-      win.problems.length === 0,
-      "桌面页面无异常",
-      win.problems.slice(0, 5),
-    );
-    await electron.stop();
-  });
+      await click(["通过链接加入", "Join by link"], "通过链接加入");
+      await fill("#join-link", desktopShare.url);
+      await win.capture(join(output, "05-desktop-pasted.png"));
+      await click(["加入", "Join"], "加入");
+      await win.until(
+        `return document.body.innerText.includes("核对证书指纹") ? true : null;`,
+        "核对签发方指纹",
+        { timeout: 30_000 },
+      );
+      const shown = await win.evaluate(
+        `return document.querySelector('[data-slot="fingerprint"]')?.innerText.toLowerCase().replace(/[^0-9a-f]/g, "") ?? "";`,
+      );
+      run.check(shown === fingerprint, "桌面首次挂载核对的指纹与中继 CA 一致");
+      await win.capture(join(output, "05-desktop-fingerprint.png"));
+      await click(
+        ["指纹一致，继续", "Fingerprint matches, continue"],
+        "确认指纹",
+      );
+      // 挂载 → 壳放行新来源后重载 → 自动打开链接指向的工作空间。
+      await terminalInPage(win, desktopShare.terminal.id, "desktop");
+      run.ok("桌面粘贴链接挂载、打开工作空间、开终端并收发（42desktop）");
+      await win.capture(join(output, "05-desktop-terminal.png"));
+      const sourcesAnswer = await electron.session.fetch("/api/sources");
+      const sources = await sourcesAnswer.json();
+      const mounted = (sources.sources ?? []).find(
+        (row) => row.sourceId === sourceId,
+      );
+      run.check(
+        mounted?.kind === "relayed",
+        "桌面 core 的源表里有经中继挂载的源（relayed）",
+        mounted && { kind: mounted.kind },
+      );
+      run.check(
+        win.problems.length === 0,
+        "桌面页面无异常",
+        win.problems.slice(0, 5),
+      );
+      await electron.stop();
+    });
 
-  /* ------------------------- 6. 手机：390 宽、扫码 ------------------------- */
-  // 中继边缘对每个来源 IP 每分钟只放 200 次（预检、请求、升级共用，写死在中继里），而
-  // 这里所有客户端都来自回环、共用一个额度；手机页面启动时一口气发出几十个请求，
-  // 前面几步刚用掉的额度要等窗口过去。
-  const mobileShare = await newShare("guest-mobile");
-  await sleep(RATE_WINDOW_MS);
-  await timed("6-mobile", async () => {
-    const mobile = await newPage(390, 844, true);
-    const fake = `
+    /* ------------------------- 6. 手机：390 宽、扫码 ------------------------- */
+    // 中继边缘对每个来源 IP 每分钟只放 200 次（预检、请求、升级共用，写死在中继里），而
+    // 这里所有客户端都来自回环、共用一个额度；手机页面启动时一口气发出几十个请求，
+    // 前面几步刚用掉的额度要等窗口过去。
+    const mobileShare = await newShare("guest-mobile");
+    await sleep(RATE_WINDOW_MS);
+    await timed("6-mobile", async () => {
+      const mobile = await newPage(390, 844, true);
+      const fake = `
       (function(){
         const read = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
         const write = (k, v) => localStorage.setItem(k, JSON.stringify(v));
@@ -783,125 +871,310 @@ try {
           } },
         };
       })();`;
-    await mobile.call("Page.addScriptToEvaluateOnNewDocument", {
-      source: fake,
-    });
-    // 页面来源是原生 App 的 https://localhost：从构建产物应答，其余请求照常发出。
-    await mobile.call("Fetch.enable", {
-      patterns: [{ urlPattern: "https://localhost/*" }],
-    });
-    const types = {
-      ".html": "text/html",
-      ".js": "text/javascript",
-      ".css": "text/css",
-      ".png": "image/png",
-      ".svg": "image/svg+xml",
-      ".json": "application/json",
-      ".woff2": "font/woff2",
-      ".wasm": "application/wasm",
-    };
-    stack.browser.on(async (message) => {
-      if (
-        message.sessionId !== mobile.sessionId ||
-        message.method !== "Fetch.requestPaused"
-      )
-        return;
-      const url = new URL(message.params.request.url);
-      let file = join(webRoot, decodeURIComponent(url.pathname));
-      if (
-        !file.startsWith(webRoot) ||
-        !existsSync(file) ||
-        url.pathname === "/"
-      )
-        file = join(webRoot, "index.html");
-      await stack.browser
-        .call(
-          "Fetch.fulfillRequest",
-          {
-            requestId: message.params.requestId,
-            responseCode: 200,
-            responseHeaders: [
-              {
-                name: "content-type",
-                value: types[extname(file)] ?? "application/octet-stream",
-              },
-            ],
-            body: readFileSync(file).toString("base64"),
-          },
-          mobile.sessionId,
+      await mobile.call("Page.addScriptToEvaluateOnNewDocument", {
+        source: fake,
+      });
+      // 页面来源是原生 App 的 https://localhost：从构建产物应答，其余请求照常发出。
+      await mobile.call("Fetch.enable", {
+        patterns: [{ urlPattern: "https://localhost/*" }],
+      });
+      const types = {
+        ".html": "text/html",
+        ".js": "text/javascript",
+        ".css": "text/css",
+        ".png": "image/png",
+        ".svg": "image/svg+xml",
+        ".json": "application/json",
+        ".woff2": "font/woff2",
+        ".wasm": "application/wasm",
+      };
+      stack.browser.on(async (message) => {
+        if (
+          message.sessionId !== mobile.sessionId ||
+          message.method !== "Fetch.requestPaused"
         )
-        .catch(() => undefined);
+          return;
+        const url = new URL(message.params.request.url);
+        let file = join(webRoot, decodeURIComponent(url.pathname));
+        if (
+          !file.startsWith(webRoot) ||
+          !existsSync(file) ||
+          url.pathname === "/"
+        )
+          file = join(webRoot, "index.html");
+        await stack.browser
+          .call(
+            "Fetch.fulfillRequest",
+            {
+              requestId: message.params.requestId,
+              responseCode: 200,
+              responseHeaders: [
+                {
+                  name: "content-type",
+                  value: types[extname(file)] ?? "application/octet-stream",
+                },
+              ],
+              body: readFileSync(file).toString("base64"),
+            },
+            mobile.sessionId,
+          )
+          .catch(() => undefined);
+      });
+      await mobile.call("Network.enable");
+      const netUrls = new Map();
+      report.mobileNet = [];
+      stack.browser.on((message) => {
+        if (message.sessionId !== mobile.sessionId) return;
+        const { method, params } = message;
+        if (
+          method === "Network.requestWillBeSent" &&
+          !params.request.url.startsWith("https://localhost")
+        )
+          netUrls.set(
+            params.requestId,
+            `${params.request.method} ${params.request.url.replace(/^https:\/\/127\.0\.0\.1:\d+/, "")}`.slice(
+              0,
+              140,
+            ),
+          );
+        else if (
+          method === "Network.loadingFailed" &&
+          netUrls.has(params.requestId)
+        )
+          report.mobileNet.push({
+            failed: netUrls.get(params.requestId),
+            error: params.errorText,
+            cors: params.corsErrorStatus,
+          });
+        else if (
+          method === "Network.responseReceived" &&
+          netUrls.has(params.requestId)
+        )
+          report.mobileNet.push({
+            status: params.response.status,
+            url: netUrls.get(params.requestId),
+          });
+      });
+      await mobile.goto("https://localhost/");
+      await mobile.evaluate(
+        `localStorage.setItem("fake.scan", ${JSON.stringify(mobileShare.url)}); return true;`,
+      );
+      await mobile.until(buttonExists("扫码"), "连接页的「扫码」", {
+        timeout: 30_000,
+      });
+      await shotAt(mobile, "06-mobile-connect-390");
+      await mobile.until(
+        `const b = (() => { ${buttonByText("扫码")} })(); if (!b) return null; b.click(); return true;`,
+        "点「扫码」",
+      );
+      await hasText(mobile, "核对指纹", "手机核对指纹");
+      await shotAt(mobile, "06-mobile-fingerprint-390");
+      await mobile.until(
+        `const b = (() => { ${buttonByText("信任并继续")} })(); if (!b) return null; b.click(); return true;`,
+        "点「信任并继续」",
+      );
+      await terminalRoundTrip(mobile, mobileShare.terminal.id, "mobile");
+      run.ok("手机扫码挂载、重载进画布、开终端并收发（42mobile）");
+      const stored = await mobile.evaluate(
+        `return JSON.parse(localStorage.getItem("fake.sessions") ?? "[]").map((s) => s.via + ":" + s.sourceId);`,
+      );
+      run.check(
+        stored.includes(`relayed:${sourceId}`),
+        "手机的会话进（假）钥匙串，路径是 relayed",
+        stored,
+      );
+      await shotAt(mobile, "06-mobile-canvas-390");
+      run.check(
+        mobile.unexpected().length === 0,
+        "手机页面无控制台错误",
+        mobile.unexpected().slice(0, 3),
+      );
     });
-    await mobile.call("Network.enable");
-    const netUrls = new Map();
-    report.mobileNet = [];
-    stack.browser.on((message) => {
-      if (message.sessionId !== mobile.sessionId) return;
-      const { method, params } = message;
-      if (
-        method === "Network.requestWillBeSent" &&
-        !params.request.url.startsWith("https://localhost")
-      )
-        netUrls.set(
-          params.requestId,
-          `${params.request.method} ${params.request.url.replace(/^https:\/\/127\.0\.0\.1:\d+/, "")}`.slice(
-            0,
-            140,
-          ),
+  }
+
+  /* ------------- 4b. 只读分享与媒体票（Workers 中继，V4） ------------- */
+  if (external) {
+    // 经 core 的 `sources.shareLinkCreate` 签只读链接：访客会话压成 viewer，能看、不能建终端。
+    const guestOn = async (shared) => {
+      const [secretPart, ...rest] = new URL(shared.url).hash
+        .slice(1)
+        .split(".");
+      const invitationToken = rest.join(".");
+      secret("链接秘密", secretPart);
+      secret("邀请令牌", invitationToken);
+      const accepted = await must(
+        "POST",
+        `/v1/links/${shared.link.linkId}/accept`,
+        {
+          body: {
+            secret: secretPart,
+            device: { platform: "browser", name: "probe-readonly" },
+          },
+        },
+      );
+      secret("中继令牌", accepted.relayToken);
+      secret("源访问断言", accepted.assertion);
+      const headers = {
+        origin: "https://localhost",
+        "armadra-relay-token": accepted.relayToken,
+      };
+      const base = `/s/${sourceId}`;
+      const login = await must("POST", `${base}/api/identity/cloud/login`, {
+        body: { assertion: accepted.assertion, invitationToken },
+        headers,
+      });
+      const token = secret("访客 core 会话", login.session.native.accessToken);
+      return {
+        get: (path) => call("GET", `${base}${path}`, { token, headers }),
+        post: (path, body) =>
+          call("POST", `${base}${path}`, { token, headers, body }),
+      };
+    };
+    const roDir = join(stack.scratch, "share-readonly");
+    mkdirSync(roDir, { recursive: true });
+    writeFileSync(join(roDir, "README.md"), "# readonly\n");
+    const roMade = await stack.workspace("readonly-share", roDir);
+    const roShell = makeNode(
+      roMade.board.id,
+      "terminal",
+      "终端",
+      { x: 120, y: 120 },
+      { width: 520, height: 300 },
+      { kind: "terminal", cwd: roDir },
+    );
+    await stack.seedBoard(roMade.workspace.id, roMade.board.id, [roShell]);
+    const viewerChecks = async (what, shared, workspaceId, readOnlySession) => {
+      const guestApi = await guestOn(shared);
+      if (readOnlySession === undefined) {
+        const listed = await guestApi.get("/api/workspaces");
+        run.check(
+          listed.status === 200 &&
+            (listed.body ?? []).some?.((row) => row.id === workspaceId),
+          `${what}：访客看得到被分享的工作空间`,
+          { status: listed.status },
         );
-      else if (
-        method === "Network.loadingFailed" &&
-        netUrls.has(params.requestId)
-      )
-        report.mobileNet.push({
-          failed: netUrls.get(params.requestId),
-          error: params.errorText,
-          cors: params.corsErrorStatus,
+      } else {
+        const log = await guestApi.get(
+          `/api/acp/sessions/${readOnlySession}/log`,
+        );
+        run.check(log.status === 200, `${what}：访客读得到被分享的会话`, {
+          status: log.status,
         });
-      else if (
-        method === "Network.responseReceived" &&
-        netUrls.has(params.requestId)
-      )
-        report.mobileNet.push({
-          status: params.response.status,
-          url: netUrls.get(params.requestId),
-        });
+      }
+      const created = await guestApi.post("/api/terminals", {
+        workspaceId,
+        nodeId: roShell.id,
+        cwd: roDir,
+      });
+      run.check(
+        created.status === 403,
+        `${what}：访客是 viewer，建终端被拒 403`,
+        { status: created.status, code: created.body?.code },
+      );
+      return guestApi;
+    };
+    await timed("4b-readonly", async () => {
+      const wsLink = await rpc("sources.shareLinkCreate", {
+        serviceId,
+        workspaceId: roMade.workspace.id,
+        target: "workspace",
+        readOnly: true,
+        role: "operator",
+        ttlMs: 3_600_000,
+        maxUses: 5,
+        label: "readonly",
+      });
+      run.check(
+        wsLink.link.readOnly === true && wsLink.link.role === "viewer",
+        "只读工作空间链接：角色压成 viewer",
+        { role: wsLink.link.role, readOnly: wsLink.link.readOnly },
+      );
+      await viewerChecks("只读工作空间链接", wsLink, roMade.workspace.id);
+      const sessions = await owner(`/api/workspaces/${workspace.id}/sessions`);
+      const acpSession = (sessions ?? []).find(
+        (row) => row.nodeId === acpNode.id,
+      );
+      run.check(acpSession, "主人画布上有 ACP 会话可分享");
+      const sessionLink = await rpc("sources.shareLinkCreate", {
+        serviceId,
+        workspaceId: workspace.id,
+        target: "session",
+        sessionId: acpSession.sessionId,
+        role: "viewer",
+        ttlMs: 3_600_000,
+        maxUses: 5,
+        label: "session",
+      });
+      run.check(
+        sessionLink.link.target === "session" &&
+          sessionLink.link.readOnly === true,
+        "会话链接：总是只读",
+        {
+          target: sessionLink.link.target,
+          readOnly: sessionLink.link.readOnly,
+        },
+      );
+      await viewerChecks(
+        "会话链接",
+        sessionLink,
+        workspace.id,
+        acpSession.sessionId,
+      );
+      run.ok("只读范围的分享链接经 Workers 中继兑换，访客只能看");
     });
-    await mobile.goto("https://localhost/");
-    await mobile.evaluate(
-      `localStorage.setItem("fake.scan", ${JSON.stringify(mobileShare.url)}); return true;`,
-    );
-    await mobile.until(buttonExists("扫码"), "连接页的「扫码」", {
-      timeout: 30_000,
+
+    await timed("4c-media", async () => {
+      copyFileSync(
+        join(root, "tools/probes/fixtures/clip-h264.mp4"),
+        join(ownerProject, "clip.mp4"),
+      );
+      const route = await relayedRoute({
+        relay: { issuer, caPem: null, call, must },
+        cloudToken: await ownerToken(),
+        sourceId,
+        device,
+        onSecret: secret,
+      });
+      const coreTicket = await route.api("POST", "/api/rpc/files/mediaTicket", {
+        json: { workspaceId: workspace.id, path: "clip.mp4" },
+      });
+      const relayTicket = await must(
+        "POST",
+        `${route.base}/_relay/media-tickets`,
+        {
+          body: { path: coreTicket.json.url },
+          headers: { "armadra-relay-token": route.relayToken },
+        },
+      );
+      const head = await route.raw("GET", `${route.base}${relayTicket.path}`, {
+        range: "bytes=0-1023",
+      });
+      run.check(
+        head.status === 206 &&
+          head.headers["content-range"] ===
+            `bytes 0-1023/${coreTicket.json.size}` &&
+          head.headers["content-type"] === "video/mp4" &&
+          head.headers["accept-ranges"] === "bytes",
+        "媒体票经 Workers 中继按 Range 取：206、Content-Range 与真实类型",
+        { status: head.status, range: head.headers["content-range"] },
+      );
+      const mid = await route.raw("GET", `${route.base}${relayTicket.path}`, {
+        range: "bytes=1024-2047",
+      });
+      run.check(
+        mid.status === 206 &&
+          mid.headers["content-range"] ===
+            `bytes 1024-2047/${coreTicket.json.size}`,
+        "同一张票再取另一段 Range 仍是 206",
+        { status: mid.status, range: mid.headers["content-range"] },
+      );
+      const bogus = await route.raw(
+        "GET",
+        `${route.base}/_relay/m/${"A".repeat(43)}`,
+      );
+      run.check(bogus.status === 404, "不认识的媒体票 404", bogus.status);
     });
-    await shotAt(mobile, "06-mobile-connect-390");
-    await mobile.until(
-      `const b = (() => { ${buttonByText("扫码")} })(); if (!b) return null; b.click(); return true;`,
-      "点「扫码」",
-    );
-    await hasText(mobile, "核对指纹", "手机核对指纹");
-    await shotAt(mobile, "06-mobile-fingerprint-390");
-    await mobile.until(
-      `const b = (() => { ${buttonByText("信任并继续")} })(); if (!b) return null; b.click(); return true;`,
-      "点「信任并继续」",
-    );
-    await terminalRoundTrip(mobile, mobileShare.terminal.id, "mobile");
-    run.ok("手机扫码挂载、重载进画布、开终端并收发（42mobile）");
-    const stored = await mobile.evaluate(
-      `return JSON.parse(localStorage.getItem("fake.sessions") ?? "[]").map((s) => s.via + ":" + s.sourceId);`,
-    );
-    run.check(
-      stored.includes(`relayed:${sourceId}`),
-      "手机的会话进（假）钥匙串，路径是 relayed",
-      stored,
-    );
-    await shotAt(mobile, "06-mobile-canvas-390");
-    run.check(
-      mobile.unexpected().length === 0,
-      "手机页面无控制台错误",
-      mobile.unexpected().slice(0, 3),
-    );
-  });
+  }
 
   /* ----------------------------- 7. 撤销 ----------------------------- */
   await timed("7-revoke", async () => {
@@ -1064,6 +1337,7 @@ try {
   } catch {
     /* 已经退出。 */
   }
+  await workerd?.stop().catch(() => {});
   if (electron && !electron.stopped) await electron.stop().catch(() => {});
   await stack?.stop();
   writeResult(output, report);
