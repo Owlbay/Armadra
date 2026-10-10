@@ -130,6 +130,43 @@ function clip(value: string, max: number): string {
   return value.length > max ? value.slice(0, max) : value;
 }
 
+/**
+ * 名字（契约 §61）：`label` 是显示的，`defaultLabel` 是服务端报的。给了名字用它；
+ * 否则改过名（`label ≠ defaultLabel`）的行留着本地名，没改过的跟着新的缺省名。
+ * 服务端这次没报名字（旧对端、目录取不到）时缺省名不变，新行用 `fallback`。
+ */
+function naming(
+  existing: { label: string; defaultLabel: string } | undefined,
+  given: string | undefined,
+  advertised: string,
+  fallback: string,
+): { label: string; defaultLabel: string } {
+  const defaultLabel =
+    clip(advertised.trim(), 128) ||
+    existing?.defaultLabel ||
+    existing?.label ||
+    clip(fallback.trim(), 128) ||
+    "Armadra";
+  const renamed =
+    existing !== undefined &&
+    existing.defaultLabel !== "" &&
+    existing.label !== existing.defaultLabel;
+  return {
+    label: given ?? (renamed ? existing.label : defaultLabel),
+    defaultLabel,
+  };
+}
+
+/**
+ * 改名的名字（`sources.update` / `sources.remoteUpdate` 的 `label`）：空串（去首尾
+ * 空白后）= 恢复缺省名，答 `null`；其余 1–128 个字符。不给是 `undefined`。
+ */
+function renameLabel(value: string | undefined): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value.trim() === "") return null;
+  return checkLabel(value);
+}
+
 /** 显示名：1–128 个字符（表的约束）；不给就是 `undefined`。 */
 function checkLabel(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
@@ -223,11 +260,23 @@ export class SourcesService {
   ensureLocal(): void {
     const sourceId = this.options.hostId();
     const existing = this.store.get(sourceId);
-    const label = clip(this.options.hostLabel().trim(), 128) || "local";
+    // 缺省名跟着「主机名称」设置（契约 §61）；本机行改过名的留着本地名。
+    const names = naming(
+      existing?.kind === "local" ? existing : undefined,
+      undefined,
+      this.options.hostLabel(),
+      "local",
+    );
+    if (
+      existing?.kind === "local" &&
+      existing.label === names.label &&
+      existing.defaultLabel === names.defaultLabel
+    )
+      return;
     this.store.upsert({
       sourceId,
       kind: "local",
-      label: existing?.kind === "local" ? existing.label : label,
+      ...names,
       baseUrl: "",
       relayOrigin: "",
       fingerprint: "",
@@ -277,6 +326,9 @@ export class SourcesService {
   }
 
   async list(): Promise<{ sources: ClientSource[]; remotes: RemoteService[] }> {
+    // 「主机名称」可能刚改过：本机行的缺省名先跟上（只碰 SQLite，没变不写）。
+    if (this.store.get(this.options.hostId())?.kind === "local")
+      this.ensureLocal();
     const routes = this.store.allRoutes();
     const sources = await Promise.all(
       this.store
@@ -412,7 +464,7 @@ export class SourcesService {
     this.store.upsert({
       sourceId,
       kind: existing?.kind ?? "direct",
-      label: label ?? existing?.label ?? clip(new URL(origin).host, 128),
+      ...naming(existing, label, hello.hostName, new URL(origin).host),
       baseUrl: existing?.baseUrl ?? origin,
       relayOrigin: existing?.relayOrigin ?? "",
       fingerprint: existing?.fingerprint ?? fingerprint,
@@ -448,7 +500,7 @@ export class SourcesService {
     relayOrigin?: string | undefined;
   }): Promise<ClientSource> {
     const row = this.row(input.sourceId);
-    const label = checkLabel(input.label);
+    const label = renameLabel(input.label);
     if (
       row.kind === "local" &&
       (input.baseUrl !== undefined || input.relayOrigin !== undefined)
@@ -469,7 +521,9 @@ export class SourcesService {
           : normalizeOrigin(input.relayOrigin);
     this.store.upsert({
       ...row,
-      label: label ?? row.label,
+      // 空名 = 恢复成服务端报的名字（契约 §61）。
+      label:
+        label === null ? row.defaultLabel || row.label : (label ?? row.label),
       orderIndex: input.orderIndex ?? row.orderIndex,
     });
     // 旧的地址字段改的是镜像的那条路（契约 §55）：换掉它的来源，凭据键随之换。
@@ -945,7 +999,7 @@ export class SourcesService {
       serviceId,
       kind: "personal",
       issuer,
-      label: label ?? existing?.label ?? clip(new URL(issuer).host, 128),
+      ...naming(existing, label, info.name, new URL(issuer).host),
       accountHint: clip(input.account, 256),
       fingerprint,
       addedAtMs: existing?.addedAtMs ?? at,
@@ -985,6 +1039,25 @@ export class SourcesService {
     this.options.log.info("removed this machine from a remote service", {
       serviceId: row.serviceId,
     });
+  }
+
+  /**
+   * 改远程服务的显示名（契约 §61）：只在本机，空名恢复成它报的名字。
+   */
+  async remoteUpdate(input: {
+    serviceId: string;
+    label: string;
+  }): Promise<RemoteService> {
+    const row = this.remoteRow(input.serviceId);
+    const label = renameLabel(input.label);
+    const next = this.store.upsertRemote({
+      ...row,
+      label:
+        label === null || label === undefined
+          ? row.defaultLabel || row.label
+          : label,
+    });
+    return this.remoteJson(next);
   }
 
   async remoteDevicePoll(serviceId: string): Promise<never> {
@@ -1095,25 +1168,23 @@ export class SourcesService {
       refreshToken: credentials.refreshToken,
       deviceId: credentials.deviceId,
     });
+    // 缺省名取远程服务目录里的那个（那台主机登记的「主机名称」，契约 §61）；
+    // 拿不到不拦挂载，缺省名不变。
     let name = "";
-    if (label === undefined && existing === undefined) {
-      // 显示名取远程服务目录里的那个；拿不到不拦挂载。
-      const token = this.access.get(remote.serviceId);
-      if (token !== undefined) {
-        name = await this.remote
-          .sources(this.endpoint(remote), token.accessToken)
-          .then(
-            (rows) =>
-              rows.find((one) => one.sourceId === input.sourceId)?.name ?? "",
-          )
-          .catch(() => "");
-      }
+    const token = this.access.get(remote.serviceId);
+    if (token !== undefined) {
+      name = await this.remote
+        .sources(this.endpoint(remote), token.accessToken)
+        .then(
+          (rows) =>
+            rows.find((one) => one.sourceId === input.sourceId)?.name ?? "",
+        )
+        .catch(() => "");
     }
     const row = this.saveRelayRoute({
       sourceId: input.sourceId,
       existing,
-      label:
-        label ?? existing?.label ?? (name.trim() || input.sourceId.slice(0, 8)),
+      ...naming(existing, label, name, input.sourceId.slice(0, 8)),
       relayOrigin,
       issuer: remote.issuer,
       principalHint: credentials.principalHint,
@@ -1133,6 +1204,7 @@ export class SourcesService {
     sourceId: string;
     existing: SourceRow | undefined;
     label: string;
+    defaultLabel: string;
     relayOrigin: string;
     issuer: string;
     principalHint: string;
@@ -1143,6 +1215,7 @@ export class SourcesService {
       sourceId: input.sourceId,
       kind: existing?.kind ?? "relayed",
       label: clip(input.label, 128),
+      defaultLabel: clip(input.defaultLabel, 128),
       baseUrl: existing?.baseUrl ?? "",
       relayOrigin: existing?.relayOrigin || input.relayOrigin,
       fingerprint: existing?.fingerprint ?? "",
@@ -1253,7 +1326,7 @@ export class SourcesService {
         serviceId,
         kind: "personal",
         issuer,
-        label: known?.label ?? clip(new URL(issuer).host, 128),
+        ...naming(known, undefined, info.name, new URL(issuer).host),
         // 空的账号提示 = 访客（分享链接来的）：页面据此不给「分享本机」。
         accountHint: "",
         fingerprint,
@@ -1270,28 +1343,22 @@ export class SourcesService {
       refreshToken: credentials.refreshToken,
       deviceId: credentials.deviceId,
     });
+    // 缺省名取远程服务目录里的那个（访客只看得到这一个源）；拿不到不拦挂载。
     let name = "";
-    if (label === undefined && existing === undefined) {
-      // 显示名取远程服务目录里的那个（访客只看得到这一个源）；拿不到不拦挂载。
-      const token = this.access.get(serviceId);
-      if (token !== undefined) {
-        name = await this.remote
-          .sources(endpoint, token.accessToken)
-          .then(
-            (rows) =>
-              rows.find((one) => one.sourceId === accepted.sourceId)?.name ??
-              "",
-          )
-          .catch(() => "");
-      }
+    const token = this.access.get(serviceId);
+    if (token !== undefined) {
+      name = await this.remote
+        .sources(endpoint, token.accessToken)
+        .then(
+          (rows) =>
+            rows.find((one) => one.sourceId === accepted.sourceId)?.name ?? "",
+        )
+        .catch(() => "");
     }
     const row = this.saveRelayRoute({
       sourceId: accepted.sourceId,
       existing,
-      label:
-        label ??
-        existing?.label ??
-        (name.trim() || accepted.sourceId.slice(0, 8)),
+      ...naming(existing, label, name, accepted.sourceId.slice(0, 8)),
       relayOrigin,
       issuer,
       principalHint: credentials.principalHint,

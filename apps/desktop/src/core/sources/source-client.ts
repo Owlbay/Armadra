@@ -134,7 +134,7 @@ export class SourceClient {
   async hello(
     address: SourceAddress,
     timeoutMs: number,
-  ): Promise<{ hostId: string }> {
+  ): Promise<{ hostId: string; hostName: string }> {
     const body = record(
       await this.call(address, "GET", "/api/identity/hello", timeoutMs),
     );
@@ -142,7 +142,8 @@ export class SourceClient {
     if (!/^[0-9a-f]{32}$/.test(hostId)) {
       throw fail("source_unreachable", "这个地址不是一台 Armadra core");
     }
-    return { hostId };
+    // 对端的「主机名称」（契约 §61）；旧 core 不报是空串。
+    return { hostId, hostName: str(body.hostName).trim().slice(0, 128) };
   }
 
   /** 8 位配对码换票（§24.2）。 */

@@ -74,6 +74,8 @@ export interface FakeCore {
   refuseCloudLogin?: string;
   /** 最近一次 `cloud/login` 带的邀请令牌。 */
   lastInvitation?: string;
+  /** hello 报的「主机名称」（契约 §61）；不给不报。 */
+  hostName?: string;
 }
 
 /** 假中继上的一条分享链接（cloud-api §5）。 */
@@ -110,6 +112,8 @@ export interface FakeWorld {
     links: Map<string, FakeLink>;
     /** `platform.info` 报的能力。 */
     capabilities: string[];
+    /** `platform.info` 报的服务端名称（契约 §61）；空串不报。 */
+    name: string;
   };
   readonly cores: Map<string, FakeCore>;
   /** 直连 hello 不回答（等超时）。 */
@@ -169,6 +173,7 @@ export function fakeWorld(): FakeWorld {
         "links.scope",
         "me.stream",
       ],
+      name: "",
     },
     cores,
     slow: new Set(),
@@ -261,6 +266,7 @@ async function cloud(
   if (path === "/.well-known/armadra-platform") {
     return json(200, {
       mode: "personal",
+      ...(world.cloud.name === "" ? {} : { name: world.cloud.name }),
       issuer: ISSUER,
       protocol: { major: 0, minor: 1 },
       capabilities: [...world.cloud.capabilities],
@@ -471,7 +477,11 @@ async function peer(
   }
   const input = body(request);
   if (path === "/api/identity/hello") {
-    return json(200, { hostId: core.hostId, protocol: { major: 1, minor: 3 } });
+    return json(200, {
+      hostId: core.hostId,
+      protocol: { major: 1, minor: 3 },
+      ...(core.hostName ? { hostName: core.hostName } : {}),
+    });
   }
   if (path === "/api/gateway/pairing-code/exchange") {
     if (input.code !== "ABCD-2345") {
