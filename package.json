@@ -36,7 +36,7 @@
     "dev": "pnpm --filter @armadra/web dev",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/",
+    "lint": "node --max-old-space-size=6144 node_modules/eslint/bin/eslint.js . --cache --cache-location node_modules/.cache/eslint/",
     "knip": "knip --no-progress --no-exit-code",
     "test": "pnpm -r --if-present test",
     "test:coverage": "pnpm --filter @armadra/web --filter @armadra/desktop --filter @armadra/server exec vitest run --coverage",
