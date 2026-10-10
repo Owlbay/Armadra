@@ -52,6 +52,14 @@ export function mobileAssets(version) {
 }
 
 /**
+ * 发布时附带的签名 Android APK（release.yml 的 android 作业）。用维护者的上传密钥
+ * 签名、可直接安装；同样不进更新清单（App 没有自更新），没有 `<os>-<arch>` 目标段。
+ */
+export function androidReleaseAsset(version) {
+  return `armadra-mobile_${version}_android.apk`;
+}
+
+/**
  * electron-updater 的「通道」名：桌面壳下载前设 `autoUpdater.channel` 为它。
  *
  * 一次发布把六个目标的产物放进同一个扁平目录，而 electron-builder 的清单名只按
