@@ -3,7 +3,12 @@ import {
   ChallengeFrame,
   type ChallengeFrameProps,
 } from "../challenge/ChallengeFrame";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/ui/sheet";
+import {
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "../panels/ResponsiveDialog";
 
 export interface ChallengeSheetProps
   extends Pick<ChallengeFrameProps, "issuer" | "siteKey" | "origin" | "load"> {
@@ -13,8 +18,9 @@ export interface ChallengeSheetProps
 }
 
 /**
- * 登录要过人机验证时从底部升起的面板（契约 §62.2）：手机连接页、中继托管页面与
- * 设置里的中转账号登录框共用。拿到令牌即交回，由调用方带着重提交。
+ * 登录要过人机验证时升起的面板（契约 §62.2）：手机上贴底成抽屉，宽屏是对话框
+ * （`ResponsiveDialog`）。手机连接页、中继托管页面与设置里的中转账号登录框共用。
+ * 拿到令牌即交回，由调用方带着重提交。
  */
 export function ChallengeSheet({
   open,
@@ -24,18 +30,18 @@ export function ChallengeSheet({
 }: ChallengeSheetProps) {
   const t = useT();
   return (
-    <Sheet
+    <ResponsiveDialog
       open={open}
       onOpenChange={(next) => {
         if (!next) onCancel();
       }}
     >
-      <SheetContent side="bottom" className="z-[var(--z-dialog)] gap-3 p-4">
-        <SheetHeader className="p-0">
-          <SheetTitle>{t("challenge.title")}</SheetTitle>
-        </SheetHeader>
+      <ResponsiveDialogContent className="z-[var(--z-dialog)] gap-3 sm:max-w-[360px]">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>{t("challenge.title")}</ResponsiveDialogTitle>
+        </ResponsiveDialogHeader>
         <ChallengeFrame {...frame} onToken={onToken} />
-      </SheetContent>
-    </Sheet>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }
