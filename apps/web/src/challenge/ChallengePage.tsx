@@ -17,7 +17,8 @@ export function isChallengePath(pathname: string): boolean {
 
 /**
  * 挑战页（契约 §62.2）：只渲染组件。令牌用 `postMessage` 交给嵌它的页面，且只发给
- * 查询里 `parent` 指明的来源——别的页面把它嵌进去也收不到令牌。
+ * 查询里 `parent` 指明的来源——别的页面把它嵌进去也收不到令牌。挂上时先报一声
+ * `ready`，组件失败报 `error`，由嵌它的面板给一次「重试」。
  *
  * `action` 选令牌用途（§63：`armadra-password`，缺省登录）。`mode=copy`（§63.2）不要
  * `parent`：令牌显示在只读输入框里给人复制，供终端里的运维脚本粘贴。
@@ -40,6 +41,14 @@ export function ChallengePage({
   const copyMode = query.get("mode") === "copy";
   const [token, setToken] = React.useState("");
   const [copied, setCopied] = React.useState(false);
+  const embedded = siteKey !== "" && parent !== "" && !copyMode;
+  const postRef = React.useRef(post);
+  postRef.current = post;
+  // 页面脚本跑起来了：嵌它的面板据此判断没被 `frame-ancestors` 拦下。
+  React.useEffect(() => {
+    if (embedded)
+      postRef.current({ type: CHALLENGE_MESSAGE, status: "ready" }, parent);
+  }, [embedded, parent]);
   if (siteKey === "" || (parent === "" && !copyMode)) return null;
   if (copyMode) {
     return (
@@ -86,6 +95,9 @@ export function ChallengePage({
         siteKey={siteKey}
         action={action}
         onToken={(token) => post({ type: CHALLENGE_MESSAGE, token }, parent)}
+        onError={() =>
+          post({ type: CHALLENGE_MESSAGE, status: "error" }, parent)
+        }
       />
     </main>
   );

@@ -29,6 +29,9 @@ export interface TurnstileApi {
       action?: string;
       theme?: "auto" | "light" | "dark";
       size?: "normal" | "flexible" | "compact";
+      /** `never`：失败不自己反复重来（会让面板闪），交给面板给一次「重试」。 */
+      retry?: "auto" | "never";
+      "refresh-expired"?: "auto" | "manual" | "never";
       callback(token: string): void;
       "error-callback"?(): void;
       "expired-callback"?(): void;
@@ -78,6 +81,25 @@ export const CHALLENGE_MESSAGE = "armadra-challenge";
 export interface ChallengeMessage {
   readonly type: typeof CHALLENGE_MESSAGE;
   readonly token: string;
+}
+
+/**
+ * 挑战页报给嵌它的页面的状态：`ready` 是页面脚本跑起来了（收不到就是被
+ * `frame-ancestors` 拦了或没载进来），`error` 是组件载不进来或判定失败。
+ */
+export interface ChallengeStatus {
+  readonly type: typeof CHALLENGE_MESSAGE;
+  readonly status: "ready" | "error";
+}
+
+export function isChallengeStatus(value: unknown): value is ChallengeStatus {
+  const message = value as Partial<ChallengeStatus> | null;
+  return (
+    message !== null &&
+    typeof message === "object" &&
+    message.type === CHALLENGE_MESSAGE &&
+    (message.status === "ready" || message.status === "error")
+  );
 }
 
 export function isChallengeMessage(value: unknown): value is ChallengeMessage {
