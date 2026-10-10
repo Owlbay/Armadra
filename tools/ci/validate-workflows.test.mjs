@@ -312,6 +312,9 @@ test("the release workflow has the five jobs the design names plus the channel c
     "web",
     "build",
     "notarize",
+    // The signed Android APK (#279): skipped with a warning when the upload
+    // key is not configured; assemble folds it into the draft.
+    "android",
     "assemble",
     // The update mirror (G5-18): the draft's files into the versioned path
     // of an S3-compatible bucket; "latest" moves only in distribute.yml.
@@ -336,6 +339,7 @@ test("the release workflow has the five jobs the design names plus the channel c
       !text.includes(secret),
       `release.yml must not publish with ${secret}`,
     );
+  assert.ok(document.jobs.assemble.needs.includes("android"));
   // Six targets, one runner each.
   assert.equal(document.jobs.build.strategy.matrix.include.length, 6);
   const targets = document.jobs.build.strategy.matrix.include.map(
