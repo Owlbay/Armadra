@@ -13814,6 +13814,7 @@ Copyright (c) 2012 Felix Geisendörfer (felix@debuggable.com) and contributors
 
 License: MIT
 Author: Matt Perry
+Homepage: https://github.com/motiondivision/motion#readme
 
 LICENSE.md:
 
@@ -14086,6 +14087,7 @@ SOFTWARE.
 
 License: MIT
 Author: Sindre Sorhus
+Homepage: https://github.com/sindresorhus/has-flag#readme
 
 license:
 
@@ -15191,7 +15193,7 @@ SOFTWARE.
 
 ### khroma@2.1.0
 
-License: MIT
+License: Unknown
 Homepage: https://github.com/fabiospampinato/khroma#readme
 
 license:
@@ -19181,6 +19183,7 @@ SOFTWARE.
 
 License: MIT
 Author: Sindre Sorhus
+Homepage: https://github.com/chalk/supports-color#readme
 
 license:
 
@@ -19960,6 +19963,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 License: MIT
 Author: theKashey
+Homepage: https://github.com/theKashey/use-callback-ref#readme
 
 LICENSE:
 

@@ -243,6 +243,42 @@ export function withResolvedPeers(listing) {
   return listing;
 }
 
+/**
+ * 包自己 package.json 里声明的许可证；没声明就是 Unknown。pnpm 12 在没声明时
+ * 会去猜 LICENSE 正文，同一个包在不同机器上猜出不同结果（khroma：本机 MIT、
+ * CI Unknown），声明文件就跟着平台变。读不到 package.json（单测里的假路径）时
+ * 返回 null，交回 pnpm 给的值。
+ */
+function declaredLicense(directory) {
+  if (!directory) return null;
+  const manifest = readManifest(directory);
+  if (manifest === null) return null;
+  if (typeof manifest.license === "string") return manifest.license;
+  if (typeof manifest.license?.type === "string") return manifest.license.type;
+  const first = Array.isArray(manifest.licenses) ? manifest.licenses[0] : null;
+  return typeof first?.type === "string" ? first.type : "Unknown";
+}
+
+/**
+ * 包声明的主页；没写 homepage 时按 GitHub 仓库推成 `…#readme`（pnpm 11 的做法，
+ * pnpm 12 不再推导）。读不到 package.json 时返回 null。
+ */
+function declaredHomepage(directory) {
+  if (!directory) return null;
+  const manifest = readManifest(directory);
+  if (manifest === null) return null;
+  if (typeof manifest.homepage === "string") return manifest.homepage;
+  const repository =
+    typeof manifest.repository === "string"
+      ? manifest.repository
+      : manifest.repository?.url;
+  if (typeof repository !== "string") return "";
+  const match =
+    /^(?:github:)?([\w.-]+\/[\w.-]+?)(?:\.git)?$/.exec(repository) ??
+    /github\.com[/:]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(repository);
+  return match ? `https://github.com/${match[1]}#readme` : "";
+}
+
 function readManifest(directory) {
   try {
     return JSON.parse(readFileSync(join(directory, "package.json"), "utf8"));
@@ -288,13 +324,14 @@ export function packagesFrom(listing) {
     for (const entry of entries) {
       if (entry.name.startsWith("@armadra/")) continue;
       entry.versions.forEach((version, index) => {
+        const path = entry.paths?.[index] ?? entry.paths?.[0] ?? "";
         packages.push({
           name: entry.name,
           version,
-          license: entry.license ?? license,
+          license: declaredLicense(path) ?? entry.license ?? license,
           author: typeof entry.author === "string" ? entry.author : "",
-          homepage: entry.homepage ?? "",
-          path: entry.paths?.[index] ?? entry.paths?.[0] ?? "",
+          homepage: entry.homepage || declaredHomepage(path) || "",
+          path,
         });
       });
     }

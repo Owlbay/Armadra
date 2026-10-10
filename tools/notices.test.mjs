@@ -97,6 +97,7 @@ test("resolved peers and optional dependencies pnpm 12 leaves out are added, wit
   try {
     const debug = install("debug@4.4.3_supports-color@7.2.0", "debug", {
       version: "4.4.3",
+      license: "MIT",
       peerDependenciesMeta: { "supports-color": { optional: true } },
     });
     const color = install("supports-color@7.2.0", "supports-color", {
