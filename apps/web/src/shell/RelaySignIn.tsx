@@ -1,8 +1,13 @@
 import * as React from "react";
 
 import { syncDocumentPreferences, useT } from "../app/preferences-store";
+import { ChallengeSheet } from "../mobile/ChallengeSheet";
 import { RelayForm } from "../mobile/ConnectRelay";
-import type { CloudSource } from "../sources/cloud-client";
+import {
+  type CloudChallenge,
+  type CloudSource,
+  CloudChallengeRequired,
+} from "../sources/cloud-client";
 import {
   type HostedFailure,
   type HostedRelay,
@@ -50,6 +55,12 @@ export function RelaySignIn({
   const [failure, setFailure] = React.useState<HostedFailure | null>(
     initialFailure ?? null,
   );
+  // 远程服务要求人机验证：升起挑战面板，拿到令牌带着刚才填的账号口令再登录一次。
+  const [challenge, setChallenge] = React.useState<{
+    readonly requirement: CloudChallenge;
+    readonly account: string;
+    readonly password: string;
+  } | null>(null);
   // 刷新之后先静默续上；续的时候不出表单，免得人刚开始填就被换走。
   const resume = relay.resume;
   const [resuming, setResuming] = React.useState(
@@ -124,15 +135,26 @@ export function RelaySignIn({
     }
   };
 
-  const signIn = async (account: string, password: string) => {
+  const signIn = async (
+    account: string,
+    password: string,
+    challengeToken?: string,
+  ) => {
     setBusy(true);
     setFailure(null);
     setFailedId(null);
     let listed: CloudSource[];
     try {
-      listed = await relay.signIn(account, password);
+      listed =
+        challengeToken === undefined
+          ? await relay.signIn(account, password)
+          : await relay.signIn(account, password, challengeToken);
     } catch (error) {
-      setFailure(hostedFailureOf(error));
+      if (error instanceof CloudChallengeRequired) {
+        setChallenge({ requirement: error.challenge, account, password });
+      } else {
+        setFailure(hostedFailureOf(error));
+      }
       setBusy(false);
       return;
     }
@@ -205,6 +227,19 @@ export function RelaySignIn({
           </div>
         )}
       </div>
+      {challenge !== null && (
+        <ChallengeSheet
+          open
+          issuer={relay.issuer}
+          siteKey={challenge.requirement.siteKey}
+          onCancel={() => setChallenge(null)}
+          onToken={(token) => {
+            const { account, password } = challenge;
+            setChallenge(null);
+            void signIn(account, password, token);
+          }}
+        />
+      )}
     </main>
   );
 }
