@@ -271,7 +271,7 @@ ARMADRA_PERSONAL_RELAY_HOME=<armadra-cloud 检出> node tools/probes/relay-web-e
 
 ## 个人中转全流程（V1 / M1）
 
-平台计划 V1：真个人中转（armadra-cloud 的 `personal init` + `personal serve`，托管 `apps/web/dist`）、真 core、真 Electron、无头 Chrome，没有模拟的服务端。要 armadra-cloud 的本地检出（`ARMADRA_DEV_STACK_CLOUD_SRC`，或仓库旁的 `../cloud`；私有仓，CI 拉不到）。清单 `tools/ci/e2e.d/personal-roundtrip.json` 依赖 `cloud`：没有检出时 e2e 运行器记 `skipped` 并写明原因，不算失败。
+平台计划 V1：真个人中转（armadra-cloud 的 `personal init` + `personal serve`，托管 `apps/web/dist`）、真 core、真 Electron、无头 Chrome，没有模拟的服务端。要 armadra-cloud 的本地检出（`ARMADRA_DEV_STACK_CLOUD_SRC`，或仓库旁的 `../armadra-cloud`；私有仓，CI 拉不到）。清单 `tools/ci/e2e.d/personal-roundtrip.json` 依赖 `cloud`：没有检出时 e2e 运行器记 `skipped` 并写明原因，不算失败。
 
 ```sh
 pnpm libs:build && pnpm --filter @armadra/desktop build && pnpm --filter @armadra/web build
