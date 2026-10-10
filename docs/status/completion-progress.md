@@ -4166,3 +4166,21 @@ nightly 在 `b8353492`（运行 37338174906）之后连续失败。逐个作业�
 - shared：`remoteAddInputSchema`（协议包形状的 extend）。
 - web：`CloudChallengeRequired`、`cloudLogin(…, options, challengeToken?)`、`HostedRelay.signIn(…, challengeToken?)`、`RelayOutcome` 的 `challenge`、`presentedChallenge`、`Challengeable`。
 - 线上：§62，协议 1.35，协议包 0.3.5。
+
+## Workers 中继探针（V4，Refs #256，2026-10-10）
+
+做了什么：
+
+- `tools/probes/personal-roundtrip.mjs` 加 `--workerd`（用 armadra-cloud 检出里的 `apps/relay-workers` 起本地 `wrangler dev --local`）与 `--issuer <地址>`（对已经在跑的中继，账号口令取环境变量）。这两种模式跳过 init/serve、keep-alive、Electron 与手机，其余照旧：登记 → 隧道 ready → 浏览器经中继登录进画布 → 终端收发、ACP 回合、实时板 → 分享链接访客 → 撤销链接与撤销登记；新增两步：只读分享（只读工作空间链接、会话链接，访客会话是 viewer）与媒体票 Range。
+- `tools/probes/workerd-relay.mjs`：起 workerd（随机端口、临时存储目录、这一次随机的 secret；`--assets` 指到 `apps/web/dist` 的拷贝，不改 cloud 检出；`--local-upstream` 指回本机，否则 wrangler 把 Host/Origin 改写成 `relay.armadra.com`，core 逐字节比对来源会拒）。
+- `platform-lib.mjs` 的 `relayRaw` 认 `http:` 的 issuer，`relayedRoute` 的 WebSocket 地址按 `http`/`https` 换 `ws`/`wss`。
+- 清单 `tools/ci/e2e.d/personal-roundtrip-workers.json`（B 档、依赖 `cloud`）：夜间 Linux / macOS 作业自动带上这一列；CI 拉不到私有 cloud 仓，记 skipped 并写明原因。cloud 仓的夜间作业另有一列（取本仓 main 跑同一个探针，没配 `ARMADRA_REPO_TOKEN` 时说明并跳过）。
+- 线上只读探针 `tools/probes/relay-live-readonly.mjs`：对 `https://relay.armadra.com` 只 GET `/health` 与 `/.well-known/*`，部署后手动跑，不进 CI。
+
+实测（macOS arm64，armadra-cloud feat/probes-workers）：`node tools/probes/personal-roundtrip.mjs --workerd` 全过（含只读分享、媒体票 206 与 Range 两段、撤销、日志无秘密）；`relay-live-readonly.mjs` 对本地 workerd 全过；cloud `pnpm e2e --mode personal-workers` 全过。
+
+没做 / 限制：
+
+- 对 workerd 的这一列没有 Electron 与手机步骤（明文 `ws://` 与 http 来源在原生壳里不成立）；iOS 空闲 keep-alive 一步只在 Node 个人中转版里。
+- 本地 workerd 的 `/app/` 要在未配置 Turnstile 的模式下登录；配了挑战令牌的线上中继不能用 `--issuer` 跑登录。
+- 线上只读探针没跑过真线上（部署由用户做，D3）。
