@@ -202,6 +202,13 @@ export const runtimeSettingsSchema = z.looseObject({
       locale: z.enum(["zh-CN", "en"]).optional().catch(undefined),
     })
     .optional(),
+  /**
+   * 这台主机的名字（契约 §61）：报给别的设备、作它们添加时的缺省名。空串或
+   * 没有 = 系统主机名。
+   */
+  host: z
+    .looseObject({ name: z.string().optional().catch(undefined) })
+    .optional(),
   /** 命令面板的会话索引扫多大一片。 */
   conversations: z
     .looseObject({ scope: conversationScopeSchema.optional() })
@@ -291,6 +298,8 @@ export interface RuntimeSettingsPatch {
   conversations?: { scope?: ConversationScope };
   /** 界面语言的副本（契约 §57.6），给 core 生成终端侧文案。 */
   ui?: { locale?: "zh-CN" | "en" };
+  /** 主机名称（契约 §61）；空串恢复成系统主机名。 */
+  host?: { name?: string };
   /** 实时协同（契约 §16.2）：关掉就回到租约 + CAS。 */
   collab?: { realtime?: boolean };
   /** 资源面板采样间隔；Runtime 侧会夹回 500ms–60s。 */

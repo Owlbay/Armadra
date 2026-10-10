@@ -28,7 +28,16 @@ vi.mock("../../../app/use-access", () => ({
 vi.mock("../remote-access", () => ({
   useRemoteAccess: () => ({ remote: access.remote }),
 }));
+const settingsState = vi.hoisted(() => ({
+  data: {} as Record<string, unknown>,
+  mutate: vi.fn(),
+}));
 vi.mock("../../../api/client", () => ({
+  currentClient: () => ({
+    system: {
+      hello: async () => ({ hostName: "mbp", systemHostName: "mbp" }),
+    },
+  }),
   runtimeApi: {
     dataInfo: async () => ({
       dataDir: "/Users/dev/Library/Application Support/Armadra",
@@ -42,8 +51,8 @@ vi.mock("../../../api/client", () => ({
 }));
 vi.mock("../use-runtime-settings", () => ({
   useRuntimeSettings: () => ({
-    settings: { data: {} },
-    save: { mutate: vi.fn(), isPending: false },
+    settings: { data: settingsState.data },
+    save: { mutate: settingsState.mutate, isPending: false },
   }),
 }));
 vi.mock("../../../platform", async (importOriginal) => ({
@@ -79,6 +88,8 @@ beforeEach(() => {
 afterEach(() => {
   access.member = false;
   access.remote = false;
+  settingsState.data = {};
+  settingsState.mutate.mockReset();
   cleanup();
 });
 
@@ -133,6 +144,34 @@ describe("设置 → 本机服务", () => {
     draw();
     expect(await screen.findByText(/Application Support/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "在访达中打开" })).toBeNull();
+  });
+
+  it("主机名称（§61）：占位是系统主机名，失焦保存去首尾空白的名字，没变不存", async () => {
+    settingsState.data = { host: { name: "" } };
+    draw();
+    const input = await screen.findByRole("textbox", { name: "主机名称" });
+    await waitFor(() => expect(input.getAttribute("placeholder")).toBe("mbp"));
+    fireEvent.blur(input);
+    expect(settingsState.mutate).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: "  书房  " } });
+    fireEvent.blur(input);
+    expect(settingsState.mutate).toHaveBeenCalledWith(
+      { host: { name: "书房" } },
+      expect.anything(),
+    );
+  });
+
+  it("主机名称清空：存空串，回到系统主机名", async () => {
+    settingsState.data = { host: { name: "书房" } };
+    draw();
+    const input = await screen.findByRole("textbox", { name: "主机名称" });
+    expect((input as HTMLInputElement).value).toBe("书房");
+    fireEvent.change(input, { target: { value: " " } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(settingsState.mutate).toHaveBeenCalledWith(
+      { host: { name: "" } },
+      expect.anything(),
+    );
   });
 
   it("成员只见连接状态", async () => {

@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useId } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 
-import { runtimeApi } from "../../../api/client";
+import { currentClient, runtimeApi } from "../../../api/client";
 import { hasPairingFragment } from "../../../api/identity";
 import { usePreferencesStore, useT } from "../../../app/preferences-store";
 import { useAccess } from "../../../app/use-access";
@@ -29,6 +29,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/ui/select";
+import { Input } from "@/ui/input";
 import { Spinner } from "@/ui/spinner";
 import { Switch } from "@/ui/switch";
 import { formatBytes } from "@/lib/format";
@@ -119,6 +120,7 @@ export function ServicePage() {
       <ConnectionGroup />
       {member ? null : (
         <>
+          <HostNameGroup />
           <TerminalSessionGroup />
           <PowerGroup />
           <DataGroup />
@@ -231,6 +233,59 @@ export function ConnectionGroup() {
           </CollapsibleContent>
         </Collapsible>
       )}
+    </SettingsGroup>
+  );
+}
+
+/**
+ * 主机名称（契约 §61）：别的设备添加这台主机时的缺省名，也是中转目录里它的
+ * 名字。清空恢复成系统主机名（占位就是它）。
+ */
+function HostNameGroup() {
+  const t = useT();
+  const queryClient = useQueryClient();
+  const { settings, save } = useRuntimeSettings();
+  const saved = settings.data?.host?.name ?? "";
+  const hello = useQuery({
+    queryKey: ["system", "hello"],
+    queryFn: () => currentClient().system.hello({}),
+    retry: false,
+    staleTime: 60_000,
+  });
+  const [value, setValue] = useState(saved);
+  useEffect(() => setValue(saved), [saved]);
+  const commit = () => {
+    const name = value.trim();
+    setValue(name);
+    if (!settings.data || name === saved) return;
+    save.mutate(
+      { host: { name } },
+      {
+        onSuccess: () =>
+          void queryClient.invalidateQueries({ queryKey: ["system", "hello"] }),
+      },
+    );
+  };
+  return (
+    <SettingsGroup>
+      <SettingsRow label={t("host.name")}>
+        <LocalSourceBadge path="host.name" />
+        <Input
+          className={`h-8 ${CONTROL_WIDTH}`}
+          aria-label={t("host.name")}
+          autoComplete="off"
+          spellCheck={false}
+          maxLength={128}
+          disabled={!settings.data}
+          placeholder={hello.data?.systemHostName ?? ""}
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") commit();
+          }}
+        />
+      </SettingsRow>
     </SettingsGroup>
   );
 }
