@@ -65,6 +65,14 @@ describe("改写 Origin", () => {
     expect(
       rewriteRelayRequest(`${RELAY}/s/abc`, { accept: "*/*" }, relays),
     ).toBeNull();
+    // 内嵌的中继挑战页（`/app/challenge`）发往中继自己的同源请求。
+    expect(
+      rewriteRelayRequest(
+        `${RELAY}/app/assets/a.js`,
+        { Origin: RELAY },
+        relays,
+      ),
+    ).toBeNull();
     expect(
       rewriteRelayRequest(`${RELAY}/s/abc`, { Origin: PAGE }, []),
     ).toBeNull();

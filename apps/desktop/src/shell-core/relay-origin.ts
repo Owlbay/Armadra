@@ -39,6 +39,7 @@ function find(headers: Readonly<Record<string, unknown>>, name: string) {
 
 /**
  * 发出去之前：发往改写名单里的主机（中继、直连源）、带着页面来源的请求，`Origin` 换成桌面的原生来源。
+ * 同源的（中继托管的页面在桌面窗口里被内嵌时自己发的）不动。
  * 答 `null` 表示不动；否则答改好的头与页面的真实来源（回 CORS 头时要用）。
  */
 export function rewriteRelayRequest(
@@ -51,7 +52,14 @@ export function rewriteRelayRequest(
   const key = find(headers, "origin");
   if (key === undefined) return null;
   const pageOrigin = headers[key] ?? "";
-  if (pageOrigin === "" || pageOrigin === DESKTOP_RELAY_ORIGIN) return null;
+  // 中继自己的页面（内嵌的挑战页 `/app/challenge`）发往中继的同源请求不是桌面页面
+  // 发的，不冒充原生来源。
+  if (
+    pageOrigin === "" ||
+    pageOrigin === DESKTOP_RELAY_ORIGIN ||
+    pageOrigin === target
+  )
+    return null;
   const next: Headers = { ...headers };
   delete next[key];
   next.Origin = DESKTOP_RELAY_ORIGIN;
